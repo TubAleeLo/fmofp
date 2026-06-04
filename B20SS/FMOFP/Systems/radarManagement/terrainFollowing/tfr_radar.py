@@ -41,7 +41,7 @@ class tfr_radar:
         self.running = False
         self._lock = threading.Lock()
         self._health_status = True
-        
+
         # TFR specific parameters
         self.scan_range = 10000  # meters
         self.scan_width = 2000   # meters
@@ -49,7 +49,7 @@ class tfr_radar:
         self.terrain_data = self._initialize_terrain_data()
         self.last_warning_time = 0
         self.warning_interval = 1.0  # seconds
-        
+
         logger.info(f"TFR radar {name} initialized")
 
     def _initialize_terrain_data(self) -> List[Tuple[float, float]]:
@@ -65,7 +65,7 @@ class tfr_radar:
         """Check for terrain warnings based on current data."""
         warnings = []
         current_time = time.time()
-        
+
         if current_time - self.last_warning_time >= self.warning_interval:
             for distance, elevation in self.terrain_data:
                 # Check for dangerous terrain features
@@ -81,9 +81,9 @@ class tfr_radar:
                         'distance': distance,
                         'elevation': elevation
                     })
-            
+
             self.last_warning_time = current_time
-            
+
         return warnings
 
     def start(self):
@@ -119,7 +119,7 @@ class tfr_radar:
     def set_mode(self, mode, send_completion=True, request_id=None):
         """
         Set radar mode.
-        
+
         Args:
             mode: The new mode to set
             send_completion: Whether to send a mode change completion notification (default: True)
@@ -160,11 +160,11 @@ class tfr_radar:
                 old_mode = self.mode
                 self.mode = mode
                 logger.info(f"TFR radar {self.name} mode changed from {old_mode.name} to {mode.name}")
-                
+
                 # Update terrain data when entering SEARCH or TRACK mode
                 if mode in [tfr_radarMode.SEARCH, tfr_radarMode.TRACK]:
                     self.terrain_data = self._initialize_terrain_data()
-                
+
                 # Send mode change completion notification if requested
                 if send_completion:
                     logger.info(f"[TFR_RADAR] Sending mode change completion notification (send_completion=True)")
@@ -191,23 +191,23 @@ class tfr_radar:
         except Exception as e:
             logger.error(f"Error handling message for TFR radar {self.name}: {str(e)}")
             logger.error(traceback.format_exc())
-            
+
     def receive_message_sync(self, message):
         """
         Synchronously process an incoming message for TFR radar.
-        
+
         This is used by the RadarMessenger for direct message handling.
         Required by RadarMessenger.py _message_loop for direct message handling.
-        
+
         Args:
             message: The message to process
-            
+
         Returns:
             True if the message was processed successfully, False otherwise
         """
         try:
             logger.info(f"[TFR_RADAR] Synchronously processing message with ID: {id(message)}")
-            
+
             # Log message details for debugging
             if hasattr(message, 'message_type'):
                 logger.info(f"[TFR_RADAR] Message type: {message.message_type}")
@@ -215,40 +215,40 @@ class tfr_radar:
                 logger.info(f"[TFR_RADAR] Command type: {message.command_type}")
             if hasattr(message, 'command_name'):
                 logger.info(f"[TFR_RADAR] Command name: {message.command_name}")
-                
+
             # Set metadata if not present
             if not hasattr(message, 'metadata'):
                 message.metadata = {}
-                
+
             # Mark as processed by TFR radar
             if isinstance(message.metadata, dict):
                 if 'processed_by' not in message.metadata:
                     message.metadata['processed_by'] = []
-                    
+
                 if 'tfr_radar' not in message.metadata['processed_by']:
                     message.metadata['processed_by'].append('tfr_radar')
-            
+
             # Use message type detector to determine how to handle this message
             from FMOFP.Systems.radarManagement.terrainFollowing.tfr_message_type_detector import tfr_message_type_detector
             detector = tfr_message_type_detector()
             handler_type = detector.detect_message_type(message)
-            
+
             logger.info(f"[TFR_RADAR] Message handler type: {handler_type}")
-            
+
             if handler_type == "mode_handler":
                 # Extract mode value and request_id instead of passing the whole message
                 mode_data = message.data
-                
+
                 # Extract request_id for completion tracking
                 message_request_id = None
                 if hasattr(message, 'request_id'):
                     message_request_id = message.request_id
                 elif hasattr(message, 'metadata') and isinstance(message.metadata, dict) and 'request_id' in message.metadata:
                     message_request_id = message.metadata['request_id']
-                
+
                 # Extract mode value from binary data
                 mode_value = self._extract_mode_value_from_data(mode_data)
-                
+
                 # Call handler with extracted parameters instead of raw message
                 return self._handle_mode_change_sync(mode_value, request_id=message_request_id)
             elif handler_type == "elevation_handler":
@@ -268,48 +268,48 @@ class tfr_radar:
                             message_request_id = message.request_id
                         elif hasattr(message, 'metadata') and isinstance(message.metadata, dict) and 'request_id' in message.metadata:
                             message_request_id = message.metadata['request_id']
-                        
+
                         # Extract mode value and call handler with parameters
                         mode_value = self._extract_mode_value_from_data(mode_data)
                         return self._handle_mode_change_sync(mode_value, request_id=message_request_id)
                     elif message_type == "DATA" or (hasattr(message, 'command_type') and message.command_type == "data"):
                         return self._handle_data_request(message)
-            
+
             # For logging purposes
             logger.info(f"[TFR_RADAR] Message successfully processed synchronously")
             return True
-            
+
         except Exception as e:
             logger.error(f"[TFR_RADAR] Error processing message synchronously: {e}")
             logger.error(traceback.format_exc())
             return False
-            
+
     def _handle_mode_change_sync(self, mode_value, request_id=None):
         """
         Handle mode change using direct parameter-based inputs.
-        
+
         Args:
             mode_value: The extracted mode value (integer)
             request_id: The request ID for completion tracking
-            
+
         Returns:
             bool: True if successful, False otherwise
         """
         try:
             logger.info(f"[TFR_RADAR] Handling mode change with value: {mode_value}, request_id: {request_id}")
-            
+
             # Convert to enum
             try:
                 new_mode = tfr_radarMode(mode_value)
                 logger.info(f"[TFR_RADAR] Processed mode value {mode_value} to enum {new_mode.name}")
-                
+
                 # Save original mode before changing
                 old_mode = self.mode
-                
+
                 # Set the mode directly
                 self.set_mode(new_mode, send_completion=True, request_id=request_id)
                 logger.info(f"[TFR_RADAR] Set TFR radar mode to {new_mode.name}")
-                
+
                 return True
             except ValueError as e:
                 logger.error(f"[TFR_RADAR] Invalid mode value: {mode_value} is not a valid tfr_radarMode")
@@ -318,51 +318,51 @@ class tfr_radar:
             logger.error(f"[TFR_RADAR] Error handling mode change: {e}")
             logger.error(traceback.format_exc())
             return False
-            
+
     def _handle_elevation_data_sync(self, message):
         """
         Handle elevation data request synchronously.
-        
+
         Args:
             message: The elevation data request message
-            
+
         Returns:
             bool: True if successful, False otherwise
         """
         try:
             logger.info(f"[TFR_RADAR] Handling elevation data request synchronously")
-            
+
             # Get the request parameters
             if hasattr(message, 'data') and isinstance(message.data, dict):
                 scan_width = message.data.get('scan_width', self.scan_width)
             else:
                 scan_width = self.scan_width
-                
+
             # Send elevation data
             self._send_elevation_data(scan_width)
-            
+
             return True
         except Exception as e:
             logger.error(f"[TFR_RADAR] Error handling elevation data request: {e}")
             logger.error(traceback.format_exc())
             return False
-            
+
     def _handle_terrain_warning_sync(self, message):
         """
         Handle terrain warning message synchronously.
-        
+
         Args:
             message: The terrain warning message
-            
+
         Returns:
             bool: True if successful, False otherwise
         """
         try:
             logger.info(f"[TFR_RADAR] Handling terrain warning message synchronously")
-            
+
             # Check for terrain warnings and send them
             warnings = self._check_terrain_warnings()
-            
+
             # Send warnings
             for warning in warnings:
                 warning_msg = TFRRadarTerrainWarning(
@@ -377,7 +377,7 @@ class tfr_radar:
                 if self.radar_messenger:
                     self.radar_messenger.send_message(warning_msg)
                     logger.info(f"[TFR_RADAR] Sent terrain warning: {warning['type']}")
-            
+
             return True
         except Exception as e:
             logger.error(f"[TFR_RADAR] Error handling terrain warning message: {e}")
@@ -388,23 +388,23 @@ class tfr_radar:
         """Handle mode change messages."""
         try:
             logger.info(f"[TFR_RADAR] Handling mode change message via parameter extraction")
-            
+
             # Extract mode value and request_id
             mode_data = message.data
-            
+
             # Extract request_id for completion tracking
             message_request_id = None
             if hasattr(message, 'request_id'):
                 message_request_id = message.request_id
             elif hasattr(message, 'metadata') and isinstance(message.metadata, dict) and 'request_id' in message.metadata:
                 message_request_id = message.metadata['request_id']
-            
+
             # Extract mode value from binary data
             mode_value = self._extract_mode_value_from_data(mode_data)
-            
+
             # Handle via the parameter-based synchronized method
             return self._handle_mode_change_sync(mode_value, message_request_id)
-            
+
         except ValueError as e:
             logger.error(f"[TFR_RADAR] Invalid mode value in message: {e}")
         except Exception as e:
@@ -422,7 +422,7 @@ class tfr_radar:
                 request_id = message.metadata.get('request_id')
 
             logger.info(f"[TFR_RADAR] Data request ID: {request_id}")
-            
+
             if self.mode not in [tfr_radarMode.SEARCH, tfr_radarMode.TRACK, tfr_radarMode.TERRAIN_FOLLOWING]:
                 logger.warning(f"Cannot get data in {self.mode.name} mode")
                 return False
@@ -441,16 +441,16 @@ class tfr_radar:
                 # For backward compatibility, assume elevation data request
                 self._send_elevation_data(self.scan_width, request_id)
                 return True
-                
+
             return False
-                
+
         except Exception as e:
             logger.error(f"Error handling data request: {e}")
 
     def _send_elevation_data(self, scan_width: float, request_id=None):
         """
         Send elevation profile data.
-        
+
         Args:
             scan_width: Width of the scan in meters
             request_id: The original request ID for completion tracking
@@ -466,13 +466,30 @@ class tfr_radar:
                 destination="radar_handler",
                 request_id=request_id
             )
-            
+
+            # --- DIRECT DISPLAY BRIDGE -----------------------------------
+            try:
+                from FMOFP.local_messaging.routing.radar_to_display_bridge import push_tfr_data
+                _items = [elevation_profile] + [
+                    type('W', (), {
+                        'profile_data': None,
+                        'warning_type': w['type'],
+                        'distance': w['distance'],
+                        'elevation': w['elevation'],
+                        'timestamp': time.time()
+                    })()
+                    for w in self._check_terrain_warnings()
+                ]
+                push_tfr_data([elevation_profile], request_id or elevation_profile.data_uuid)
+                logger.info(f"[TFR_RADAR] Bridge: elevation profile pushed to display coordinator")
+            except Exception as _bridge_exc:
+                logger.warning(f"[TFR_RADAR] Bridge push failed (non-fatal): {_bridge_exc}")
+            # -------------------------------------------------------------
+
             # Send elevation data
             if self.radar_messenger:
                 self.radar_messenger.send_message(elevation_profile)
                 logger.info(f"Sent elevation profile with {len(self.terrain_data)} points")
-            
-            # Check and send any terrain warnings
             warnings = self._check_terrain_warnings()
             for warning in warnings:
                 warning_msg = TFRRadarTerrainWarning(
@@ -487,7 +504,7 @@ class tfr_radar:
                 if self.radar_messenger:
                     self.radar_messenger.send_message(warning_msg)
                     logger.info(f"Sent terrain warning: {warning['type']}")
-            
+
         except Exception as e:
             logger.error(f"Error sending elevation data: {e}")
 
@@ -498,11 +515,11 @@ class tfr_radar:
     def _send_mode_change_completion(self, old_mode, new_mode, request_id=None):
         """
         Send a mode change completion notification.
-        
+
         This is critical for proper synchronization between radar and display systems.
-        The completion message ensures that the display system knows when the radar 
+        The completion message ensures that the display system knows when the radar
         has actually completed the mode change.
-        
+
         Args:
             old_mode: The previous mode
             new_mode: The new mode
@@ -511,22 +528,22 @@ class tfr_radar:
         try:
             # Import the CompletionMessageHandler
             from FMOFP.Systems.radarManagement.radar_messaging.completion_message_handler import get_completion_message_handler
-            
+
             # Log the mode change completion
             logger.info(f"[TFR_RADAR] Sending mode change completion notification: {old_mode.name} -> {new_mode.name}")
             logger.info(f"[TFR_RADAR] Using request ID: {request_id}")
-            
+
             # Get the CompletionMessageHandler instance
             completion_handler = get_completion_message_handler()
             if not completion_handler:
                 logger.error("[TFR_RADAR] Cannot send mode change completion - completion handler not available")
                 return
-                
+
             # Use the request_id parameter that was passed to this method
             # The request_id variable is passed from _handle_mode_change_sync to here
             completion_request_id = request_id
             logger.info(f"[TFR_RADAR] Using request_id from parameter: {completion_request_id}")
-                
+
             # Send the mode change completion message SYNCHRONOUSLY
             success = completion_handler.send_mode_change_completion(
                 system_name='radar',
@@ -536,12 +553,12 @@ class tfr_radar:
                 request_id=completion_request_id,  # Use the extracted request ID
                 radar_type='tfr_radar'
             )
-            
+
             if success:
                 logger.info(f"[TFR_RADAR] Mode change completion notification sent successfully")
             else:
                 logger.error(f"[TFR_RADAR] Failed to send mode change completion notification")
-                
+
         except Exception as e:
             logger.error(f"[TFR_RADAR] Error sending mode change completion: {str(e)}")
             logger.error(traceback.format_exc())
@@ -549,9 +566,9 @@ class tfr_radar:
     def _send_terrain_following_profile(self, request_id=None):
         """
         Send terrain following profile data.
-        
+
         This is specialized terrain data for terrain following operations.
-        
+
         Args:
             request_id: The original request ID for completion tracking
         """
@@ -561,8 +578,8 @@ class tfr_radar:
             for distance, elevation in self.terrain_data:
                 if distance < 5000:  # Focus on the closer terrain
                     terrain_following_points.append((distance, elevation))
-            
-            # Create terrain profile message 
+
+            # Create terrain profile message
             profile = TFRRadarElevationProfile(
                 data_uuid=str(time.time()),
                 profile_data=terrain_following_points,
@@ -572,18 +589,18 @@ class tfr_radar:
                 destination="radar_handler",
                 request_id=request_id
             )
-            
+
             # Send terrain following profile
             if self.radar_messenger:
                 self.radar_messenger.send_message(profile)
                 logger.info(f"[TFR_RADAR] Sent terrain following profile with {len(terrain_following_points)} points and request ID: {request_id}")
-                
+
                 # Import the CompletionMessageHandler for data completion
                 from FMOFP.Systems.radarManagement.radar_messaging.completion_message_handler import get_completion_message_handler
-                
+
                 # Get the CompletionMessageHandler instance
                 completion_handler = get_completion_message_handler()
-                
+
                 # Send the data completion message SYNCHRONOUSLY
                 if completion_handler:
                     success = completion_handler.send_data_completion(
@@ -592,14 +609,14 @@ class tfr_radar:
                         data=profile,
                         request_id=request_id
                     )
-                    
+
                     if success:
                         logger.info(f"[TFR_RADAR] Sent terrain following profile completion notification with request ID: {request_id}")
                     else:
                         logger.error(f"[TFR_RADAR] Failed to send terrain following profile completion notification")
                 else:
                     logger.error("[TFR_RADAR] Cannot send data completion - completion handler not available")
-                
+
         except Exception as e:
             logger.error(f"[TFR_RADAR] Error sending terrain following profile: {str(e)}")
             logger.error(traceback.format_exc())
@@ -607,10 +624,10 @@ class tfr_radar:
     def _extract_mode_value_from_data(self, mode_data):
         """
         Extract mode value from binary data.
-        
+
         Args:
             mode_data: Binary data string containing mode information
-            
+
         Returns:
             int: The extracted mode value
         """
@@ -621,7 +638,7 @@ class tfr_radar:
                 if len(mode_data) % 8 != 0:
                     # Pad to multiple of 8 bits
                     mode_data = mode_data.zfill((len(mode_data) + 7) // 8 * 8)
-                
+
                 # Convert 8-bit chunks to bytes
                 mode_bytes = bytes([int(mode_data[i:i+8], 2) for i in range(0, len(mode_data), 8)])
                 # Convert bytes to integer
