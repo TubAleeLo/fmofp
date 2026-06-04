@@ -100,6 +100,7 @@ class TacticalSituationDisplay(BaseDisplay):
         # ── FMS handles ────────────────────────────────────────────────────
         self._fms         = None
         self._fms_control = None
+        self._fusion      = None   # RadarDataFusion singleton (lazy)
         self._lock        = threading.Lock()
 
         # ── poll timer (10 Hz) ────────────────────────────────────────────
@@ -125,6 +126,15 @@ class TacticalSituationDisplay(BaseDisplay):
                 self._fms_control = get_fms_control()
             except Exception as exc:
                 logger.debug(f"[TSD] FMS not ready: {exc}")
+
+        if self._fusion is None:
+            try:
+                from FMOFP.Systems.radarManagement.radar_data_fusion import (
+                    get_radar_data_fusion,
+                )
+                self._fusion = get_radar_data_fusion()
+            except Exception as exc:
+                logger.debug(f"[TSD] Fusion not ready: {exc}")
 
     def _poll_data(self):
         """Pull live data from FMS and update the cached state."""
@@ -169,14 +179,33 @@ class TacticalSituationDisplay(BaseDisplay):
                     prof = ts.get("profile_limits", {})
                     self._throttle = prof.get("engine_power", 0.7) * 100
 
-                # Synthesise simulated threat contacts
-                self._threats = self._simulate_threats()
+                # Pull real fused tracks; fall back to simulation
+                # if fusion not yet running.
+                self._threats = self._get_fused_threats()
 
             self._safe_update()
 
         except Exception as exc:
             logger.error(f"[TSD] Poll error: {exc}")
             logger.error(traceback.format_exc())
+
+    def _get_fused_threats(self) -> List[Dict]:
+        """
+        Return threat-vector dicts from the cross-radar fusion layer.
+        Each dict has the keys _draw_map() expects:
+            bearing (deg true), range_nm, type (str), hostile (bool)
+
+        Falls back to _simulate_threats() when fusion is unavailable
+        or has not yet produced any tracks.
+        """
+        try:
+            if self._fusion is not None:
+                tracks = self._fusion.get_fused_tracks()
+                if tracks:
+                    return [t.to_tsd_dict() for t in tracks]
+        except Exception as exc:
+            logger.debug(f"[TSD] Fusion read error: {exc}")
+        return self._simulate_threats()
 
     def _simulate_threats(self) -> List[Dict]:
         """Return a small set of simulated threat vectors (relative nm, bearing)."""

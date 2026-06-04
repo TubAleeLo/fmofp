@@ -24,6 +24,7 @@ from Systems.radarManagement.radar_messaging.radarMessenger import (
 from Utils.common.thread_manager import thread_manager
 from FMOFP.Utils.logger.sys_logger import get_logger
 from FMOFP.Utils.common.operation_tracker import is_operation_completed, mark_operation_completed
+from FMOFP.Systems.radarManagement.radar_data_fusion import get_radar_data_fusion
 
 logger = get_logger()
 
@@ -148,18 +149,18 @@ class RadarManagementSystem:
         """Initialize the Radar Management System."""
         try:
             logger.info("=== Initializing Radar Management System ===")
-            
+
             # Start event loop in a separate thread
             thread_name = "RadarControlEventLoop"
             thread_manager.add_thread(name=thread_name, target=self._run_event_loop)
             thread_manager.start_thread(thread_name)
             logger.info("Event loop thread started")
-            
+
             # Wait for event loop to be ready
             while not self._loop:
                 time.sleep(0.1)
             logger.info("Event loop is ready")
-            
+
             # Initialize and start radar messenger
             self.radar_messenger = get_radar_messenger()
             self.radar_messenger.set_radar_control(self)  # Give messenger direct access
@@ -173,11 +174,11 @@ class RadarManagementSystem:
                 logger.error(f"Failed to start RadarMessenger: {e}")
                 logger.error(traceback.format_exc())
                 raise
-            
+
             # Initialize radars
             self.initialize_radars()
             logger.info("RadarManagementSystem initialized successfully")
-            
+
         except Exception as e:
             logger.error(f"Error initializing RadarManagementSystem: {str(e)}")
             logger.error(traceback.format_exc())
@@ -201,7 +202,7 @@ class RadarManagementSystem:
                     logger.error(traceback.format_exc())
                     raise
             return
-            
+
         # If not already completed, initialize radars
         try:
             radar_configs = self._load_radar_configs()
@@ -211,6 +212,9 @@ class RadarManagementSystem:
             logger.info("All radars initialized successfully")
             # Mark operation as completed
             mark_operation_completed('radar_init', 'radar_management')
+            # Start cross-radar data fusion layer
+            get_radar_data_fusion().start()
+            logger.info("Cross-radar data fusion layer started")
         except Exception as e:
             logger.error(f"Error initializing radars: {str(e)}")
             logger.error(traceback.format_exc())
@@ -219,7 +223,7 @@ class RadarManagementSystem:
     def _load_radar_configs(self):
         """Load radar configurations with consistent naming."""
         return {
-            "weather_radar": {"name": "weather_radar"}, 
+            "weather_radar": {"name": "weather_radar"},
             "targeting_radar": {"name": "targeting_radar"},
             "sar_radar": {"name": "sar_radar"},
             "tfr_radar": {"name": "tfr_radar"},
@@ -230,82 +234,82 @@ class RadarManagementSystem:
         """Main radar control loop - normal thread."""
         thread_id = threading.get_ident()
         logger.info(f"=== Starting RadarMain thread (ID: {thread_id}) ===")
-        
+
         while self.running:
             try:
-                
-                
+
+
                 # Update each radar
                 for radar in self.radars.values():
                     try:
-                        
+
                         if isinstance(radar, weather_radar):
                             radar.update()
                         # radar.update()            # Will do update for ALL radars.  Reduced to weather radar only for now
                     except Exception as e:
                         logger.error(f"Error updating radar {radar.name}: {e}")
                         logger.error(traceback.format_exc())
-                
+
                 # Check system health
                 if not self.is_healthy():
                     logger.error(f"RadarMain thread (ID: {thread_id}) detected unhealthy system")
                     self._running.clear()  # Thread-safe way to stop
                     break
-                
+
                 time.sleep(0.1)  # Prevent tight loop
-                
+
             except Exception as e:
                 logger.error(f"Error in RadarMain thread (ID: {thread_id}): {e}")
                 logger.error(traceback.format_exc())
                 if not self.running:
                     break
                 time.sleep(1)  # Sleep longer on error
-        
+
         logger.info(f"=== RadarMain thread (ID: {thread_id}) ended ===")
 
     def update(self):
         """Radar management thread - normal thread."""
         thread_id = threading.get_ident()
         logger.info(f"=== Starting RadarManagement thread (ID: {thread_id}) ===")
-        
+
         while self.running:
             try:
                 # Debug thread state
                 logger.debug(f"RadarManagement thread (ID: {thread_id}) running, active: {threading.current_thread().is_alive()}")
-                
+
                 with self._lock:
                     # Handle radar management tasks
                     self._manage_radar_resources()
                     self._check_radar_configurations()
                     self._handle_mode_transitions()
-                
+
                 time.sleep(0.1)  # Prevent tight loop
-                
+
             except Exception as e:
                 logger.error(f"Error in RadarManagement thread (ID: {thread_id}): {e}")
                 logger.error(traceback.format_exc())
                 if not self.running:
                     break
                 time.sleep(1)  # Sleep longer on error
-        
+
         logger.info(f"=== RadarManagement thread (ID: {thread_id}) ended ===")
 
     def start(self):
         """Start the radar system."""
         try:
             logger.info("=== Starting Radar Management System ===")
-            
+
             # Set running flag before starting threads
             self._running.set()  # Thread-safe way to start
-                
+
             # Start each radar
             for radar in self.radars.values():
                 radar.start()
-            
+
             # Configure initial modes after startup
             logger.info("Configuring initial radar modes...")
             #TODO:   This is the start up sequence - > UPDATE THIS
-            
+
             logger.info("Radar Management System running flag set to True")
             logger.info("=== Radar Management System started ===")
         except Exception as e:
@@ -319,17 +323,24 @@ class RadarManagementSystem:
         try:
             logger.info("=== Stopping Radar Management System ===")
             self._running.clear()  # Thread-safe way to stop
-                
+
+            # Stop cross-radar data fusion layer first
+            try:
+                get_radar_data_fusion().stop()
+                logger.info("Cross-radar data fusion layer stopped")
+            except Exception:
+                pass
+
             # Stop each radar
             for radar in self.radars.values():
                 radar.stop()
-                
+
             # Stop radar messenger
             if self.radar_messenger:
                 logger.info("Stopping RadarMessenger...")
                 await self.radar_messenger.stop()
                 logger.info("RadarMessenger stopped successfully")
-                
+
             logger.info("Radar Management System running flag set to False")
             logger.info("=== Radar Management System stopped ===")
         except Exception as e:
@@ -352,7 +363,7 @@ class RadarManagementSystem:
         with self._lock:
             # Update resource allocation based on mission phase
             self._allocate_radar_resources()
-            
+
             # Check resource utilization
             for radar in self.radars.values():
                 try:
@@ -434,7 +445,7 @@ class RadarManagementSystem:
                 try:
                     # Validate radar mode against mission phase
                     self._validate_radar_mode(radar)
-                    
+
                     # Check radar parameters
                     self._validate_radar_parameters(radar)
                 except Exception as e:
@@ -445,7 +456,7 @@ class RadarManagementSystem:
         try:
             current_mode = radar.mode
             expected_mode = self._get_expected_mode(radar)
-            
+
             if current_mode != expected_mode:
                 logger.warning(f"Radar {radar.name} mode mismatch. Expected: {expected_mode}, Current: {current_mode}")
                 self._transition_radar_mode(radar)
@@ -457,7 +468,7 @@ class RadarManagementSystem:
         try:
             # Get radar parameters
             params = radar.get_status()
-            
+
             # Check each parameter against allowed ranges
             for param, value in params.items():
                 if not self._is_parameter_valid(param, value):
@@ -516,7 +527,7 @@ class RadarManagementSystem:
         try:
             # Get radar resource usage
             status = radar.get_status()
-            
+
             # Check resource thresholds
             if status.get('cpu_usage', 0) > 90:
                 logger.warning(f"High CPU usage for radar {radar.name}: {status['cpu_usage']}%")
