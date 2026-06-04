@@ -1,0 +1,83 @@
+"""
+System startup entry point
+"""
+import sys
+import traceback
+import Utils.common.fetching as fetching
+from FMOFP.Utils.logger.sys_logger import get_logger
+from FMOFP.Utils.common.system_states import SystemState
+from FMOFP.core.system_manager import get_system_manager
+from FMOFP.core.initializer import get_initializer
+
+logger = get_logger()
+
+async def main():
+    try:
+        # Initialize the system
+        initializer = get_initializer()
+        initializer.initialize()  # This must complete before proceeding
+
+        # Verify initialization
+        app = initializer.get_app()
+        loop = initializer.get_loop()
+        if not app or not loop:
+            raise RuntimeError("Failed to initialize application or event loop")
+
+        logger.info("Starting Flight Management Operating Flight Program")
+        
+        # Import here to avoid circular imports
+        from Main import start_fmofp
+        
+        # Start FMOFP
+        await start_fmofp()
+
+    except Exception as e:
+        logger.critical(f"Critical error in SystemStart: {str(e)}")
+        
+        # Try to get system manager and set error state
+        try:
+            system_manager = get_system_manager()
+            system_manager.state_manager.set_state(SystemState.ERROR)
+        except Exception as cleanup_error:
+            logger.critical(f"Error during cleanup: {str(cleanup_error)}")
+        
+        sys.exit(1)
+
+if __name__ == "__main__":
+    # Import threading here to avoid circular imports
+    import threading
+    
+    try:
+        # Check if we're in the main thread
+        if threading.current_thread() is not threading.main_thread():
+            logger.critical("SystemStart.py must be run in the main thread")
+            sys.exit(1)
+            
+        # Initialize system first
+        initializer = get_initializer()
+        initializer.initialize()
+        
+        # Get Qt application and event loop
+        app = initializer.get_app()
+        loop = initializer.get_loop()
+        
+        if not app or not loop:
+            raise RuntimeError("Failed to initialize application or event loop")
+        
+        try:
+            # Run the main coroutine
+            loop.run_until_complete(main())
+            
+            # Start Qt event loop
+            with loop:  # Ensure proper cleanup of event loop
+                loop.run_forever()
+                
+        except KeyboardInterrupt:
+            logger.info("Received keyboard interrupt")
+        finally:
+            # Clean up
+            initializer.cleanup()
+            
+    except Exception as e:
+        logger.critical(f"Fatal error: {str(e)}")
+        sys.exit(1)
