@@ -36,23 +36,23 @@ class CompletionMessageHandler:
     _instance = None
     _lock = threading.RLock()
     _initialized = False
-    
+
     def __new__(cls):
         with cls._lock:
             if cls._instance is None:
                 cls._instance = super(CompletionMessageHandler, cls).__new__(cls)
             return cls._instance
-    
+
     def __init__(self):
         with self.__class__._lock:
             if not self.__class__._initialized:
                 self.bc_construct = BC_construct()
                 self.__class__._initialized = True
                 logger.info("CompletionMessageHandler initialized")
-    
-    def send_completion_message(self, 
-                               system_name: str, 
-                               message_type: str, 
+
+    def send_completion_message(self,
+                               system_name: str,
+                               message_type: str,
                                command_type: str,
                                command_name: str,
                                metadata: Dict[str, Any] = None,
@@ -61,10 +61,10 @@ class CompletionMessageHandler:
                                radar_type: str = None) -> bool:
         """
         Send a completion message to the Bus Controller.
-        
+
         This method formats the completion message according to the MIL-STD-1553B protocol
         and sends it to the Bus Controller using the RT_sender.
-        
+
         Args:
             system_name: The name of the system sending the completion message (e.g., 'weather_radar')
             message_type: The type of message (e.g., 'weather_radarModeChangeCompletion')
@@ -72,36 +72,36 @@ class CompletionMessageHandler:
             command_name: The name of the command (e.g., 'WEATHER_RADAR_MODE_CHANGE_COMPLETION')
             metadata: Additional metadata to include in the message
             data: The data to include in the message
-            request_id: The request ID to use 
-            
+            request_id: The request ID to use
+
         Returns:
             bool: True if the message was sent successfully, False otherwise
         """
         try:
             logger.info(f"[COMPLETION] Sending completion message: system={system_name}, type={message_type}")
-            
+
             # Determine the appropriate system ID for RT/SA address lookup
             # Radar subsystems (weather_radar, tfr_radar, etc.) are actually subaddresses of the main radar system
             actual_system_id = system_name
             radar_subsystems = ['weather_radar', 'tfr_radar', 'sar_radar', 'targeting_radar', 'aewc_radar']
-            
+
             # Check if this is a radar subsystem
             if any(subsys in system_name for subsys in radar_subsystems):
                 logger.info(f"[COMPLETION] Using 'radar' as the system ID for subsystem {system_name}")
                 actual_system_id = 'radar'  # Use the main radar system ID for RT address lookup
-            
+
             # First set default RT address based on the system ID
             rt_address = None
             sub_address = None
-            
+
             # Get RT address and subaddress
             try:
                 # Import here to avoid circular import issues
                 from FMOFP.local_messaging.address_utils import get_rt_address, get_subaddress  # TODO: Create mirror'd radar version to have local version and respect system separation
-                
+
                 # First get the RT address for the actual system
                 rt_address = get_rt_address(actual_system_id)
-                
+
                 # For radar subsystems, use the corresponding radar subaddress
                 if radar_type:
                     # If explicit radar_type parameter is provided, use that
@@ -139,7 +139,7 @@ class CompletionMessageHandler:
             except Exception as e:
                 logger.warning(f"[COMPLETION] Error getting address pair: {e}")
                 rt_address = None  # Reset so the next block handles it
-                
+
                 if rt_address == 9:
                     # Try to determine appropriate subaddress from system name
                     if 'weather_radar' in system_name:
@@ -167,18 +167,18 @@ class CompletionMessageHandler:
                         sub_address = 16
                     elif 'fms' in system_name:
                         sub_address = 17
-            
+
             # If subaddress is still not found, use a default subaddress for completion messages
             if sub_address is None:
                 sub_address = 31  # Mode codes subaddress is commonly used for special operations
                 logger.info(f"[COMPLETION] Using default subaddress {sub_address} for {system_name}")
-                    
+
             logger.info(f"[COMPLETION] Using RT address {rt_address} and subaddress {sub_address} for system {system_name}")
-            
+
             # Create a status word with the correct format (20-bit binary string)
             # Format: [sync bits (3)][16 data bits][parity bit (1)]
             # For status word: sync bits = 100
-            
+
             # Create the 16 data bits
             rt_address_bits = format(rt_address, '05b')  # 5 bits for RT address
             message_error_bit = '0'  # No message error
@@ -190,31 +190,36 @@ class CompletionMessageHandler:
             subsystem_flag_bit = '0'  # No subsystem flag
             dynamic_bus_control_bit = '0'  # No dynamic bus control
             terminal_flag_bit = '0'  # No terminal flag
-            
+
             # Combine to form the 16 data bits
             data_bits = f"{rt_address_bits}{message_error_bit}{instrumentation_bit}{service_request_bit}{reserved_bits}{broadcast_bit}{busy_bit}{subsystem_flag_bit}{dynamic_bus_control_bit}{terminal_flag_bit}"
-            
+
             # Ensure data bits are exactly 16 bits
             if len(data_bits) != 16:
-                logger.error(f"[COMPLETION] Invalid data bits length: {len(data_bits)}, truncating to 16 bits")    #TODO:   WE SHOULD NOT TRUNCATE METADATA --->  SHOULD HIT BLOCK TRANSFER
-                data_bits = data_bits[:16]
-            
+                # data_bits is always exactly 16 bits (5 rt_address + 11 fixed
+                # flag bits) so this branch is unreachable.  Large radar data
+                # payloads are handled by the block-transfer path in RT_socket.
+                assert False, (
+                    f"[RADAR_COMP] BUG: status word data_bits has unexpected "
+                    f"length {len(data_bits)} — check bit-field construction"
+                )
+
             # Create the status word without parity (3 Sync + 16 data_bits)
             status_word_without_parity = f"100{data_bits}"
-            
+
             # Calculate parity bit (odd parity)
             # For odd parity, the total number of 1s (including the parity bit) should be odd
             ones_count = status_word_without_parity.count('1')
             parity_bit = '1' if ones_count % 2 == 0 else '0'  # Set to 1 if count is even, 0 if odd
             status_word = status_word_without_parity + parity_bit
-            
+
             # Verify status word is exactly 20 bits
             if len(status_word) != 20:
                 logger.error(f"[COMPLETION] Invalid status word length: {len(status_word)}")
 
-            
+
             logger.info(f"[COMPLETION] Created status word: {status_word}")
-            
+
             if not request_id:
                 raise ValueError("[COMPLETION] No request ID provided")
             # Create a properly formatted message for RT_sender
@@ -231,7 +236,7 @@ class CompletionMessageHandler:
                 'destination': 'display_system',  # Default destination for completion messages
                 'sub_address': sub_address  # Include subaddress for proper routing
             }
-            
+
             # Create a combined metadata dictionary with all necessary routing information
             combined_metadata = {
                 'system_type': system_name,
@@ -244,22 +249,22 @@ class CompletionMessageHandler:
                 'source': 'completion_message_handler',
                 'destination': 'display_system'  # Default destination for completion messages
             }
-            
+
             # Add user-provided metadata if available
             if metadata:
                 combined_metadata.update(metadata)
-                
+
             # Add the combined metadata to the formatted message
             formatted_message['metadata'] = combined_metadata
-            
+
             # Get RT_sender instance
             rt_sender = get_rt_sender()
-            
+
             # Send the formatted message to the BC
             logger.info(f"[COMPLETION] Sending formatted message to BC: {formatted_message}")
             logger.info(f"[COMPLETION] Message trace: RT_sender -> BC_Listener -> Bus_Controller -> Unified Router -> Display System")
             send_result = rt_sender.RT_send_message(formatted_message)
-            
+
             if send_result:
                 logger.info(f"[COMPLETION] Completion message sent successfully with request ID: {request_id}")
                 logger.info(f"[COMPLETION] Message successfully sent from RT_sender to BC_Listener")
@@ -267,25 +272,25 @@ class CompletionMessageHandler:
             else:
                 logger.error(f"[COMPLETION] Failed to send completion message with request ID: {request_id}")
                 return False
-                
+
         except Exception as e:
             logger.error(f"[COMPLETION] Error sending completion message: {e}")
             logger.error(traceback.format_exc())
             return False
-    
-    def send_mode_change_completion(self, 
-                                   system_name: str, 
-                                   old_mode: str, 
-                                   new_mode: str, 
+
+    def send_mode_change_completion(self,
+                                   system_name: str,
+                                   old_mode: str,
+                                   new_mode: str,
                                    mode_value: int = None,
                                    request_id: str = None,
                                    radar_type: str = None) -> bool:
         """
         Send a mode change completion message to the Bus Controller.
-        
+
         This is a convenience method that calls send_completion_message with the appropriate
         parameters for a mode change completion message.
-        
+
         Args:
             system_name: The name of the system sending the completion message (e.g., 'radar')
             old_mode: The previous mode name
@@ -293,14 +298,14 @@ class CompletionMessageHandler:
             mode_value: The mode value (optional)
             request_id: The request ID to use
             radar_type: The specific radar type (e.g., 'weather_radar', 'tfr_radar', etc.)
-            
+
         Returns:
             bool: True if the message was sent successfully, False otherwise
         """
-            
+
         logger.info(f"[COMPLETION] Preparing mode change completion message: {system_name} mode {old_mode} -> {new_mode}")
         logger.info(f"[COMPLETION] Using request ID: {request_id}")
-        
+
         # Determine the message type based on radar_type if provided, otherwise use system_name
         if radar_type:
             logger.info(f"[COMPLETION] Using explicit radar_type: {radar_type} to determine message type")
@@ -341,10 +346,10 @@ class CompletionMessageHandler:
                 command_name = 'AEWC_RADAR_MODE_CHANGE_COMPLETION'
             else:
                 raise ValueError(f"[COMPLETION] Unrecognized system_name: {system_name} and no radar_type provided")
-            
+
         logger.info(f"[COMPLETION] Using message type: {message_type}")
         logger.info(f"[COMPLETION] Using command name: {command_name}")
-            
+
         # Create metadata
         metadata = {
             'mode': new_mode,  # Add explicit mode field
@@ -356,9 +361,9 @@ class CompletionMessageHandler:
             'message_purpose': 'mode_change',
             'request_id': request_id
         }
-        
+
         logger.info(f"[COMPLETION] Mode change completion metadata: {metadata}")
-        
+
         # Send the completion message
         result = self.send_completion_message(
             system_name=system_name,
@@ -370,14 +375,14 @@ class CompletionMessageHandler:
             request_id=request_id,
             radar_type=radar_type
         )
-        
+
         if result:
             logger.info(f"[COMPLETION] Mode change completion message sent successfully: {old_mode} -> {new_mode}")
         else:
             logger.error(f"[COMPLETION] Failed to send mode change completion message: {old_mode} -> {new_mode}")
-            
+
         return result
-    
+
     def send_data_completion(self,
                             system_name: str,
                             data_type: str,
@@ -386,16 +391,16 @@ class CompletionMessageHandler:
                             radar_type: str = None) -> bool:
         """
         Send a data completion message to the Bus Controller.
-        
+
         This is a convenience method that calls send_completion_message with the appropriate
         parameters for a data completion message.
-        
+
         Args:
             system_name: The name of the system sending the completion message (e.g., 'weather_radar')
             data_type: The type of data (e.g., 'vil', 'precipitation')
             data: The data to include in the message
-            request_id: The request ID to use 
-            
+            request_id: The request ID to use
+
         Returns:
             bool: True if the message was sent successfully, False otherwise
         """
@@ -414,7 +419,7 @@ class CompletionMessageHandler:
             # Default format for other systems
             message_type = f'{system_name}{data_type.capitalize()}Completion'
             command_name = f'{system_name.upper()}_{data_type.upper()}_COMPLETION'
-            
+
         # Create metadata
         metadata = {
             'data_type': data_type,
@@ -422,7 +427,7 @@ class CompletionMessageHandler:
             'destination': 'display_system',
             'timestamp': time.time()
         }
-        
+
         # Send the completion message
         return self.send_completion_message(
             system_name=system_name,
