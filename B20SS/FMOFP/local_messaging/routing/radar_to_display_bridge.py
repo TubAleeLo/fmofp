@@ -520,3 +520,79 @@ def push_aewc_data(aewc_objects: List[Any], request_id: str) -> bool:
         logger.error(f"[BRIDGE] Error pushing AEWC data: {exc}")
         logger.error(traceback.format_exc())
         return False
+
+
+# ---------------------------------------------------------------------------
+# Storm Cell data
+# ---------------------------------------------------------------------------
+
+def push_cells_data(cell_objects, request_id: str) -> bool:
+    """
+    Push storm cell data directly into the display coordinator.
+
+    The display widget and CellDataProcessor expect items of the form:
+        {'position': (x, y), 'intensity': float, 'size': float,
+         'reflectivity': float, 'velocity': (vx, vy),
+         'cell_id': int, 'id': str}
+
+    Args:
+        cell_objects:  List of StormCell dataclass instances (from StormCellTracker)
+                       or plain dicts with the required keys.
+        request_id:    Originating request UUID.
+
+    Returns:
+        True if at least one item was stored, False otherwise.
+    """
+    if not cell_objects:
+        logger.warning("[BRIDGE] push_cells_data called with empty list — nothing to store")
+        return False
+
+    if not request_id:
+        logger.error("[BRIDGE] push_cells_data called without request_id — cannot store")
+        return False
+
+    coordinator = _get_coordinator()
+    if coordinator is None:
+        return False
+
+    try:
+        processed = []
+        for i, item in enumerate(cell_objects):
+            if isinstance(item, dict):
+                d = dict(item)
+            else:
+                # StormCell dataclass from stormCellTracking.py
+                pos = getattr(item, "position", None)
+                if isinstance(pos, (list, tuple)) and len(pos) >= 2:
+                    d = {"position": (float(pos[0]), float(pos[1]))}
+                else:
+                    d = {"position": (0.0, 0.0)}
+
+                vel = getattr(item, "velocity", (0.0, 0.0))
+                if isinstance(vel, (list, tuple)) and len(vel) >= 2:
+                    d["velocity"] = (float(vel[0]), float(vel[1]))
+                else:
+                    d["velocity"] = (0.0, 0.0)
+
+                d["cell_id"]           = int(getattr(item, "cell_id", i))
+                d["reflectivity"]      = float(getattr(item, "reflectivity", 0.0))
+                d["intensity"]         = float(getattr(item, "intensity", 0.0))
+                d["size"]              = float(getattr(item, "size", 1.0))
+                d["altitude"]          = float(getattr(item, "altitude", 0.0))
+                d["vertical_development"] = float(
+                    getattr(item, "vertical_development", 0.0))
+                d["timestamp"]         = getattr(item, "last_update", time.time())
+
+            if "id" not in d or not d["id"]:
+                d["id"] = f"{request_id}_{i}"
+
+            processed.append(d)
+
+        count = coordinator.store_data("cells", processed, request_id)
+        logger.info(f"[BRIDGE] Stored {count} storm cell items for request {request_id}")
+        return count > 0
+
+    except Exception as exc:
+        logger.error(f"[BRIDGE] Error pushing cells data: {exc}")
+        logger.error(traceback.format_exc())
+        return False

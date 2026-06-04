@@ -22,6 +22,8 @@ from FMOFP.Systems.radarManagement.weather.reflectivity_simulator import Reflect
 from FMOFP.Systems.radarManagement.weather.vil_data_generator_sync import VILDataGenerator
 from FMOFP.Systems.radarManagement.weather.precipitation_data_generator_sync import PrecipitationDataGenerator
 from FMOFP.Systems.radarManagement.radar_message_adapter import get_radar_message_adapter
+from FMOFP.Systems.radarManagement.radar_messaging.stormCellTracking import StormCellTracker
+from FMOFP.Systems.radarManagement.radar_messaging.precipitation_analysis import PrecipitationAnalyzer
 from FMOFP.Utils.common.operation_tracker import track_operation, is_operation_completed
 from FMOFP.Systems.radarManagement.weather.weather_message_type_detector import weather_message_type_detector
 # Import centralized message type constants
@@ -83,6 +85,10 @@ class weather_radar:
         self.vil_data_generator = VILDataGenerator(self.config)
         self.precipitation_data_generator = PrecipitationDataGenerator(self.config)
         self.msg_type_detector = weather_message_type_detector()
+
+        # Capability modules (previously orphaned — now connected)
+        self.storm_cell_tracker = StormCellTracker()
+        self.precip_analyzer    = PrecipitationAnalyzer()
 
         logger.info(f"[WEATHER] Weather radar {name} initialized")
 
@@ -681,6 +687,26 @@ class weather_radar:
                 elevation_angles
             )
 
+            # --- STORM CELL TRACKER -------------------------------------------
+            # Feed reflectivity into the StormCellTracker (now connected).
+            # Use the max-over-elevation 2D slice so the tracker sees the
+            # composite reflectivity picture rather than a single tilt.
+            try:
+                reflectivity_2d = reflectivity.max(axis=1)  # (az, range)
+                lowest_elev = float(elevation_angles[0]) if elevation_angles else 0.5
+                self.storm_cell_tracker.process_radar_data(
+                    reflectivity_data=reflectivity_2d,
+                    scan_elevation=lowest_elev
+                )
+                cells = self.storm_cell_tracker.get_active_cells()
+                if cells:
+                    from FMOFP.local_messaging.routing.radar_to_display_bridge import push_cells_data
+                    push_cells_data(cells, original_request_id)
+                    logger.info(f"[WEATHER] Storm cell tracker: {len(cells)} active cells pushed to display")
+            except Exception as _sct_exc:
+                logger.warning(f"[WEATHER] Storm cell tracker failed (non-fatal): {_sct_exc}")
+            # ------------------------------------------------------------------
+
             # Calculate VIL from reflectivity
             vil_data_array = self.vil_data_generator.calculate_vil(
                 reflectivity,
@@ -882,6 +908,27 @@ class weather_radar:
             )
             reflectivity_time = time.time() - reflectivity_start_time
             logger.debug(f"[WEATHER] Reflectivity generation completed in {reflectivity_time:.3f} seconds")
+
+            # --- PRECIPITATION ANALYZER --------------------------------------
+            # Run the richer PrecipitationAnalyzer (Marshall-Palmer Z-R,
+            # type classification) alongside the existing generator.
+            try:
+                reflectivity_2d_p = reflectivity.max(axis=1)  # composite
+                lowest_elev_p = float(elevation_angles[0]) if elevation_angles else 0.5
+                self.precip_analyzer.process_radar_data(
+                    reflectivity_data=reflectivity_2d_p,
+                    scan_elevation=lowest_elev_p
+                )
+                enriched = self.precip_analyzer.get_precipitation_data()
+                if enriched:
+                    logger.info(
+                        f"[WEATHER] PrecipitationAnalyzer produced "
+                        f"{len(enriched)} enriched precipitation points "
+                        f"(types: {set(p.type for p in enriched)})"
+                    )
+            except Exception as _pa_exc:
+                logger.warning(f"[WEATHER] PrecipitationAnalyzer failed (non-fatal): {_pa_exc}")
+            # ------------------------------------------------------------------
 
             # Calculate precipitation from reflectivity
             precip_calc_start_time = time.time()
