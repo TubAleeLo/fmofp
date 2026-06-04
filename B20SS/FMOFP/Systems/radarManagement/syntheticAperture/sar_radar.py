@@ -21,6 +21,7 @@ from FMOFP.Systems.radarManagement.radar_messaging.message_types import (
 # For backward compatibility - to be removed in future releases
 from FMOFP.local_messaging.messageConfigurations.SARRadarImagery import sar_radarImagery as LegacySARRadarImagery
 from Utils.logger.sys_logger import get_logger
+from FMOFP.Systems.radarManagement.syntheticAperture.sar_processor import ChangeDetector
 
 logger = get_logger()
 
@@ -45,6 +46,8 @@ class sar_radar:
             (5000, -5000)    # Bottom right
         ]
 
+        # Capability modules
+        self.change_detector = ChangeDetector()
         logger.info(f"SAR radar {name} initialized")
 
     def _generate_imagery_data(self) -> np.ndarray:
@@ -364,6 +367,19 @@ class sar_radar:
 
             # Generate imagery based on current mode
             image_data = self._generate_imagery_data()
+
+            # Run change detection on the new frame
+            if isinstance(image_data, np.ndarray) and image_data.size > 0:
+                try:
+                    change_events = self.change_detector.process(image_data)
+                    sig = [e for e in change_events if e.is_significant]
+                    if sig:
+                        logger.info(
+                            f"[SAR_RADAR] {len(sig)} significant change(s) "
+                            f"detected in imagery frame"
+                        )
+                except Exception as _cd_exc:
+                    logger.warning(f"[SAR_RADAR] Change detection error: {_cd_exc}")
 
             # Create imagery data message using radar-local message definitions
             imagery_data = SARRadarImagery(

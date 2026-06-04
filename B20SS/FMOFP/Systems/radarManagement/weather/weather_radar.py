@@ -24,6 +24,7 @@ from FMOFP.Systems.radarManagement.weather.precipitation_data_generator_sync imp
 from FMOFP.Systems.radarManagement.radar_message_adapter import get_radar_message_adapter
 from FMOFP.Systems.radarManagement.radar_messaging.stormCellTracking import StormCellTracker
 from FMOFP.Systems.radarManagement.radar_messaging.precipitation_analysis import PrecipitationAnalyzer
+from FMOFP.Systems.radarManagement.weather.weather_processor import WindShearProcessor, TurbulenceProcessor
 from FMOFP.Utils.common.operation_tracker import track_operation, is_operation_completed
 from FMOFP.Systems.radarManagement.weather.weather_message_type_detector import weather_message_type_detector
 # Import centralized message type constants
@@ -89,6 +90,8 @@ class weather_radar:
         # Capability modules (previously orphaned — now connected)
         self.storm_cell_tracker = StormCellTracker()
         self.precip_analyzer    = PrecipitationAnalyzer()
+        self.windshear_proc     = WindShearProcessor()
+        self.turbulence_proc    = TurbulenceProcessor()
 
         logger.info(f"[WEATHER] Weather radar {name} initialized")
 
@@ -297,11 +300,9 @@ class weather_radar:
                 # Process mapping data
                 self._process_mapping_data()
             elif self.mode == weather_radarMode.TURBULENCE:
-                # Process turbulence data
-                pass
+                self._process_turbulence_data()
             elif self.mode == weather_radarMode.WINDSHEAR:
-                # Process windshear data
-                pass
+                self._process_windshear_data()
             elif self.mode == weather_radarMode.NORMAL:
                 # Process normal data
                 pass
@@ -325,6 +326,36 @@ class weather_radar:
             pass
         except Exception as e:
             logger.error(f"[WEATHER] Error processing mapping data for {self.name}: {str(e)}")
+
+    def _process_turbulence_data(self):
+        """Process TURBULENCE mode data via TurbulenceProcessor."""
+        try:
+            elevation_angles = self.config['vcp'].get(
+                self.mode.name.lower(), {}).get('elevs', (0.5,))
+            reflectivity = self.reflectivity_simulator.generate_reflectivity(
+                self.mode.name.lower(), elevation_angles)
+            cells = self.turbulence_proc.process(
+                reflectivity, elevation_angles)
+            if cells:
+                logger.info(
+                    f"[WEATHER] Turbulence: {len(cells)} cells, "
+                    f"max category={self.turbulence_proc.max_category()}")
+        except Exception as exc:
+            logger.error(f"[WEATHER] Turbulence processing error: {exc}")
+
+    def _process_windshear_data(self):
+        """Process WINDSHEAR mode data via WindShearProcessor."""
+        try:
+            elevation_angles = self.config['vcp'].get(
+                self.mode.name.lower(), {}).get('elevs', (0.5,))
+            reflectivity = self.reflectivity_simulator.generate_reflectivity(
+                self.mode.name.lower(), elevation_angles)
+            events = self.windshear_proc.process(
+                reflectivity, elevation_angles)
+            if self.windshear_proc.has_microburst():
+                logger.warning("[WEATHER] MICROBURST DETECTED")
+        except Exception as exc:
+            logger.error(f"[WEATHER] Windshear processing error: {exc}")
 
     def set_mode(self, mode, send_completion=True, request_id=None):
         """

@@ -24,6 +24,7 @@ from FMOFP.Systems.radarManagement.radar_messaging.message_types import (
 )
 
 from Utils.logger.sys_logger import get_logger
+from FMOFP.Systems.radarManagement.targeting.target_processor import TargetProcessor
 
 logger = get_logger()
 
@@ -44,6 +45,8 @@ class targeting_radar:
         self.locked_track_id = None
         self.lock_quality = 0.0
         self.jamming_detected = False
+        # Signal-processing capability modules
+        self.target_processor = TargetProcessor()
 
         logger.info(f"Targeting radar {name} initialized")
 
@@ -144,6 +147,14 @@ class targeting_radar:
                 target = self.current_targets[self.locked_track_id]
                 self.lock_quality = min(1.0, target['snr'] / 30)  # Simple lock quality model
                 self.jamming_detected = np.random.random() < 0.05  # 5% chance of jamming
+
+    def _run_target_processing(self) -> None:
+        """Run signature analysis and stealth detection on all active tracks."""
+        try:
+            with self._lock:
+                self.target_processor.process_tracks(self.current_targets)
+        except Exception as exc:
+            logger.error(f"[TARGETING] Processor error: {exc}")
 
     def _get_target_range_data(self, track_id: int) -> Optional[Dict]:
         """Get range data for a specific target."""
@@ -472,6 +483,8 @@ class targeting_radar:
 
             # Update target positions
             self._update_targets()
+            # Run signature analysis + stealth detection on enriched tracks
+            self._run_target_processing()
 
             # Send track data for each target
             for track_id, target in self.current_targets.items():

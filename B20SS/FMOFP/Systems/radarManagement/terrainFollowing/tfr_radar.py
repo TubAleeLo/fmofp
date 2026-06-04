@@ -29,6 +29,7 @@ from FMOFP.local_messaging.messageConfigurations.tfr_radar_data import (
     tfr_radarTerrainWarning as LegacyTFRRadarTerrainWarning
 )
 from Utils.logger.sys_logger import get_logger
+from FMOFP.Systems.radarManagement.terrainFollowing.tfr_processor import PathOptimiser, ClearanceManager
 
 logger = get_logger()
 
@@ -50,6 +51,9 @@ class tfr_radar:
         self.last_warning_time = 0
         self.warning_interval = 1.0  # seconds
 
+        # Capability modules
+        self.path_optimiser    = PathOptimiser()
+        self.clearance_manager = ClearanceManager()
         logger.info(f"TFR radar {name} initialized")
 
     def _initialize_terrain_data(self) -> List[Tuple[float, float]]:
@@ -457,6 +461,16 @@ class tfr_radar:
         """
         try:
             # Create elevation profile message using radar-local message class
+            # Run path optimisation and clearance assessment
+            try:
+                aircraft_alt_m = 1000.0  # FMS would supply real value
+                self.clearance_manager.assess_profile(self.terrain_data, aircraft_alt_m)
+                self.path_optimiser.compute_path(self.terrain_data, aircraft_alt_m)
+                if self.clearance_manager.master_level == "PULL_UP":
+                    logger.warning("[TFR_RADAR] PULL UP — terrain clearance critical")
+            except Exception as _tf_exc:
+                logger.warning(f"[TFR_RADAR] TFR processing error: {_tf_exc}")
+
             elevation_profile = TFRRadarElevationProfile(
                 data_uuid=str(time.time()),
                 profile_data=self.terrain_data,

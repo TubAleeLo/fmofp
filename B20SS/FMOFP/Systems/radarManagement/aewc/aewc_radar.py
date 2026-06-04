@@ -24,6 +24,7 @@ from FMOFP.Systems.radarManagement.radar_messaging.message_types import (
     COMMAND_TYPE_SECTOR_SCAN_DATA
 )
 from Utils.logger.sys_logger import get_logger
+from FMOFP.Systems.radarManagement.aewc.aewc_processor import SectorPriorityManager, ElectronicProtection
 
 logger = get_logger()
 
@@ -68,6 +69,9 @@ class aewc_radar:
             'temperature': 20.0
         }
 
+        # Capability modules
+        self.sector_priority = SectorPriorityManager(list(self.sectors.keys()))
+        self.ecm_protection  = ElectronicProtection()
         logger.info(f"AEWC radar {name} initialized")
 
     def _initialize_sectors(self):
@@ -246,6 +250,28 @@ class aewc_radar:
                 if current_time - sector.last_scan_time > 1.0:  # 1 second update rate
                     sector.scan_progress = (sector.scan_progress + 0.1) % 1.0
                     sector.last_scan_time = current_time
+
+    def _run_aewc_processing(self) -> None:
+        """Run sector prioritisation and ECM assessment on this update cycle."""
+        try:
+            sector_counts: dict = {sid: 0 for sid in self.sectors}
+            sector_hostile: dict = {sid: 0 for sid in self.sectors}
+            with self._lock:
+                for tdata in self.current_targets.values():
+                    sid = self._get_target_sector(tdata.get('position', (0, 0, 0)))
+                    if sid:
+                        sector_counts[sid] = sector_counts.get(sid, 0) + 1
+
+            jammed = self.ecm_protection.get_jammed_sectors()
+            self.sector_priority.update(sector_counts, sector_hostile, jammed)
+
+            import random
+            for sid in self.sectors:
+                noise = self.noise_floor + random.gauss(0, 3)
+                self.ecm_protection.assess_sector(sid, noise)
+            self.ecm_protection.cleanup_stale()
+        except Exception as exc:
+            logger.error(f"[AEWC] AEWC processing error: {exc}")
 
     def start(self):
         """Start the AEWC radar system."""
@@ -551,6 +577,7 @@ class aewc_radar:
 
             # Update target positions
             self._update_targets()
+            self._run_aewc_processing()
 
             # Send track data for each target
             for track_id, target in self.current_targets.items():
