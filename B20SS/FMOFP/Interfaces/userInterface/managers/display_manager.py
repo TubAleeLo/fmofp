@@ -194,6 +194,13 @@ class DisplayManager:
                 self.displays['tsd'] = tsd
                 self.displays[DisplayType.TSD] = tsd
 
+                # Initialize Stores Management System
+                logger.debug("Creating Stores Management System Display")
+                from ..displays.sms import StoresManagementDisplay
+                sms = StoresManagementDisplay()
+                self.displays['sms'] = sms
+                self.displays[DisplayType.SMS] = sms
+
                 # Initialize HUD container
                 logger.debug("Creating Head-Up Display Container")
                 from ..displays.hud_container import HUDContainer
@@ -393,6 +400,13 @@ class DisplayManager:
                 tsd.move(screen.left() + 900, screen.top() + 700)
                 tsd.start()
                 logger.info("Tactical Situation Display: Started and positioned (not shown by default)")
+
+            # Start SMS — positioned below TSD, not shown by default
+            if 'sms' in self.displays:
+                sms = self.displays['sms']
+                sms.move(screen.left() + 1750, screen.top() + 700)
+                sms.start()
+                logger.info("Stores Management System Display: Started and positioned (not shown by default)")
 
             # Start Weather Radar Display but don't show it (integrated into MFD)
             if 'radar_display' in self.displays:
