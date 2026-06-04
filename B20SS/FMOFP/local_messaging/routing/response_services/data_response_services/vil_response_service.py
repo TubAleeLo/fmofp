@@ -38,16 +38,16 @@ class VILResponseService:
             self._event_loop = None
             self._processing = False
             self._task = None
-            
+
             # Get routing service for message handling
             from FMOFP.local_messaging.routing.MessageRoutingService import get_message_routing_service
             self.routing_service = get_message_routing_service()
-            
+
             # Initialize message tracking for loop prevention
             self._processed_transactions = set()
             self._processed_messages = set()
             self._max_tracked_messages = 1000  # Limit size to prevent memory leaks
-            
+
             self._initialized = True
             logger.info("VILResponseService initialized")
 
@@ -61,7 +61,7 @@ class VILResponseService:
             # Mark as initialized
             self._initialized = True
             logger.info("VILResponseService fully initialized")
-            
+
         except Exception as e:
             logger.error(f"Error during VILResponseService initialization: {str(e)}")
             logger.error(traceback.format_exc())
@@ -70,7 +70,7 @@ class VILResponseService:
     async def start(self, event_loop=None) -> bool:
         """
         Start the VIL response service
-        
+
         Args:
             event_loop: Optional event loop to use for async operations
         """
@@ -93,17 +93,17 @@ class VILResponseService:
             self._event_loop = event_loop
             self._vil_queue = asyncio.Queue()  # Create queue with current event loop
             self._processing = True
-            
+
             # Create and start the queue processing task
             logger.info("[VIL_FLOW] Creating queue processing task")
             self._task = self._event_loop.create_task(self._process_vil_queue())
             self._task.add_done_callback(self._handle_task_done)
-            
+
             # Log detailed information about the task
             logger.info(f"[VIL_FLOW] Task created: {self._task}")
             logger.info(f"[VIL_FLOW] Task running: {not self._task.done()}")
             logger.info(f"[VIL_FLOW] Event loop running: {self._event_loop.is_running()}")
-            
+
             logger.info("VIL response service started")
             return True
         except Exception as e:
@@ -186,12 +186,12 @@ class VILResponseService:
             raise
 
     from FMOFP.Utils.message_loop_prevention.decorators import prevent_message_loops_async
-    
+
     @prevent_message_loops_async(service_name="vil_response_service")
     async def handle_vil_data(self, message: Dict[str, Any]):
         """
         Handle VIL data from weather radar
-        
+
         Args:
             message: Dictionary containing VIL data
         """
@@ -202,45 +202,36 @@ class VILResponseService:
             logger.info(f"[VIL_FLOW] Message keys: {message.keys() if isinstance(message, dict) else 'N/A'}")
             logger.info(f"[VIL_FLOW] Message content: {message}")
             logger.info(f"[VIL_FLOW] VIL Response Service initialization state: {self._initialized}")
-            
+
             # Generate transaction ID for tracking if not present
 
             transaction_id = message.get('metadata', {}).get('transaction_id')
             request_id = message.get('request_id')
             if not request_id:
-                
+
                 raise ValueError("[VIL_FLOW] Missing request ID in message")
-            
+
             # Check current display mode from DisplayResponseService
             from FMOFP.local_messaging.routing.response_services.system_response_services.DisplayResponseService import get_display_response_service
             display_service = get_display_response_service()
             current_mode = None
-            
+
             if display_service:
                 try:
                     current_mode = await display_service.get_current_display_mode('radar_display')
                     logger.info(f"[VIL_FLOW] Current display mode: {current_mode}")
                 except Exception as e:
                     logger.error(f"[VIL_FLOW] Error getting display mode: {e}")
-            
-            # Only process VIL data if in SURVEILLANCE mode or mode is unknown (fallback for compatibility)
-            if current_mode and current_mode.get('mode') != 'SURVEILLANCE':
-                logger.info(f"[VIL_FLOW] Skipping VIL data processing - display not in SURVEILLANCE mode (current: {current_mode.get('mode')})")
-                
-                # Send acknowledgment that we received but didn't process the data
-                request_id = message.get('request_id')
-                if request_id:
-                    await self._send_acknowledgment(request_id, True, 
-                                             f"VIL data received but not processed - display in {current_mode.get('mode')} mode")
-                return
-            
-            # If we reach here, either the mode is SURVEILLANCE or we couldn't determine the mode
-            # In either case, we proceed with processing the VIL data
+
+            # Store VIL data regardless of the current display mode.
+            # The radar can generate data in SURVEILLANCE, MAPPING, or any
+            # other mode; the display coordinator and the widget itself are
+            # responsible for choosing what to render.
             if current_mode:
-                logger.info(f"[VIL_FLOW] Processing VIL data in {current_mode.get('mode')} mode")
+                logger.info(f"[VIL_FLOW] Processing VIL data in {current_mode.get('mode', 'unknown')} mode")
             else:
                 logger.info("[VIL_FLOW] Processing VIL data (mode unknown)")
-            
+
             # Verify database connection
             if not hasattr(self, 'data_handler') or self.data_handler is None:
                 logger.error("[VIL_FLOW] Missing data_handler - service not properly initialized")
@@ -250,12 +241,12 @@ class VILResponseService:
                 self.data_handler = VILDataHandler(radar_db)
                 self._initialized = True
                 logger.info("[VIL_FLOW] Initialized data_handler during message handling")
-            
+
             # Use message format adapter to help extract fields
             message_adapter = get_message_format_adapter()
             normalized_message = message_adapter.normalize_message(message)
             logger.info(f"[VIL_FLOW] Normalized message type: {normalized_message['message_type']}")
-            
+
             # Extract required fields - but still use original message for strict compatibility
             request_id = message.get('request_id')
             if not request_id and isinstance(message, dict):
@@ -264,7 +255,7 @@ class VILResponseService:
                     if field in message:
                         request_id = message[field]
                         break
-                        
+
             logger.info(f"[VIL_FLOW] Extracted request_id: {request_id}")
             if not request_id:
                 logger.warning("[VIL_FLOW] VIL data missing request_id")
@@ -275,19 +266,19 @@ class VILResponseService:
             logger.info(f"[VIL_FLOW] Extracted response object: {response}")
             logger.info(f"[VIL_FLOW] Response type: {type(response)}")
             logger.info(f"[VIL_FLOW] Response attributes: {dir(response) if hasattr(response, '__dir__') else None}")
-            
+
             # Enhanced data extraction with multiple fallback mechanisms
             data = None
-            
+
             # Check for VIL data in vil_data field (alternative format)
             if not response and 'vil_data' in message:
                 logger.info("[VIL_FLOW] No data field found, checking vil_data field")
                 response = message.get('vil_data')
                 logger.info(f"[VIL_FLOW] Extracted VIL data from vil_data field: {response}")
-            
+
             # Log the extracted data for debugging
             logger.info(f"[VIL_FLOW] Extracted VIL data from response")
-            
+
             # Try multiple approaches to extract valid VIL data
             # Approach 1: Check if response is a list of data words
             if isinstance(response, list):
@@ -303,7 +294,7 @@ class VILResponseService:
                     # List of VIL data objects
                     data = response[0]
                     logger.info(f"[VIL_FLOW] Using first item from VIL data list")
-            
+
             # Approach 2: Check if response has vil_data attribute
             if not data and hasattr(response, 'vil_data'):
                 if isinstance(response.vil_data, list) and len(response.vil_data) > 0:
@@ -312,27 +303,27 @@ class VILResponseService:
                 else:
                     data = response.vil_data
                     logger.info(f"[VIL_FLOW] Extracted VIL data from response.vil_data attribute")
-            
+
             # Approach 3: Check if response is a WeatherRadarVILData object
             if not data and isinstance(response, WeatherRadarVILData):
                 data = response
                 logger.info(f"[VIL_FLOW] Using response directly as WeatherRadarVILData")
-            
+
             # Approach 4: Check if response is binary data (int or list of ints)
             if not data and (isinstance(response, int) or (isinstance(response, list) and len(response) > 0 and isinstance(response[0], int))):
                 try:
                     logger.info(f"[VIL_FLOW] Detected binary data format: {response}")
-                    
+
                     # Format as list if single integer
                     binary_data = response if isinstance(response, list) else [response]
-                    
+
                     # Use VILDataHandler's extract_and_store_binary_data method
                     logger.info(f"[VIL_FLOW] Extracting and storing binary data with request_id: {request_id}")
-                    
+
                     binary_storage_success = self.data_handler.extract_and_store_binary_data(request_id, binary_data)
                     if binary_storage_success:
                         logger.info(f"[VIL_FLOW] Successfully extracted and stored binary VIL data")
-                        
+
                         # Retrieve the stored data to continue processing
                         try:
                             # Get the most recent data with this request_id
@@ -348,15 +339,15 @@ class VILResponseService:
                             logger.error(f"[VIL_FLOW] Error retrieving stored binary data: {e}")
                 except Exception as e:
                     logger.error(f"[VIL_FLOW] Error processing binary data: {e}")
-            
+
             # Approach 5: Check if response is a string (could be encoded binary)
             if not data and isinstance(response, str) and len(response) > 0:
                 try:
                     logger.info(f"[VIL_FLOW] Attempting to process string data: {response[:20]}...")
-                    
+
                     # Try to parse as binary data (handle both hex and decimal string formats)
                     binary_data = []
-                    
+
                     # Handle hex format (e.g. "0x1234" or "1234")
                     if response.startswith('0x') or all(c in '0123456789ABCDEFabcdef ' for c in response):
                         # Split by spaces if multiple values
@@ -379,7 +370,7 @@ class VILResponseService:
                                 binary_data.append(int(part))
                             except ValueError:
                                 continue
-                    
+
                     # If we extracted some binary data, process it
                     if binary_data:
                         logger.info(f"[VIL_FLOW] Extracted binary data from string: {binary_data}")
@@ -388,7 +379,7 @@ class VILResponseService:
                         )
                         if binary_storage_success:
                             logger.info(f"[VIL_FLOW] Successfully processed string as binary data")
-                            
+
                             # Retrieve the stored data
                             try:
                                 stored_data = self.data_handler.get_vil_data()
@@ -402,7 +393,7 @@ class VILResponseService:
                                 logger.error(f"[VIL_FLOW] Error retrieving string-binary data: {e}")
                 except Exception as e:
                     logger.error(f"[VIL_FLOW] Error processing string as binary data: {e}")
-            
+
             if not data or not isinstance(data, WeatherRadarVILData):
                 logger.error(f"[VIL_FLOW] Invalid data format or type")
                 await self._send_acknowledgment(request_id, False, "Invalid data type")
@@ -418,7 +409,7 @@ class VILResponseService:
                 validation_errors.append("Invalid intensity value")
             if any(p > 255.0 for p in data.position):
                 validation_errors.append("Position out of range")
-            
+
             if validation_errors:
                 error_msg = ", ".join(validation_errors)
                 await self._send_acknowledgment(request_id, False, error_msg)
@@ -438,36 +429,36 @@ class VILResponseService:
             )
             vil_data.timestamp = message.get('timestamp', time.time())
             vil_data.request_id = original_request_id
-            
+
             # Add metadata for tracking
             if not hasattr(vil_data, 'additional_info'):
                 vil_data.additional_info = {}
             vil_data.additional_info['original_request_id'] = original_request_id
-            
+
             # Get proper command word for display system
             from FMOFP.local_messaging.command_word_map import register_command_word
             display_command = register_command_word('displays', 0, 'radar_display', 'data', 'vil')
             vil_data.additional_info['command_word'] = display_command
-            
+
             # Add any additional info
             if hasattr(data, 'additional_info'):
                 vil_data.additional_info.update(data.additional_info)
 
             # Store data
             success = await self._store_vil_data(vil_data)
-            
+
             # If storage was successful, route VIL data to display system
             if success:
                 try:
                     # Get routing service
                     from FMOFP.local_messaging.routing.MessageRoutingService import get_message_routing_service
                     routing_service = get_message_routing_service()
-                    
+
                     # Get current radar mode
                     #current_mode = "SURVEILLANCE"  # TODO:  UPDATE TO NOT NEED OR GET CURRENT FROM DBM
                     if hasattr(vil_data, 'additional_info') and 'mode' in vil_data.additional_info:
                         current_mode = vil_data.additional_info['mode']
-                    
+
                     # Create message with tracking metadata
                     vil_message = {
                         'request_id': original_request_id,
@@ -479,7 +470,7 @@ class VILResponseService:
                             'transaction_id': transaction_id
                         }
                     }
-                    
+
                     # Route VIL data to display
                     await routing_service.route_vil_data(vil_message)
                     logger.info(f"[VIL_FLOW] Routed VIL data to display system with request ID: {original_request_id}")
@@ -487,9 +478,9 @@ class VILResponseService:
                     logger.error(f"[VIL_FLOW] Error routing VIL data to display: {e}")
                     logger.error(traceback.format_exc())
                     # Continue with acknowledgment even if routing fails
-            
+
             # Send acknowledgment based on storage result
-            await self._send_acknowledgment(request_id, success, 
+            await self._send_acknowledgment(request_id, success,
                 "Data stored successfully" if success else "Failed to store data")
 
         except Exception as e:
@@ -511,36 +502,36 @@ class VILResponseService:
                     except RuntimeError:
                         loop = asyncio.new_event_loop()
                         asyncio.set_event_loop(loop)
-                    
+
                     # Start service with current loop
                     success = await self.start(event_loop=loop)
                     if not success:
                         logger.error("[VIL_STORE] Failed to start service")
                         return False
-                    
+
                     logger.info("[VIL_STORE] Service started successfully")
                 except Exception as e:
                     logger.error(f"[VIL_STORE] Failed to start service: {e}")
                     logger.error(traceback.format_exc())
                     return False
-            
+
             # Check if data is fresh - moved outside the if block to fix variable scope issue
             max_data_age = 10.0  # Consider data older than 10 seconds as stale
             current_time = time.time()
             data_age = current_time - vil_data.timestamp
-            
+
             if data_age > max_data_age:
                 logger.warning(f"[VIL_STORE] Received stale VIL data (age: {data_age:.2f} seconds)")
                 logger.warning(f"[VIL_STORE] Stale data will not be stored or displayed")
-                
+
                 # Don't automatically request fresh data here to avoid creating extra messages
                 # Instead, just log a clear message about stale data so the caller knows to request fresh data
                 logger.warning("[VIL_STORE] STALE DATA DETECTED: The system should request fresh VIL data")
                 logger.warning("[VIL_STORE] Current operation was rejected due to stale data")
-                
+
                 # Notify caller that we need fresh data
                 return False
-            
+
             logger.info(f"[VIL_STORE] Data is fresh (age: {data_age:.2f} seconds)")
 
             # Critical log patterns that tests are scanning for -
@@ -549,16 +540,16 @@ class VILResponseService:
             logger.info(f"[VIL_STORE] - position: {vil_data.position}")
             logger.info(f"[VIL_STORE] - value: {vil_data.value}")
             logger.info(f"[VIL_STORE] - timestamp: {vil_data.timestamp}")
-            
+
             # Critical log pattern for test verification - exactly this format
             logger.info(f"[VIL_FLOW] VIL data being stored")
-            
+
             # Store data directly
             direct_store = self.data_handler.store_vil_data(vil_data)
             if not direct_store:
                 logger.error("[VIL_STORE] Direct storage failed")
                 return False
-            
+
             logger.info(f"[VIL_FLOW] VIL data stored successfully: {vil_data.request_id}")
 
             # Send directly to DisplayMessageHandler with all weather data components
@@ -567,26 +558,26 @@ class VILResponseService:
                 current_mode_str = "SURVEILLANCE"  # TODO: UPDATE TO NOT NEED OR GET CURRENT FROM DBM
                 if hasattr(vil_data, 'additional_info') and 'mode' in vil_data.additional_info:
                     current_mode_str = vil_data.additional_info['mode']
-                
+
                 # Get display message handler directly
                 from FMOFP.local_messaging.routing.handlers.system_message_handlers.DisplayMessageHandler import get_display_message_handler
                 display_handler = get_display_message_handler()
-                
+
                 if display_handler:
                     # Get all weather data components, passing current VIL data
                     # Set should_request_from_radar to True to ensure we always try to get fresh data from radar
                     precip_data_list, vil_data_list, cell_data_list = await self.get_weather_data_components(
-                        current_mode_str, 
+                        current_mode_str,
                         current_vil=vil_data,
                         should_request_from_radar=True
                     )
-                    
+
                     # Log what we retrieved
                     logger.info(f"[VIL_FLOW] Retrieved weather data components:")
                     logger.info(f"[VIL_FLOW] - Precipitation: {len(precip_data_list)} items")
                     logger.info(f"[VIL_FLOW] - VIL: {len(vil_data_list)} items")
                     logger.info(f"[VIL_FLOW] - Storm cells: {len(cell_data_list)} items")
-                    
+
                     # Create complete display message with all weather data components
                     display_message = {
                         'data': vil_data,
@@ -618,17 +609,17 @@ class VILResponseService:
                             'message_type': 'weather_radarVILResponse'  # Duplicate here to ensure it's available in metadata
                         }
                     }
-                    
+
                     # Send directly to display handler
                     await display_handler.handle_vil_data(display_message)
                     logger.info(f"[VIL_FLOW] Sent VIL data directly to display system with request ID: {vil_data.request_id}")
                 else:
                     logger.error("[VIL_FLOW] Could not get display message handler")
-                    
+
                     # Fallback to display service if handler not available
                     from FMOFP.local_messaging.routing.response_services.system_response_services.DisplayResponseService import get_display_response_service
                     display_service = get_display_response_service()
-                    
+
                     if display_service:
                         # Create display data message with loop prevention flags
                         display_data = {
@@ -662,7 +653,7 @@ class VILResponseService:
                                 'command_word': vil_data.additional_info.get('command_word', '0101100111000010')
                             }
                         }
-                        
+
                         # Send to display service
                         await display_service.send_display_message(display_data)
                         logger.info(f"[VIL_FLOW] Sent VIL data via display service (fallback) with request ID: {vil_data.request_id}")
@@ -684,7 +675,7 @@ class VILResponseService:
                 logger.info(f"[VIL_STORE] - timestamp: {vil_data.timestamp}")
                 # Add more emphatic logging that the test needs to see
                 logger.warning(f"[VIL_STORE] Storing data with request_id: {vil_data.request_id}")
-                
+
                 # Use a try/except block with a timeout to avoid qasync assertion errors
                 try:
                     # Use put_nowait to avoid qasync timer issues
@@ -701,13 +692,13 @@ class VILResponseService:
                     return True
                 logger.info(f"[VIL_FLOW] VIL data being stored")
                 return True
-                    
+
             except Exception as e:
                 logger.error(f"[VIL_STORE] Error adding to queue: {e}")
                 logger.error(traceback.format_exc())
                 # Return true since direct storage succeeded
                 return True
-                
+
         except Exception as e:
             logger.error(f"Error in _store_vil_data: {e}")
             logger.error(traceback.format_exc())
@@ -728,22 +719,22 @@ class VILResponseService:
                     'status_message': message
                 }
             }
-            
+
             await self.routing_service.route_status_word(ack_message)
             logger.info(f"[VIL] Sent acknowledgment for {request_id}: {ack_message['status']}")
-            
+
         except Exception as e:
             logger.error(f"Error sending acknowledgment: {e}")
 
     async def get_weather_data_components(self, mode: str, current_vil: Optional[WeatherRadarVILData] = None, should_request_from_radar: bool = True) -> Tuple[List[Any], List[Any], List[Any]]:
         """
         Retrieve all weather data components for the current radar mode
-        
+
         Args:
             mode: Current radar mode (e.g., 'SURVEILLANCE')
             current_vil: Optional current VIL data being processed
             should_request_from_radar: Whether to request fresh data from radar if needed
-            
+
         Returns:
             tuple: (precipitation_data, vil_data, cell_data)
             Each component is a list of the respective data objects
@@ -759,25 +750,25 @@ class VILResponseService:
             else:
                 radar_db = self.data_handler.radar_db
                 logger.info("[VIL_WX_DATA_COMPONENTS] Using existing data_handler")
-                
+
             # Pre-initialize result lists
             precip_data = []
             vil_data = []
             cell_data = []
-            
+
             # First check if tables exist before attempting to query
             tables_exist = {
                 'precipitation_data': False,
                 'vil_data': False,
                 'storm_cell_data': False
             }
-            
+
             # Initialize variables for data freshness check
             vil_results = None
             data_is_fresh = False
             max_data_age = 10.0  # Consider data older than 10 seconds as stale
             current_time = time.time()
-            
+
             # Verify which tables exist in the database
             for table in tables_exist.keys():
                 try:
@@ -786,7 +777,7 @@ class VILResponseService:
                     logger.info(f"[VIL_WX_DATA_COMPONENTS] Table {table} exists: {exists}")
                 except Exception as e:
                     logger.error(f"[VIL_WX_DATA_COMPONENTS] Error checking table {table}: {e}")
-            
+
             # Check if we need to request from radar by fetching existing data first
             if tables_exist['vil_data']:
                 try:
@@ -794,11 +785,11 @@ class VILResponseService:
                     # Calculate the staleness threshold timestamp
                     current_time = time.time()
                     staleness_threshold_time = current_time - max_data_age
-                    
+
                     # Query with staleness filter to only retrieve fresh data
                     vil_results = radar_db.execute_query(
                         """
-                        SELECT * FROM vil_data 
+                        SELECT * FROM vil_data
                         WHERE timestamp > ?
                         ORDER BY timestamp DESC
                         LIMIT 10
@@ -807,7 +798,7 @@ class VILResponseService:
                         query_type='select'
                     )
                     logger.info(f"[VIL_WX_DATA_COMPONENTS] Retrieved {len(vil_results) if vil_results else 0} initial VIL records")
-                    
+
                     # Check if we have data and if it's fresh enough
                     if vil_results and len(vil_results) > 0:
                         # Get column indexes
@@ -815,15 +806,15 @@ class VILResponseService:
                             cursor = conn.cursor()
                             cursor.execute("PRAGMA table_info(vil_data)")
                             columns = [col[1] for col in cursor.fetchall()]
-                        
+
                         # Get timestamp index
                         timestamp_index = columns.index('timestamp')
-                        
+
                         # Check latest data age
                         latest_timestamp = float(vil_results[0][timestamp_index])
                         data_age = current_time - latest_timestamp
                         logger.info(f"[VIL_WX_DATA_COMPONENTS] Latest data age: {data_age:.2f} seconds")
-                        
+
                         # Determine if data is fresh enough
                         data_is_fresh = data_age < max_data_age
                         logger.info(f"[VIL_WX_DATA_COMPONENTS] Data is {'fresh' if data_is_fresh else 'stale'}")
@@ -831,7 +822,7 @@ class VILResponseService:
                     logger.error(f"[VIL_WX_DATA_COMPONENTS] Error retrieving initial VIL data: {e}")
                     vil_results = None
                     data_is_fresh = False
-            
+
             # If should_request_from_radar is True and data is not fresh, send a request to the weather radar
             if should_request_from_radar and (not vil_results or not data_is_fresh):
                 logger.info(f"[VIL_WX_DATA_COMPONENTS] Need to request fresh data from radar: data_exists={vil_results is not None}, data_is_fresh={data_is_fresh}")
@@ -840,13 +831,13 @@ class VILResponseService:
                     # Get radar message handler
                     from FMOFP.local_messaging.routing.handlers.system_message_handlers.RadarMessageHandler import get_radar_message_handler
                     radar_handler = get_radar_message_handler()
-                    
+
                     if radar_handler:
                         # Import the request message type
                         from FMOFP.local_messaging.messageConfigurations.weather_radar_data import weather_radarVILRequest
                         import uuid
-                        
-                        # Create request 
+
+                        # Create request
                         vil_request = weather_radarVILRequest(
                             message_header="data_request",
                             sending_system="vil_response_service",
@@ -854,27 +845,27 @@ class VILResponseService:
                             request_uuid=str(uuid.uuid4()),
                             scan_parameters={"mode": mode, "data_type": "vil"}
                         )
-                        
+
                         # Log that we're sending the request to radar
                         logger.info("[VIL_WX_DATA_COMPONENTS] Sending VIL data request to weather radar")
-                        
+
                         # Send the request to weather radar
                         request_id = await radar_handler.send_request(
                             "weather_radar",  # Target system
                             "data",          # Command type
                             vil_request      # Send request object
                         )
-                        
+
                         logger.info(f"[VIL_WX_DATA_COMPONENTS] VIL data request sent to radar with ID: {request_id}")
-                        
+
                         # Add a delay to allow radar to respond
                         await asyncio.sleep(2.0)
-                        
+
                         # Try querying again after radar response
                         try:
                             vil_results = radar_db.execute_query(
                                 """
-                                SELECT * FROM vil_data 
+                                SELECT * FROM vil_data
                                 ORDER BY timestamp DESC
                                 LIMIT 10
                                 """,
@@ -888,19 +879,19 @@ class VILResponseService:
                 except Exception as e:
                     logger.error(f"[VIL_WX_DATA_COMPONENTS] Error sending request to radar: {e}")
                     logger.error(traceback.format_exc())
-            
+
             # If current_vil is provided, always include it in the results
             if current_vil:
                 logger.info("[VIL_WX_DATA_COMPONENTS] Adding current VIL data to results")
                 vil_data.append(current_vil)
-            
+
             # Fetch VIL data if table exists
             if tables_exist['vil_data']:
                 try:
                     if not vil_results:
                         vil_results = radar_db.execute_query(
                             """
-                            SELECT * FROM vil_data 
+                            SELECT * FROM vil_data
                             ORDER BY timestamp DESC
                             LIMIT 10
                             """,
@@ -914,7 +905,7 @@ class VILResponseService:
             else:
                 logger.warning("[VIL_WX_DATA_COMPONENTS] VIL data table does not exist, skipping query")
                 vil_results = None
-            
+
             # Format VIL data
             if vil_results:
                 try:
@@ -924,12 +915,12 @@ class VILResponseService:
                         cursor = conn.cursor()
                         cursor.execute("PRAGMA table_info(vil_data)")
                         columns = [col[1] for col in cursor.fetchall()]
-                    
+
                     for row in vil_results:
                         try:
                             # Convert row to dictionary
                             vil_dict = dict(zip(columns, row))
-                            
+
                             # Create WeatherRadarVILData object
                             from FMOFP.local_messaging.messageConfigurations.weather_radar_data import WeatherRadarVILData
                             vil_obj = WeatherRadarVILData(
@@ -941,11 +932,11 @@ class VILResponseService:
                             )
                             vil_obj.request_id = vil_dict['request_id']
                             vil_obj.timestamp = float(vil_dict['timestamp'])
-                            
+
                             # Only add if not already in list (avoid duplication with current_vil)
                             if current_vil and vil_obj.request_id == current_vil.request_id:
                                 continue
-                                
+
                             # Add to list
                             vil_data.append(vil_obj)
                         except Exception as e:
@@ -953,18 +944,18 @@ class VILResponseService:
                             continue
                 except Exception as e:
                     logger.error(f"[VIL_WX_DATA_COMPONENTS] Error processing VIL results: {e}")
-            
+
             # Fetch precipitation data if table exists
             if tables_exist['precipitation_data']:
                 try:
                     # Calculate the staleness threshold timestamp for precipitation data
                     current_time = time.time()
                     staleness_threshold_time = current_time - max_data_age
-                    
+
                     # Query with staleness filter to only retrieve fresh precipitation data
                     precip_results = radar_db.execute_query(
                         """
-                        SELECT * FROM precipitation_data 
+                        SELECT * FROM precipitation_data
                         WHERE timestamp > ?
                         ORDER BY timestamp DESC
                         LIMIT 10
@@ -979,7 +970,7 @@ class VILResponseService:
             else:
                 logger.warning("[VIL_WX_DATA_COMPONENTS] Precipitation data table does not exist, skipping query")
                 precip_results = None
-                
+
             # Format precipitation data
             if precip_results:
                 try:
@@ -989,12 +980,12 @@ class VILResponseService:
                         cursor = conn.cursor()
                         cursor.execute("PRAGMA table_info(precipitation_data)")
                         columns = [col[1] for col in cursor.fetchall()]
-                    
+
                     for row in precip_results:
                         try:
                             # Convert row to dictionary
                             precip_dict = dict(zip(columns, row))
-                            
+
                             # Create PrecipitationData object
                             from FMOFP.local_messaging.messageConfigurations.weather_radar_data import PrecipitationData
                             precip_obj = PrecipitationData(
@@ -1006,7 +997,7 @@ class VILResponseService:
                             )
                             precip_obj.request_id = precip_dict['request_id']
                             precip_obj.timestamp = float(precip_dict['timestamp'])
-                            
+
                             # Add to list
                             precip_data.append(precip_obj)
                         except Exception as e:
@@ -1014,18 +1005,18 @@ class VILResponseService:
                             continue
                 except Exception as e:
                     logger.error(f"[VIL_WX_DATA_COMPONENTS] Error processing precipitation results: {e}")
-            
+
             # Fetch storm cell data if table exists
             if tables_exist['storm_cell_data']:
                 try:
                     # Calculate the staleness threshold timestamp for storm cell data
                     current_time = time.time()
                     staleness_threshold_time = current_time - max_data_age
-                    
+
                     # Query with staleness filter to only retrieve fresh storm cell data
                     cell_results = radar_db.execute_query(
                         """
-                        SELECT * FROM storm_cell_data 
+                        SELECT * FROM storm_cell_data
                         WHERE timestamp > ?
                         ORDER BY timestamp DESC
                         LIMIT 10
@@ -1040,7 +1031,7 @@ class VILResponseService:
             else:
                 logger.warning("[VIL_WX_DATA_COMPONENTS] Storm cell data table does not exist, skipping query")
                 cell_results = None
-                
+
             # Format cell data
             if cell_results:
                 try:
@@ -1050,12 +1041,12 @@ class VILResponseService:
                         cursor = conn.cursor()
                         cursor.execute("PRAGMA table_info(storm_cell_data)")
                         columns = [col[1] for col in cursor.fetchall()]
-                    
+
                     for row in cell_results:
                         try:
                             # Convert row to dictionary
                             cell_dict = dict(zip(columns, row))
-                            
+
                             # Create StormCellData object
                             from FMOFP.local_messaging.messageConfigurations.weather_radar_data import StormCellData
                             cell_obj = StormCellData(
@@ -1066,7 +1057,7 @@ class VILResponseService:
                             )
                             cell_obj.request_id = cell_dict['request_id']
                             cell_obj.timestamp = float(cell_dict['timestamp'])
-                            
+
                             # Add to list
                             cell_data.append(cell_obj)
                         except Exception as e:
@@ -1074,26 +1065,26 @@ class VILResponseService:
                             continue
                 except Exception as e:
                     logger.error(f"[VIL_WX_DATA_COMPONENTS] Error processing cell results: {e}")
-            
+
             # Log final results
             logger.info(f"[VIL_WX_DATA_COMPONENTS] Returning data components:")
             logger.info(f"[VIL_WX_DATA_COMPONENTS] - Precipitation: {len(precip_data)} items")
             logger.info(f"[VIL_WX_DATA_COMPONENTS] - VIL: {len(vil_data)} items")
             logger.info(f"[VIL_WX_DATA_COMPONENTS] - Storm cells: {len(cell_data)} items")
-            
+
             # Return all data components separately
             return precip_data, vil_data, cell_data
-            
+
         except Exception as e:
             logger.error(f"[VIL_WX_DATA_COMPONENTS] Error retrieving weather data components: {e}")
             logger.error(traceback.format_exc())
-            
+
             # In case of error, always ensure we return the current VIL data if provided
             if current_vil:
                 return [], [current_vil], []
             else:
                 return [], [], []
-    
+
     def get_queue_size(self) -> int:
         """Get current size of VIL queue"""
         return self._vil_queue.qsize() if self._vil_queue else 0
@@ -1101,7 +1092,7 @@ class VILResponseService:
     async def wait_for_empty_queue(self, timeout: Optional[float] = None):
         """
         Wait for VIL queue to be empty
-        
+
         Args:
             timeout: Optional timeout in seconds
         """
@@ -1109,18 +1100,18 @@ class VILResponseService:
             if not self._vil_queue:
                 logger.warning("Queue not initialized - service may not be started")
                 return
-                
+
             if not self._event_loop:
                 logger.warning("Event loop not set - service may not be started")
                 return
-                
+
             # Ensure we're using the current event loop
             current_loop = asyncio.get_running_loop()
             if current_loop != self._event_loop:
                 logger.warning("Current event loop differs from service loop - recreating queue")
                 self._vil_queue = asyncio.Queue()
                 self._event_loop = current_loop
-                
+
             # Wait for queue to be empty with timeout
             try:
                 await asyncio.wait_for(self._vil_queue.join(), timeout=timeout)

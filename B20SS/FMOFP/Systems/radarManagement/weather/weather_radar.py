@@ -64,26 +64,26 @@ class weather_radar:
             'memory_usage': 0,
             'disk_usage': 0
         }
-        
+
         # Flag to track startup state and ignore startup messages
         self._in_startup = True
         self._startup_complete_time = None
         self._startup_timeout = 5.0  # seconds
-        
+
         # Initialize configuration
         self.config = self._get_default_config()
         self.config.update(self._load_radar_config())
-        
+
         # Initialize radar parameters
         self.tilt = self.config['tilt_range']['min']
         self.range = self.config['scan_range']['min']
-        
+
         # Initialize reflectivity simulator, VIL data generator, and precipitation data generator
         self.reflectivity_simulator = ReflectivitySimulator(self.config)
         self.vil_data_generator = VILDataGenerator(self.config)
         self.precipitation_data_generator = PrecipitationDataGenerator(self.config)
         self.msg_type_detector = weather_message_type_detector()
-        
+
         logger.info(f"[WEATHER] Weather radar {name} initialized")
 
     def start(self):
@@ -94,11 +94,11 @@ class weather_radar:
                 if self.running:
                     logger.info(f"[WEATHER] Weather radar {self.name} already initialized")  # Changed from warning
                     return
-                
+
                 # Set startup flag to true
                 self._in_startup = True
                 self._startup_complete_time = time.time() + self._startup_timeout
-                
+
                 self.running = True
                 self.mode = weather_radarMode.STANDBY
                 # Allow time for system initialization
@@ -112,7 +112,7 @@ class weather_radar:
                 # Set startup flag to false after initialization
                 self._in_startup = False
                 logger.info(f"[WEATHER] Weather radar {self.name} startup complete, now accepting messages")
-            
+
             logger.info(f"[WEATHER] Weather radar {self.name} started and configured")
         except Exception as e:
             logger.error(f"[WEATHER] Error starting weather radar {self.name}: {str(e)}")
@@ -145,11 +145,11 @@ class weather_radar:
                 'command_msg': 2,
                 'log_msg': 0.5
             }
-            
+
             # Load message rates from file
             config_file = os.path.join(fetching.fetch_fmofp_path(), 'messageRateConfig.xml')
             logger.info(f"[WEATHER] Attempting to load message rates from: {config_file}")
-            
+
             try:
                 if not os.path.exists(config_file):
                     logger.error(f"[WEATHER] Configuration file not found: {config_file}")
@@ -161,20 +161,20 @@ class weather_radar:
                     msg_name = msg_type.tag
                     rate_hz = float(msg_type.find('rate_hz').text)
                     message_rates[msg_name] = rate_hz
-                    
+
                 logger.info("[WEATHER] Successfully loaded message rate configurations")
-                
+
             except ET.ParseError as e:
                 logger.error(f"[WEATHER] XML parsing error in configuration file: {e}")
                 # Use default rates if parsing fails
-                
+
             except Exception as e:
                 logger.error(f"[WEATHER] Failed to load message rate configurations: {e}")
                 # Use default rates if loading fails
-            
+
             logger.info(f"[WEATHER] Using message rates: {message_rates}")
             return message_rates
-            
+
         # Use the operation tracker to ensure this only happens once
         result = track_operation('message_rates_load', 'weather_radar', _load_message_rates_impl)
         if result is None:
@@ -239,13 +239,13 @@ class weather_radar:
             with self._lock:
                 # Update resource usage
                 self._update_resource_usage()
-                
+
                 # Update health status
                 self._check_health()
-                
+
                 # Update radar state based on mode
                 self._update_radar_state()
-                
+
                 self._last_update = current_time
 
         except Exception as e:
@@ -323,7 +323,7 @@ class weather_radar:
     def set_mode(self, mode, send_completion=True, request_id=None):
         """
         Set radar mode.
-        
+
         Args:
             mode: The new mode to set
             send_completion: Whether to send a mode change completion notification (default: True)
@@ -361,16 +361,16 @@ class weather_radar:
                 logger.info(f"[WEATHER] Already in mode {mode.name}, no change needed")
                 #self._send_mode_change_completion(self.mode, mode)
                 return
-                
+
             logger.info(f"[WEATHER] Setting mode to: {mode.name}")
-            
+
             old_mode = self.mode
             self.mode = mode
-            
+
             logger.info(f"[WEATHER] Weather radar mode changed from {old_mode.name} to {mode.name}")
             logger.info("[WEATHER] Mode change completed")
             logger.debug(f"[WEATHER] Radar name: {self.name}")  # Keep radar name in debug log
-            
+
             # Send mode change completion notification only if requested and modes are different
             if send_completion:
                 logger.info(f"[WEATHER] Sending mode change completion notification (send_completion=True)")
@@ -383,12 +383,12 @@ class weather_radar:
 
     def _send_mode_change_completion(self, old_mode, new_mode, request_id=None):
         """Send mode change completion notification to display system.
-        
+
         This is critical for proper synchronization between radar and display systems.
         According to MIL-STD-1553B protocol, this separate completion message ensures
         that the display system knows when the radar has actually completed the mode change,
         rather than just acknowledging receipt of the command.
-        
+
         Args:
             old_mode: The previous radar mode
             new_mode: The new radar mode
@@ -399,21 +399,21 @@ class weather_radar:
             if self._in_startup:
                 logger.info(f"[WEATHER] Skipping mode change completion notification during startup: {old_mode.name} -> {new_mode.name}")
                 return
-                
+
             # Only send if we have a radar messenger
             if not hasattr(self, 'radar_messenger') or not self.radar_messenger:
                 logger.error("[WEATHER] Cannot send mode change completion - radar_messenger not available")
                 return
-            
+
             # Import the CompletionMessageHandler
             from FMOFP.Systems.radarManagement.radar_messaging.completion_message_handler import get_completion_message_handler
-            
+
             # Get the CompletionMessageHandler instance
             completion_handler = get_completion_message_handler()
-            
+
             # Log the mode change completion notification
             logger.info(f"[WEATHER] Sending mode change completion notification: {old_mode.name} -> {new_mode.name}")
-            
+
             # Send the mode change completion message SYNCHRONOUSLY
             success = completion_handler.send_mode_change_completion(
                 system_name='radar',
@@ -423,12 +423,12 @@ class weather_radar:
                 request_id=request_id,
                 radar_type='weather_radar'
             )
-            
+
             if success:
                 logger.info(f"[WEATHER] Mode change completion notification sent successfully")
             else:
                 logger.error(f"[WEATHER] Failed to send mode change completion notification")
-                
+
         except Exception as e:
             logger.error(f"[WEATHER] Error sending mode change completion: {str(e)}")
             logger.error(traceback.format_exc())
@@ -449,7 +449,7 @@ class weather_radar:
                     # Startup timeout has passed, set startup to false
                     self._in_startup = False
                     logger.info("[WEATHER] Startup period complete, now accepting messages")
-            
+
             # Enhanced logging with more detailed message information
             logger.info(f"[WEATHER] *** RECEIVED MESSAGE ***")
             logger.info(f"[WEATHER] Message ID: {id(message)}")
@@ -457,14 +457,14 @@ class weather_radar:
             logger.info(f"[WEATHER] Message data: {message.data}")
             logger.info(f"[WEATHER] Message type: {message.message_type if hasattr(message, 'message_type') else None}")
             logger.info(f"[WEATHER] Command type: {message.command_type if hasattr(message, 'command_type') else None}")
-            
+
             # Log all message attributes for detailed debugging
             logger.info(f"[WEATHER] Message attributes:")
             for attr_name in dir(message):
                 if not attr_name.startswith('_') and not callable(getattr(message, attr_name)):
                     attr_value = getattr(message, attr_name)
                     logger.info(f"[WEATHER]   - {attr_name}: {attr_value}")
-            
+
             # Process the message synchronously
             handler_was_called = self._process_message_sync(message)
             return handler_was_called
@@ -472,7 +472,7 @@ class weather_radar:
             logger.error(f"[WEATHER] Error handling message synchronously for weather radar {self.name}: {str(e)}")
             logger.error(traceback.format_exc())
             return False
-            
+
 
     async def receive_message_async(self, message: MIL_STD_1553B_Message):
         """
@@ -490,7 +490,7 @@ class weather_radar:
                     # Startup timeout has passed, set startup to false
                     self._in_startup = False
                     logger.info("[WEATHER] Startup period complete, now accepting messages")
-            
+
             # Enhanced logging with more detailed message information
             logger.info(f"[WEATHER] *** RECEIVED MESSAGE ***")
             logger.info(f"[WEATHER] Message ID: {id(message)}")
@@ -498,14 +498,14 @@ class weather_radar:
             logger.info(f"[WEATHER] Message data: {message.data}")
             logger.info(f"[WEATHER] Message type: {message.message_type if hasattr(message, 'message_type') else None}")
             logger.info(f"[WEATHER] Command type: {message.command_type if hasattr(message, 'command_type') else None}")
-            
+
             # Log all message attributes for detailed debugging
             logger.info(f"[WEATHER] Message attributes:")
             for attr_name in dir(message):
                 if not attr_name.startswith('_') and not callable(getattr(message, attr_name)):
                     attr_value = getattr(message, attr_name)
                     logger.info(f"[WEATHER]   - {attr_name}: {attr_value}")
-            
+
             # Process the message synchronously
             handler_was_called = self._process_message_sync(message)
             return handler_was_called
@@ -513,7 +513,7 @@ class weather_radar:
             logger.error(f"[WEATHER] Error handling message synchronously for weather radar {self.name}: {str(e)}")
             logger.error(traceback.format_exc())
             return False
-                
+
     def _process_message_sync(self, message: MIL_STD_1553B_Message):
         """Process message synchronously."""
         try:
@@ -521,12 +521,12 @@ class weather_radar:
             original_request_id = getattr(message, 'request_id', None)
             original_command_name = getattr(message, 'command_name', None)
             logger.info(f"[WEATHER] Original message request_id: {original_request_id}, command_name: {original_command_name}")
-            
+
             # Check for request_uuid from BaseMessage if request_id not found
             if original_request_id is None and hasattr(message, 'request_uuid'):
                 original_request_id = getattr(message, 'request_uuid')
                 logger.info(f"[WEATHER] Found request_uuid in original message: {original_request_id}")
-            
+
             # Check metadata for request_id or request_uuid
             if original_request_id is None and hasattr(message, 'metadata') and isinstance(message.metadata, dict):
                 metadata = message.metadata
@@ -536,22 +536,22 @@ class weather_radar:
                 elif 'request_uuid' in metadata:
                     original_request_id = metadata['request_uuid']
                     logger.info(f"[WEATHER] Found request_uuid in metadata: {original_request_id}")
-            
+
             type = self.msg_type_detector.detect_message_type(message)
             logger.info(f"[WEATHER] Detected message type: {type}")
-            
+
             radar_adapter = get_radar_message_adapter()
             normalized_message = radar_adapter.normalize_message(message)
-            
+
             # Log normalized message fields
             logger.info(f"[WEATHER] Normalized message request_id: {normalized_message.get('request_id')}")
             logger.info(f"[WEATHER] Normalized message command_name: {normalized_message.get('command_name')}")
-            
+
             # Use original request_id if normalized message lost it
             if not normalized_message.get('request_id') and original_request_id:
                 normalized_message['request_id'] = original_request_id
                 logger.info(f"[WEATHER] Restored request_id from original message: {original_request_id}")
-            
+
             # Use original command_name if normalized message lost it
             if not normalized_message.get('command_name') and original_command_name:
                 normalized_message['command_name'] = original_command_name
@@ -559,7 +559,7 @@ class weather_radar:
             try:
                 if type == 'mode_handler':
                     # Handle mode change message synchronously
-                    mode = message.data 
+                    mode = message.data
                     # 16 bit bin to integer conversion
                     mode_bytes = bytes([int(mode[i:i+8], 2) for i in range(0, len(mode), 8)])
                     mode = int.from_bytes(mode_bytes, byteorder='big')
@@ -588,7 +588,7 @@ class weather_radar:
         except Exception as e:
             logger.error(f"[WEATHER] Error processing message synchronously: {str(e)}")
             logger.error(traceback.format_exc())
-            
+
     def _send_mode_change_completion_sync(self, old_mode, new_mode, request_id=None):
         """Send mode change completion notification synchronously."""
         try:
@@ -596,16 +596,16 @@ class weather_radar:
             if self._in_startup:
                 logger.info(f"[WEATHER] Skipping mode change completion notification during startup: {old_mode.name} -> {new_mode.name}")
                 return
-                
+
             # Import the CompletionMessageHandler
             from FMOFP.Systems.radarManagement.radar_messaging.completion_message_handler import get_completion_message_handler
-            
+
             # Get the CompletionMessageHandler instance
             completion_handler = get_completion_message_handler()
-            
+
             # Log the mode change completion notification
             logger.info(f"[WEATHER] Sending mode change completion notification: {old_mode.name} -> {new_mode.name}")
-            
+
             # Send the mode change completion message SYNCHRONOUSLY
             success = completion_handler.send_mode_change_completion(
                 system_name='radar',
@@ -615,12 +615,12 @@ class weather_radar:
                 request_id=request_id,
                 radar_type='weather_radar'
             )
-            
+
             if success:
                 logger.info(f"[WEATHER] Mode change completion notification sent successfully")
             else:
                 logger.error(f"[WEATHER] Failed to send mode change completion notification")
-            
+
         except Exception as e:
             logger.error(f"[WEATHER] Error sending mode change completion: {str(e)}")
             logger.error(traceback.format_exc())
@@ -643,71 +643,84 @@ class weather_radar:
             logger.info("[WEATHER][VIL_FLOW] Generating VIL data response")
             logger.info("[WEATHER][VIL_FLOW] Handling VIL data message")
             logger.info("[WEATHER][VIL_FLOW] Processing VIL data")
-            
+
             # Check if we're in standby mode
             if self.mode == weather_radarMode.STANDBY:
                 logger.info("[WEATHER] Radar in STANDBY mode, no VIL data generated")
                 return
-            
+
             # Use RadarMessageAdapter to normalize the message
             radar_adapter = get_radar_message_adapter()
-            
+
             # Add additional validation and debugging
             logger.info(f"[WEATHER] Raw message type: {type(message).__name__}")
             logger.info(f"[WEATHER] Message content: {message}")
-            
+
             logger.info("[WEATHER] Processing confirmed VIL request")
-            
+
             # Normalize the message to extract key information
             normalized_message = radar_adapter.normalize_message(message)
             logger.info(f"[WEATHER] Normalized message type: {normalized_message['message_type']}")
             logger.info(f"[WEATHER] Normalized command type: {normalized_message['command_type']}")
             logger.info(f"[WEATHER] Normalized RT address: {normalized_message['rt_address']}")
             logger.info(f"[WEATHER] Normalized subaddress: {normalized_message['subaddress']}")
-            
+
             # Extract request ID with enhanced error handling
             original_request_id = normalized_message.get('request_id')
-            
+
             if not original_request_id:
-                
+
                 raise ValueError("[WEATHER] No request ID found in message")
-            
+
             # Get elevation angles for current mode
             elevation_angles = self.config['vcp'][self.mode.name.lower()]['elevs']
-            
+
             # Generate simulated reflectivity data based on current radar state
             reflectivity = self.reflectivity_simulator.generate_reflectivity(
-                self.mode.name.lower(), 
+                self.mode.name.lower(),
                 elevation_angles
             )
-            
+
             # Calculate VIL from reflectivity
             vil_data_array = self.vil_data_generator.calculate_vil(
-                reflectivity, 
+                reflectivity,
                 elevation_angles
             )
-            
+
             # Generate VIL data objects with the original request ID
             vil_objects = self.vil_data_generator.generate_vil_data_objects(
-                vil_data_array, 
+                vil_data_array,
                 original_request_id
             )
-            
+
             # Create response message with the original request ID and current mode
             response = self.vil_data_generator.create_vil_response(
-                vil_objects, 
+                vil_objects,
                 original_request_id,
                 self.mode.name  # Add current mode to response
             )
-            
+
+            # --- DIRECT DISPLAY BRIDGE -----------------------------------
+            # Push data straight into the UI coordinator so the display
+            # gets it immediately, independently of the 1553B routing path.
+            try:
+                from FMOFP.local_messaging.routing.radar_to_display_bridge import push_vil_data
+                bridge_ok = push_vil_data(vil_objects, original_request_id)
+                if bridge_ok:
+                    logger.info(f"[WEATHER] Bridge: VIL data pushed to display coordinator")
+                else:
+                    logger.warning("[WEATHER] Bridge: push_vil_data returned False — coordinator may be unavailable")
+            except Exception as _bridge_exc:
+                logger.warning(f"[WEATHER] Bridge push failed (non-fatal): {_bridge_exc}")
+            # -------------------------------------------------------------
+
             # Send VIL data response
-            logger.info(f"[WEATHER] Generated {len(vil_objects)} VIL data points with request ID: {original_request_id}")
             logger.info(f"[WEATHER][VIL_FLOW] VIL data generated")
             logger.info(f"[WEATHER][VIL_STORE] Storing data")
-            
+
             # Get RT address and subaddress from configuration
             rt_address, sub_address = get_rt_subaddress_pair('radar', 'weather_radar')
-            
+
             # Route response through messaging system - SYNCHRONOUS VERSION
             if hasattr(self, 'radar_messenger') and self.radar_messenger:
                 # First, send the actual VIL data using the radar messenger
@@ -715,13 +728,13 @@ class weather_radar:
                     # Send the VIL data response using the DataResponseSender
                     # This properly converts the MIL_STD_1553B_Message to the dictionary format expected by RT_sender
                     logger.info(f"[WEATHER] Sending VIL data message with {len(vil_objects)} data points")
-                    
+
                     # Import the DataResponseSender
                     from FMOFP.Systems.radarManagement.radar_messaging.data_response_sender import get_data_response_sender
-                    
+
                     # Get the DataResponseSender instance
                     data_sender = get_data_response_sender()
-                    
+
                     # Send the VIL data response using the data sender
                     data_result = data_sender.send_vil_data(
                         response,
@@ -729,22 +742,22 @@ class weather_radar:
                         sub_address=sub_address,
                         request_id=original_request_id
                     )
-                    
+
                     if data_result:
                         logger.info(f"[WEATHER] Successfully sent VIL data message with {len(vil_objects)} data points")
                     else:
                         logger.error("[WEATHER] Failed to send VIL data message")
-                        
+
                 except Exception as e:
                     logger.error(f"[WEATHER] Error sending VIL data message: {str(e)}")
                     logger.error(traceback.format_exc())
-                
+
                 # Then, send the completion message as before
                 from FMOFP.Systems.radarManagement.radar_messaging.completion_message_handler import get_completion_message_handler
-                
+
                 # Get the CompletionMessageHandler instance
                 completion_handler = get_completion_message_handler()
-                
+
                 # Send the data completion message SYNCHRONOUSLY
                 success = completion_handler.send_data_completion(
                     system_name='radar',
@@ -752,7 +765,7 @@ class weather_radar:
                     data=response,
                     request_id=original_request_id
                 )
-                
+
                 if success:
                     logger.info(f"[WEATHER] Sent VIL data response with {len(vil_objects)} data points and request ID: {original_request_id}")
                 else:
@@ -767,137 +780,137 @@ class weather_radar:
     def _run_precipitation_data_generator_sync(self, precip_data_array, request_id):
         """
         Direct call to the fully synchronous precipitation data generator.
-        
+
         This implementation has built-in limits and optimizations to prevent performance issues.
-        
+
         Args:
             precip_data_array: The precipitation data array
             request_id: The request ID
-            
+
         Returns:
             List of precipitation data objects or empty list if error occurs
         """
         # Measure execution time
         start_time = time.time()
-        
+
         try:
             # Log the input array details
             if precip_data_array is not None:
                 logger.debug(f"[WEATHER] Generating precipitation data from array shape: {precip_data_array.shape}")
             else:
                 logger.debug("[WEATHER] Generating precipitation data from None array")
-            
+
             # Log which implementation we're using for debugging
             logger.info(f"[WEATHER] Using precipitation data generator: {self.precipitation_data_generator.__class__.__module__}")
-            
+
             # Call the synchronous implementation directly
             result = self.precipitation_data_generator.generate_precipitation_data_objects(
                 precip_data_array, request_id
             )
-            
+
             # Check if result is a coroutine
             if hasattr(result, '__await__'):
                 logger.error(f"[WEATHER] Error: precipitation data generator returned a coroutine instead of data points")
                 # Return empty list as fallback
                 return []
-            
+
             # Log performance metrics
             elapsed_time = time.time() - start_time
             if result:
                 logger.debug(f"[WEATHER] Precipitation data generator completed in {elapsed_time:.3f} seconds, produced {len(result)} objects")
             else:
                 logger.warning(f"[WEATHER] Precipitation data generator completed in {elapsed_time:.3f} seconds but returned no results")
-                
+
             return result
         except Exception as e:
             logger.error(f"[WEATHER] Error in precipitation data generator: {str(e)}")
             logger.error(traceback.format_exc())
-            
+
             # Return empty list on error instead of fallback object
             logger.warning(f"[WEATHER] Returning empty list due to error in precipitation data generator")
             return []
-    
+
     def _handle_precipitation_data_sync(self, message, request_id=None):
         """
         Synchronous version of _handle_precipitation_data.
         Handles precipitation data message and generates realistic precipitation data response.
         """
         total_start_time = time.time()
-        
+
         try:
             logger.info("[WEATHER][PRECIP_FLOW] Generating precipitation data response")
             logger.info("[WEATHER][PRECIP_FLOW] Handling precipitation data message")
             logger.info("[WEATHER][PRECIP_FLOW] Processing precipitation data")
-            
+
             # Check if we're in standby mode
             if self.mode == weather_radarMode.STANDBY:
                 logger.info("[WEATHER] Radar in STANDBY mode, no precipitation data generated")
                 return
-            
+
             # Use RadarMessageAdapter to normalize the message
             message_start_time = time.time()
             radar_adapter = get_radar_message_adapter()
-            
+
             # Add additional validation and debugging
             logger.info(f"[WEATHER] Raw message type: {type(message).__name__}")
             logger.info(f"[WEATHER] Message content: {message}")
-            
+
             logger.info("[WEATHER] Processing confirmed precipitation request")
-            
+
             # Normalize the message to extract key information
             normalized_message = radar_adapter.normalize_message(message)
             logger.info(f"[WEATHER] Normalized message type: {normalized_message['message_type']}")
             logger.info(f"[WEATHER] Normalized command type: {normalized_message['command_type']}")
             logger.info(f"[WEATHER] Normalized RT address: {normalized_message['rt_address']}")
             logger.info(f"[WEATHER] Normalized subaddress: {normalized_message['subaddress']}")
-            
+
             # Extract request ID with enhanced error handling
             original_request_id = normalized_message.get('request_id')
-            
-            
+
+
             message_process_time = time.time() - message_start_time
             logger.debug(f"[WEATHER] Message processing completed in {message_process_time:.3f} seconds")
-            
+
             # Get elevation angles for current mode
             elevation_angles = self.config['vcp'][self.mode.name.lower()]['elevs']
-            
+
             # Generate simulated reflectivity data based on current radar state
             reflectivity_start_time = time.time()
             reflectivity = self.reflectivity_simulator.generate_reflectivity(
-                self.mode.name.lower(), 
+                self.mode.name.lower(),
                 elevation_angles
             )
             reflectivity_time = time.time() - reflectivity_start_time
             logger.debug(f"[WEATHER] Reflectivity generation completed in {reflectivity_time:.3f} seconds")
-            
+
             # Calculate precipitation from reflectivity
             precip_calc_start_time = time.time()
             precip_data_array = self.precipitation_data_generator.calculate_precipitation(
-                reflectivity, 
+                reflectivity,
                 elevation_angles
             )
             precip_calc_time = time.time() - precip_calc_start_time
             logger.debug(f"[WEATHER] Precipitation calculation completed in {precip_calc_time:.3f} seconds")
-            
+
             # Generate precipitation data objects with the original request ID
             precip_objects_start_time = time.time()
             precip_objects = self._run_precipitation_data_generator_sync(
-                precip_data_array, 
+                precip_data_array,
                 original_request_id
             )
             precip_objects_time = time.time() - precip_objects_start_time
             logger.info(f"[WEATHER] Precipitation objects generation completed in {precip_objects_time:.3f} seconds")
-            
+
             # Create response message with the original request ID and current mode
             response_start_time = time.time()
             response = self.precipitation_data_generator.create_precipitation_response(
-                precip_objects, 
+                precip_objects,
                 original_request_id,
                 self.mode.name  # Add current mode to response
             )
             response_time = time.time() - response_start_time
             logger.debug(f"[WEATHER] Response creation completed in {response_time:.3f} seconds")
-            
+
             # Check if precip_objects is a coroutine
             if hasattr(precip_objects, '__await__'):
                 logger.error(f"[WEATHER][PRECIP_DETAIL] Error: precipitation data generator returned a coroutine instead of data points")
@@ -906,10 +919,23 @@ class weather_radar:
             else:
                 logger.info(f"[WEATHER] Generated {len(precip_objects)} precipitation data points with request ID: {original_request_id}")
             logger.info(f"[WEATHER][PRECIP_FLOW] Precipitation data generated")
-            
+
+            # --- DIRECT DISPLAY BRIDGE -----------------------------------
+            # Push data straight into the UI coordinator (same pattern as VIL).
+            try:
+                from FMOFP.local_messaging.routing.radar_to_display_bridge import push_precipitation_data
+                bridge_ok = push_precipitation_data(precip_objects, original_request_id)
+                if bridge_ok:
+                    logger.info(f"[WEATHER] Bridge: precipitation data pushed to display coordinator")
+                else:
+                    logger.warning("[WEATHER] Bridge: push_precipitation_data returned False")
+            except Exception as _bridge_exc:
+                logger.warning(f"[WEATHER] Bridge push failed (non-fatal): {_bridge_exc}")
+            # -------------------------------------------------------------
+
             # Get RT address and subaddress from configuration
             rt_address, sub_address = get_rt_subaddress_pair('radar', 'weather_radar')
-            
+
             # Route response through messaging system - SYNCHRONOUS VERSION
             message_send_start_time = time.time()
             if hasattr(self, 'radar_messenger') and self.radar_messenger:
@@ -920,14 +946,14 @@ class weather_radar:
                     logger.info(f"[WEATHER] Sending precipitation data message with {len(precip_objects)} data points")
                     for i in range(len(precip_objects)):
                         logger.info(f"[WEATHER] Precipitation object {i}: {precip_objects[i]}")
-                    
-                    
+
+
                     # Import the DataResponseSender
                     from FMOFP.Systems.radarManagement.radar_messaging.data_response_sender import get_data_response_sender
-                    
+
                     # Get the DataResponseSender instance
                     data_sender = get_data_response_sender()
-                    
+
                     # Send the precipitation data response using the data sender
                     data_result = data_sender.send_precipitation_data(
                         response,
@@ -935,22 +961,22 @@ class weather_radar:
                         sub_address=sub_address,
                         request_id=original_request_id
                     )
-                    
+
                     if data_result:
                         logger.info(f"[WEATHER] Successfully sent precipitation data message with {len(precip_objects)} data points")
                     else:
                         logger.error("[WEATHER] Failed to send precipitation data message")
-                        
+
                 except Exception as e:
                     logger.error(f"[WEATHER] Error sending precipitation data message: {str(e)}")
                     logger.error(traceback.format_exc())
-                
+
                 # Then, send the completion message as before
                 from FMOFP.Systems.radarManagement.radar_messaging.completion_message_handler import get_completion_message_handler
-                
+
                 # Get the CompletionMessageHandler instance
                 completion_handler = get_completion_message_handler()
-                
+
                 # Send the data completion message SYNCHRONOUSLY
                 success = completion_handler.send_data_completion(
                     system_name='radar',
@@ -958,17 +984,17 @@ class weather_radar:
                     data=response,
                     request_id=original_request_id
                 )
-                
+
                 if success:
                     logger.info(f"[WEATHER] Sent precipitation data response with {len(precip_objects)} data points and request ID: {original_request_id}")
                 else:
                     logger.error(f"[WEATHER] Failed to send precipitation data response with request ID: {original_request_id}")
             else:
                 logger.error("[WEATHER] Cannot send response - radar_messenger not available")
-                
+
             message_send_time = time.time() - message_send_start_time
             logger.debug(f"[WEATHER] Message sending completed in {message_send_time:.3f} seconds")
-            
+
             # Report total processing time
             total_time = time.time() - total_start_time
             logger.info(f"[WEATHER] Total precipitation data processing completed in {total_time:.3f} seconds")
@@ -979,7 +1005,7 @@ class weather_radar:
             logger.error(f"Error handling precipitation data synchronously: {str(e)}")
             logger.error(traceback.format_exc())
             logger.error(f"[WEATHER] Precipitation data processing failed after {total_error_time:.3f} seconds")
-    
+
 
     def _get_default_config(self):
         """Return default configuration."""
@@ -1003,11 +1029,11 @@ class weather_radar:
     def _is_vil_request(self, message: Any, normalized_message: Dict[str, Any] = None) -> bool:
         """
         Determine if a message is a VIL data request using the centralized helper function.
-        
+
         Args:
             message: The message to check
             normalized_message: Optional pre-normalized message (used for compatibility)
-            
+
         Returns:
             bool: True if the message is a VIL data request, False otherwise
         """
@@ -1020,15 +1046,15 @@ class weather_radar:
             logger.error(f"Error checking if message is VIL request: {str(e)}")
             logger.error(traceback.format_exc())
             return False
-    
+
     def _is_precipitation_request(self, message: Any, normalized_message: Dict[str, Any] = None) -> bool:
         """
         Determine if a message is a precipitation data request using the centralized helper function.
-        
+
         Args:
             message: The message to check
             normalized_message: Optional pre-normalized message (used for compatibility)
-            
+
         Returns:
             bool: True if the message is a precipitation data request, False otherwise
         """
@@ -1041,7 +1067,7 @@ class weather_radar:
             logger.error(f"Error checking if message is precipitation request: {str(e)}")
             logger.error(traceback.format_exc())
             return False
-            
+
     def is_healthy(self) -> bool:
         """Check if radar is healthy."""
         return self._health_status and self.running
@@ -1071,15 +1097,15 @@ class weather_radar:
     def set_range(self, range_km):
         with self._lock:
             self.range = range_km
-    
+
     def scan(self):
         if self.mode == weather_radarMode.STANDBY:
             return
-        
-        with self._lock:  
+
+        with self._lock:
             # Perform radar scan and signal processing to generate products
             ref, vel, width = self._process_raw_data()
-            vil = self._calculate_vil(ref)  
+            vil = self._calculate_vil(ref)
             shear = self._detect_wind_shear(vel, width)
             turb = self._detect_turbulence(width)
             echo_tops = self._calculate_echo_tops(ref)
@@ -1089,7 +1115,7 @@ class weather_radar:
         # Simulate raw reflectivity, velocity, spectrum width data
         # using radar parameters and weather simulation
         ref = None
-        vel = None  
+        vel = None
         width = None
         return ref, vel, width
 
@@ -1097,7 +1123,7 @@ class weather_radar:
         """Calculate Vertically Integrated Liquid (VIL) from reflectivity volume scan."""
         if ref is None:
             return None
-            
+
         # Use the VIL data generator to calculate VIL
         elevation_angles = self.config['vcp'][self.mode.name.lower()]['elevs']
         return self.vil_data_generator.calculate_vil(ref, elevation_angles)
@@ -1106,9 +1132,9 @@ class weather_radar:
         # Detect wind shear signatures from velocity and spectrum width data
         if vel is None or width is None:
             return None
-            
+
         shear = np.zeros(vel.shape[::2])  # Initialize shear array
-        
+
         for az in range(vel.shape[0]):
             for r in range(1, vel.shape[2] - 1):
                 # Calculate radial shear
@@ -1117,14 +1143,14 @@ class weather_radar:
                 az_next = (az + 1) % vel.shape[0]
                 az_prev = (az - 1) % vel.shape[0]
                 azimuthal_shear = (vel[az_next, :, r] - vel[az_prev, :, r]) / 2
-                
+
                 # Combine radial and azimuthal shear
                 total_shear = np.sqrt(radial_shear**2 + azimuthal_shear**2)
-                
+
                 # Check if shear exceeds threshold and spectrum width is significant
-                shear[az, r] = np.any((total_shear > self.config['shear_params']['threshold']) & 
+                shear[az, r] = np.any((total_shear > self.config['shear_params']['threshold']) &
                                       (width[az, :, r] > self.config['turb_params']['threshold']))
-        
+
         return shear
 
     def _detect_turbulence(self, width):
@@ -1138,19 +1164,19 @@ class weather_radar:
         # Calculate height of storm echo tops from reflectivity data
         if ref is None:
             return None
-            
+
         echo_tops = np.zeros((ref.shape[0], ref.shape[2]))  # Initialize echo tops array
-        
+
         # Assuming each elevation step represents 1 km in height (adjust as needed)
         height_per_step = 1.0
-        
+
         for az in range(ref.shape[0]):
             for r in range(ref.shape[2]):
                 # Find the highest elevation where reflectivity exceeds a threshold (e.g., 18 dBZ)
                 echo_top = np.argwhere(ref[az, :, r] > 18)
                 if echo_top.size > 0:
                     echo_tops[az, r] = (echo_top[-1][0] + 1) * height_per_step
-        
+
         return echo_tops
 
     def _get_surveillance_data(self) -> Dict:
@@ -1269,12 +1295,12 @@ class weather_radar:
             if hasattr(self.radar_control, 'aircraft'):
                 altitude_km = self.radar_control.aircraft.altitude / 1000
                 speed_km_s = self.radar_control.aircraft.speed / 1000
-                
-                self.tilt = max(self.config['tilt_range']['min'], 
+
+                self.tilt = max(self.config['tilt_range']['min'],
                                 min(self.config['tilt_range']['max'],
                                     altitude_km))
                 self.range = max(self.config['scan_range']['min'],
-                                min(self.config['scan_range']['max'], 
+                                min(self.config['scan_range']['max'],
                                     speed_km_s * 60))
 
     def _convert_reflectivity_data(self, ref_data):
@@ -1285,11 +1311,11 @@ class weather_radar:
 
     def _convert_velocity_data(self, vel_data):
         # Convert velocity data format
-        # This will depend on how wind velocity is represented in the simulation state  
+        # This will depend on how wind velocity is represented in the simulation state
         # For now, we'll assume it's already in the correct format
         return vel_data
 
-    def _convert_turbulence_to_spectrum_width(self, turb_data):  
+    def _convert_turbulence_to_spectrum_width(self, turb_data):
         # Convert turbulence data to spectrum width
         # This will involve modeling the spectral broadening caused by turbulence
         # For simplicity, we'll use a linear relationship for now
