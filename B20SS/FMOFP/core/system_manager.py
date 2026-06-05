@@ -182,28 +182,6 @@ class SystemManager:
             self.components['schedule_message'] = get_schedule_message()
             logger.info("All components initialized successfully")
             self._initialization_complete = True
-
-            # Pre-register Phase 2 singletons (they start later in start_FM_system)
-            try:
-                from FMOFP.Systems.flightControlSys.flightControlComputer.flightControlComputer import get_flight_control_computer
-                self.components['flight_control_computer'] = get_flight_control_computer()
-            except Exception as e:
-                logger.warning(f"FCC pre-register failed: {e}")
-            try:
-                from FMOFP.Systems.engineManagement.ecu.engineControlUnit import get_engine_control_unit
-                self.components['engine_control_unit'] = get_engine_control_unit()
-            except Exception as e:
-                logger.warning(f"ECU pre-register failed: {e}")
-            try:
-                from FMOFP.Systems.comms.messaging_service import get_comms_service
-                self.components['comms_service'] = get_comms_service()
-            except Exception as e:
-                logger.warning(f"CommsService pre-register failed: {e}")
-            try:
-                from FMOFP.Systems.missionPlanning.missionService import get_mission_service
-                self.components['mission_service'] = get_mission_service()
-            except Exception as e:
-                logger.warning(f"MissionService pre-register failed: {e}")
         except Exception as e:
             logger.error(f"Error initializing components: {str(e)}")
             raise
@@ -772,6 +750,54 @@ class SystemManager:
 
             # ── end Phase 2 ───────────────────────────────────────────────────
 
+            # ── Phase 3: new systems ──────────────────────────────────────────
+
+            # Defensive Systems (RWR, countermeasures, EW)
+            try:
+                logger.info("Starting Defensive Service")
+                from FMOFP.Systems.defensiveSys.defensiveService import get_defensive_service
+                dfs = get_defensive_service()
+                dfs.start()
+                self.components['defensive_service'] = dfs
+                logger.info("Defensive Service started")
+            except Exception as e:
+                logger.error(f"DefensiveService startup failed (non-fatal): {e}")
+
+            # Flight Surfaces
+            try:
+                logger.info("Starting Flight Surface Service")
+                from FMOFP.Systems.flightSurfaces.flightSurfaceService import get_flight_surface_service
+                fss = get_flight_surface_service()
+                fss.start()
+                self.components['flight_surface_service'] = fss
+                logger.info("Flight Surface Service started")
+            except Exception as e:
+                logger.error(f"FlightSurfaceService startup failed (non-fatal): {e}")
+
+            # GCAS
+            try:
+                logger.info("Starting GCAS")
+                from FMOFP.Systems.flightControlSys.groundCollisionAvoidanceSys.groundCollisionAvoidanceSys import get_gcas
+                gcas = get_gcas()
+                gcas.start()
+                self.components['gcas'] = gcas
+                logger.info("GCAS started")
+            except Exception as e:
+                logger.error(f"GCAS startup failed (non-fatal): {e}")
+
+            # Performance Monitor
+            try:
+                logger.info("Starting Performance Monitor")
+                from FMOFP.Systems.flightControlSys.performaneMonitoring.performaneMonitoring import get_performance_monitor
+                perf = get_performance_monitor()
+                perf.start()
+                self.components['performance_monitor'] = perf
+                logger.info("Performance Monitor started")
+            except Exception as e:
+                logger.error(f"PerformanceMonitor startup failed (non-fatal): {e}")
+
+            # ── end Phase 3 ───────────────────────────────────────────────────
+
             # Start display management system
             logger.info("Starting display management system")
             if self.display_manager:
@@ -911,6 +937,18 @@ class SystemManager:
                     except Exception as e:
                         logger.warning(f"Error stopping {name}: {e}")
             # ── end Phase 2 stops ─────────────────────────────────────────────
+
+            # ── Phase 3 subsystem stops ───────────────────────────────────────
+            for name in ('defensive_service', 'flight_surface_service',
+                         'gcas', 'performance_monitor'):
+                comp = self.components.get(name)
+                if comp and hasattr(comp, 'stop'):
+                    try:
+                        logger.info(f"Stopping {name}")
+                        comp.stop()
+                    except Exception as e:
+                        logger.warning(f"Error stopping {name}: {e}")
+            # ── end Phase 3 stops ─────────────────────────────────────────────
 
             # Stop display response service
             display_response_service = self.components.get('display_response_service')
