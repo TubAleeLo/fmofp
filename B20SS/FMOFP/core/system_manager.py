@@ -25,6 +25,8 @@ from FMOFP.local_messaging.routing.handlers.sync_handler.AsyncMessageHandler imp
 from FMOFP.local_messaging.routing.handlers.system_message_handlers.RadarMessageHandler import get_radar_message_handler
 from FMOFP.local_messaging.routing.handlers.system_message_handlers.DisplayMessageHandler import get_display_message_handler
 from FMOFP.local_messaging.routing.handlers.system_message_handlers.FMSMessageHandler import get_fms_message_handler
+from FMOFP.local_messaging.routing.handlers.system_message_handlers.CommsMessageHandler import get_comms_message_handler
+from FMOFP.local_messaging.routing.handlers.system_message_handlers.MissionMessageHandler import get_mission_message_handler
 from FMOFP.Interfaces.userInterface.displays.display_nodes.display_tree_manager import get_display_tree_manager
 from FMOFP.core.event_driven_communication import get_event_bus
 from FMOFP.MIL_STD_1553B.Messaging import get_schedule_message
@@ -121,6 +123,12 @@ class SystemManager:
             logger.info("Initializing FMS messaging components")
             self.components['fms_message_handler'] = get_fms_message_handler()
             self.components['fms_messenger'] = get_fms_messenger()
+
+            # Initialize Comms and Mission message handlers
+            logger.info("Initializing Comms message handler")
+            self.components['comms_message_handler'] = get_comms_message_handler()
+            logger.info("Initializing Mission message handler")
+            self.components['mission_message_handler'] = get_mission_message_handler()
 
             # Initialize radar management
             logger.info("Initializing radar management")
@@ -520,6 +528,20 @@ class SystemManager:
         fms_message_handler.set_async_handler(async_handler)
         await self.start_async_component("FMSMessageHandler", fms_message_handler)
 
+        # 2. Start Comms message handler
+        logger.info("Starting Comms message handler")
+        comms_message_handler = self.components.get('comms_message_handler')
+        if comms_message_handler:
+            comms_message_handler.start()
+            logger.info("Comms message handler started")
+
+        # 3. Start Mission message handler
+        logger.info("Starting Mission message handler")
+        mission_message_handler = self.components.get('mission_message_handler')
+        if mission_message_handler:
+            mission_message_handler.start()
+            logger.info("Mission message handler started")
+
         # 2. Start FMS messenger
         logger.info("Starting FMS messenger")
         fms_messenger = self.components['fms_messenger']
@@ -734,6 +756,13 @@ class SystemManager:
                 comms.start()
                 self.components['comms_service'] = comms
                 logger.info("Communications Service started")
+                # Wire into routing service so route_comms_message can reach it
+                try:
+                    from FMOFP.local_messaging.routing.MessageRoutingService import get_message_routing_service
+                    get_message_routing_service().set_comms_service(comms)
+                    logger.info("CommsService registered with MessageRoutingService")
+                except Exception as e:
+                    logger.warning(f"CommsService routing registration failed (non-fatal): {e}")
             except Exception as e:
                 logger.error(f"CommsService startup failed (non-fatal): {e}")
 
@@ -745,6 +774,13 @@ class SystemManager:
                 mission.start()
                 self.components['mission_service'] = mission
                 logger.info("Mission Planning Service started")
+                # Wire into routing service so route_mission_message can reach it
+                try:
+                    from FMOFP.local_messaging.routing.MessageRoutingService import get_message_routing_service
+                    get_message_routing_service().set_mission_service(mission)
+                    logger.info("MissionService registered with MessageRoutingService")
+                except Exception as e:
+                    logger.warning(f"MissionService routing registration failed (non-fatal): {e}")
             except Exception as e:
                 logger.error(f"MissionService startup failed (non-fatal): {e}")
 

@@ -14,6 +14,16 @@ _ROOT = os.path.dirname(_HERE)                               # …/B20SS
 for _p in (_ROOT, _HERE):
     if _p not in sys.path:
         sys.path.insert(0, _p)
+
+# ── Working-directory bootstrap ───────────────────────────────────────────────
+# All relative config paths in this codebase (e.g. 'FMOFP/dbConfig.xml',
+# 'FMOFP/local_messaging/...') are written relative to B20SS/.
+# Normalise CWD to B20SS/ regardless of where the user launched from,
+# so those paths resolve correctly whether SystemStart.py is run as:
+#   cd B20SS      && py FMOFP/SystemStart.py   (CWD already correct)
+#   cd B20SS/FMOFP && py SystemStart.py        (CWD was wrong — fixed here)
+if os.path.abspath(os.getcwd()) != os.path.abspath(_ROOT):
+    os.chdir(_ROOT)
 # ─────────────────────────────────────────────────────────────────────────────
 import Utils.common.fetching as fetching
 from FMOFP.Utils.logger.sys_logger import get_logger
