@@ -116,6 +116,17 @@ class RadarDisplayDataCoordinator:
         if data_type not in self._data_store:
             logger.info(f"[RADAR_DATA_COORD] Creating new storage for {data_type}")
             self._data_store[data_type] = {'current': [], 'backup': [], 'ttl': 30.0}
+            # Initialise per-type logging collections for new data types
+            self._storage_log_collections[data_type] = {
+                'last_log_time': 0, 'log_interval': 10.0,
+                'stored_items': [], 'total_stored': 0
+            }
+            self._retrieval_stats[data_type] = {
+                'last_log_time': 0, 'log_interval': 10.0,
+                'retrieve_count': 0, 'empty_count': 0,
+                'total_items_returned': 0, 'backup_used_count': 0,
+                'sample_item': None
+            }
 
 
         # We have data and the request_id is valid, add id to each item and store
@@ -131,7 +142,9 @@ class RadarDisplayDataCoordinator:
             elif hasattr(item, '__dict__'):
                 setattr(item, 'id', f"{request_id}_{i}")
                 logger.warning(f"[RADAR_DATA_COORD] Added ID to {data_type} object #{i}: {getattr(item, 'id')}")
-            # Note: cannot add attribute to simple types like int, float, etc.
+
+
+    # Note: cannot add attribute to simple types like int, float, etc.
 
         # PRE-VALIDATION: Check for ID field before processing
         missing_id_count = 0
@@ -165,15 +178,15 @@ class RadarDisplayDataCoordinator:
             raise ValueError(f"[RADAR_DATA_COORD] {missing_id_count} items missing ID, {invalid_id_count} with 'unknown' ID")
 
         # Process and store each data item - add extra debugging for problematic data types
-        logger.info(f"[RADAR_DATA_COORD] Processing {len(data_items)} items for data_type: {data_type}")
+        logger.warning(f"[RADAR_DATA_COORD] Processing {len(data_items)} items for data_type: {data_type}")
         processed_items = self._process_items(data_items, data_type)
-        logger.info(f"[RADAR_DATA_COORD] Processed {len(processed_items)} items for {data_type}")
+        logger.warning(f"[RADAR_DATA_COORD] Processed {len(processed_items)} items for {data_type}")
 
         # Update both current and backup stores
         try:
             self._data_store[data_type]['current'] = processed_items
             self._data_store[data_type]['backup'] = copy.deepcopy(processed_items)
-            logger.info(f"[RADAR_DATA_COORD] Successfully stored {len(processed_items)} {data_type} items in both stores")
+            logger.warning(f"[RADAR_DATA_COORD] Successfully stored {len(processed_items)} {data_type} items in both stores")
         except Exception as e:
             logger.error(f"[RADAR_DATA_COORD] Error storing {data_type} data: {str(e)}")
             logger.error(traceback.format_exc())
@@ -212,13 +225,13 @@ class RadarDisplayDataCoordinator:
             self._storage_log_collections[data_type]['stored_items'].append(simple_item)
 
 
-        # Warn about suspicious items — _process_items already filters (0,0) and 'unknown' IDs.
-        # Raising here would crash the entire batch on a single bad item.
-        for _chk in processed_items:
-            if _chk.get('position') == (0.0, 0.0) or _chk.get('id') == 'unknown':
+        # Warn about suspicious items but do not raise — _process_items already filters
+        # (0,0) positions and 'unknown' IDs; raising here would silently drop valid batches.
+        for _chk_item in processed_items:
+            if _chk_item.get('position') == (0.0, 0.0) or _chk_item.get('id') == 'unknown':
                 logger.warning(
-                    f"[RADAR_DATA_COORD] Suspicious item after processing: "
-                    f"position={_chk.get('position')}, id={_chk.get('id')}"
+                    f"[RADAR_DATA_COORD] Suspicious item survived processing: "
+                    f"position={_chk_item.get('position')}, id={_chk_item.get('id')}"
                 )
 
         self._storage_log_collections[data_type]['total_stored'] += len(processed_items)
@@ -432,7 +445,7 @@ class RadarDisplayDataCoordinator:
         filtered_count = 0
 
         # Enhanced logging for processing operation
-        logger.info(f"[RADAR_DATA_COORD] Processing {len(items)} {data_type} items with enhanced validation")
+        logger.warning(f"[RADAR_DATA_COORD] Processing {len(items)} {data_type} items with enhanced validation")
 
         for item in items:
             # Handle binary string data specially - with improved detection
@@ -520,9 +533,9 @@ class RadarDisplayDataCoordinator:
 
             # Standard object processing for non-string items
             if not isinstance(item, dict) and hasattr(item, '__dict__'):
-                item_dict = dict(vars(item))  # copy — avoid mutating the original object
+                item_dict = dict(vars(item))  # copy to prevent upstream mutation
             else:
-                item_dict = dict(item) if isinstance(item, dict) else {}
+                item_dict = item if isinstance(item, dict) else {}
 
             # ENHANCED POSITION EXTRACTION: Multiple levels of validation
             position = None
@@ -696,10 +709,9 @@ class RadarDisplayDataCoordinator:
 
                 # Final sanity test - try to unpack the position and check for zeros
                 x, y = item_dict['position']
-                # Filter out (0.0, 0.0) positions — likely a decoding failure, not a real origin.
-                # TODO: if legitimate radar-origin data is ever needed, remove this filter.
+                # Filter out (0.0, 0.0) positions as requested
                 if x == 0.0 and y == 0.0:
-                    logger.debug(f"[RADAR_DATA_COORD] FINAL CHECK: Item {i} has (0.0, 0.0) position, filtering out")
+                    logger.warning(f"[RADAR_DATA_COORD] FINAL CHECK: Item {i} has (0.0, 0.0) position, filtering out")
                     processed_items[i] = None
                     filtered_count += 1
                     continue
@@ -713,7 +725,7 @@ class RadarDisplayDataCoordinator:
         # Remove all items marked as None (filtered out)
         processed_items = [item for item in processed_items if item is not None]
 
-        logger.info(f"[RADAR_DATA_COORD] Finished processing: {len(processed_items)} valid items retained, {filtered_count} filtered out")
+        logger.warning(f"[RADAR_DATA_COORD] Finished processing: {len(processed_items)} valid items retained, {filtered_count} filtered out")
         return processed_items
 
     def cleanup_expired(self) -> None:
@@ -758,8 +770,8 @@ class RadarDisplayDataCoordinator:
                 # Ensure item has an ID
                 item_id = item.get('id')
                 if not item_id:
-                    logger.warning("[RADAR_DATA_COORD] Skipping item with missing ID during cleanup")
-                    continue
+
+                    raise ValueError("[RADAR_DATA_COORD] Item missing ID, cannot process")
                 # Now check if we have a timestamp for this ID
                 if item_id in self._timestamps:
                     item_age = current_time - self._timestamps[item_id]
