@@ -433,6 +433,18 @@ class flightManagementSystem:
 
         return True
 
+    def update_navigation(self, latitude: float = None, longitude: float = None,
+                          altitude: float = None, heading: float = None,
+                          pitch: float = None, roll: float = None) -> None:
+        """Update navigation state from an external source (NavService / GPS-INS fusion)."""
+        with self.lock:
+            if latitude  is not None: self.navigation['latitude']  = latitude
+            if longitude is not None: self.navigation['longitude'] = longitude
+            if altitude  is not None: self.navigation['altitude']  = altitude
+            if heading   is not None: self.navigation['heading']   = heading
+            if pitch     is not None: self.attitude['pitch']       = pitch
+            if roll      is not None: self.attitude['roll']        = roll
+
     def get_flight_data(self):
         """Get current flight data"""
         with self.lock:

@@ -1,152 +1,159 @@
-import Utils.common.fetching as fetching
+"""
+Flight Control Computer (FCC)
+
+Simulates the B20SS flight control computer:
+  - Continuous flight parameter simulation (attitude, speed, heading)
+  - Derives g-force, AOA, vertical speed, flap/gear state
+  - Persists data via the current DBM API (flight_control_computer system db)
+  - Publishes data through get_data() for FMS and display consumers
+  - Singleton factory: get_flight_control_computer()
+"""
+
 import random
 import time
 import threading
-import json        # CHANGE TO XML
-from storage.DBM import DatabaseManager
-from FMOFP.MIL_STD_1553B.Messaging import ScheduleMessage
-from FMOFP.MIL_STD_1553B.mil_std_1553B  import MIL_STD_1553B_Message
+import json
+from typing import Dict, Any
+
 from FMOFP.Utils.logger.sys_logger import get_logger
 
 logger = get_logger()
 
+_flight_control_computer = None
+
+
 class FlightControlComputer:
     def __init__(self):
-        self.aircraft = 'aircraft'
-        self.db_name = "system_data.db"
-        self.key = "B20SS"
-        self.fcs_data = {}
-        self.running = threading.Event()
-        self.lock = threading.Lock()
-        self.altitude = 10000  # Default altitude in feet
-        self.speed = 500  # Default speed in knots
-        self.heading = 0  # Default heading in degrees
-        self.pitch = 0  # Default pitch in degrees
-        self.roll = 0  # Default roll in degrees
-        self.db = DatabaseManager(self.db_name, self.key)
-        self._setup_database()
-        self.thread = None
+        self._lock = threading.Lock()
+        self._running = threading.Event()
+        self._thread = None
 
-        # Initialize messaging
-        self.messaging = ScheduleMessage()
-        self.rt_address = 4  # Assign a unique RT address for the Flight Control Computer
+        # Core flight state
+        self.altitude        = 10000.0   # feet
+        self.speed           = 500.0     # knots
+        self.heading         = 0.0       # degrees
+        self.pitch           = 0.0       # degrees
+        self.roll            = 0.0       # degrees
+        self.vertical_speed  = 0.0       # feet/min
+        self.angle_of_attack = 2.0       # degrees
+        self.g_force         = 1.0
+        self.flaps           = 0         # degrees
+        self.landing_gear    = 'up'
 
-    def _setup_database(self):
+        self._fcs_data: Dict[str, Any] = {}
+
+        # DBM via current API
+        self._db = None
+        self._init_db()
+
+    # ------------------------------------------------------------------
+    def _init_db(self):
         try:
-            table_name = 'fcs_data'
-            received_from = 'flight_control_sensors'
-            information_type = 'flight_control_data'
-            field_data_dict = {'id': 'INTEGER PRIMARY KEY', 'data': 'TEXT'}
-            
-            if table_name is not None and received_from is not None and information_type is not None and field_data_dict is not None:
-                self.db.create_table(table_name, received_from, information_type, field_data_dict)
-            else:
-                logger.warning("Skipping create_table call due to None values")
+            from FMOFP.storage.DBM import DatabaseManager
+            db_manager = DatabaseManager('FMOFP/dbConfig.xml')
+            self._db = db_manager.get_system_db('flight_control_computer')
+            self._db.create_table('fcs_data', {
+                'id':        'INTEGER PRIMARY KEY AUTOINCREMENT',
+                'timestamp': 'REAL NOT NULL',
+                'data':      'TEXT NOT NULL',
+            })
+            logger.info("[FCC] Database initialised")
         except Exception as e:
-            logger.error(f"Database setup failed: {e}")
+            logger.warning(f"[FCC] DB init failed (non-fatal): {e}")
 
-    def adjust_flight_parameters(self):
-        with self.lock:
-            self.altitude += random.uniform(-50, 50)
-            self.speed += random.uniform(-5, 5)
-            self.heading += random.uniform(-1, 1)
-            self.pitch += random.uniform(-0.5, 0.5)
-            self.roll += random.uniform(-0.5, 0.5)
+    # ------------------------------------------------------------------
+    def _adjust(self):
+        """Random-walk all flight parameters within realistic envelopes."""
+        with self._lock:
+            self.altitude        += random.uniform(-50, 50)
+            self.speed           += random.uniform(-5, 5)
+            self.heading          = (self.heading + random.uniform(-1, 1)) % 360
+            self.pitch           += random.uniform(-0.5, 0.5)
+            self.roll            += random.uniform(-0.5, 0.5)
+            self.vertical_speed   = random.uniform(-500, 500)
+            self.angle_of_attack  = max(0, self.angle_of_attack + random.uniform(-0.2, 0.2))
+            self.g_force          = max(0.5, min(9.0, self.g_force + random.uniform(-0.05, 0.05)))
 
-            # Ensure values are within realistic ranges
-            self.altitude = max(0, min(60000, self.altitude))
-            self.speed = max(100, min(1000, self.speed))
-            self.heading = self.heading % 360
-            self.pitch = max(-45, min(45, self.pitch))
-            self.roll = max(-60, min(60, self.roll))
+            self.altitude         = max(0, min(60000, self.altitude))
+            self.speed            = max(100, min(1000, self.speed))
+            self.pitch            = max(-45, min(45, self.pitch))
+            self.roll             = max(-60, min(60, self.roll))
+            self.angle_of_attack  = min(25, self.angle_of_attack)
 
-    def monitor(self):
-        with self.lock:
-            self.fcs_data = {
-                'altitude': round(self.altitude, 2),
-                'speed': round(self.speed, 2),
-                'heading': round(self.heading, 2),
-                'pitch': round(self.pitch, 2),
-                'roll': round(self.roll, 2),
-                'vertical_speed': random.uniform(-500, 500),  # Vertical speed in feet per minute
-                'angle_of_attack': random.uniform(0, 15),  # Angle of attack in degrees
-                'g_force': random.uniform(0.8, 1.2),  # G-force
-                'flaps_position': random.randint(0, 30),  # Flaps position in degrees
-                'landing_gear': random.choice(['up', 'down']),  # Landing gear status
+    def _snapshot(self):
+        with self._lock:
+            self._fcs_data = {
+                'altitude':        round(self.altitude, 2),
+                'speed':           round(self.speed, 2),
+                'heading':         round(self.heading, 2),
+                'pitch':           round(self.pitch, 2),
+                'roll':            round(self.roll, 2),
+                'vertical_speed':  round(self.vertical_speed, 2),
+                'angle_of_attack': round(self.angle_of_attack, 2),
+                'g_force':         round(self.g_force, 3),
+                'flaps':           self.flaps,
+                'landing_gear':    self.landing_gear,
+                'timestamp':       time.time(),
             }
-            self.send_fcs_data(self.fcs_data)
 
-    def send_fcs_data(self, fcs_data):
-        message = MIL_STD_1553B_Message(self.rt_address, 0, fcs_data)
-        #self.messaging.send_message(message)
+    def _persist(self):
+        if self._db is None:
+            return
+        try:
+            self._db.insert_into_table('fcs_data', {
+                'timestamp': self._fcs_data['timestamp'],
+                'data':      json.dumps(self._fcs_data),
+            })
+        except Exception as e:
+            logger.debug(f"[FCC] DB insert skipped: {e}")
 
-    def update(self):
-        while not self.running.is_set():
+    def _update_loop(self):
+        logger.info("[FCC] Update loop started")
+        while not self._running.is_set():
             try:
-                self.adjust_flight_parameters()
-                self.monitor()
-                with self.lock:
-                    self.db.insert_into_table('fcs_data', {'data': json.dumps(self.fcs_data)})
+                self._adjust()
+                self._snapshot()
+                self._persist()
             except Exception as e:
-                logger.error(f"FCS monitoring failed: {e}")
+                logger.error(f"[FCC] Update error: {e}")
                 time.sleep(5)
-            else:
-                time.sleep(0.1)  # Update more frequently for flight controls
+                continue
+            time.sleep(0.1)   # 10 Hz
 
+    # ------------------------------------------------------------------ public API
     def start(self):
-        if self.thread is None or not self.thread.is_alive():
-            self.running.clear()
-            self.thread = threading.Thread(target=self.update)   # THREAD STARTED IN WRONG PLACE - SHOULD START IN system_manager.py
-            self.thread.start()
-            logger.info("Flight Control System started.")
+        if self._thread and self._thread.is_alive():
+            return
+        self._running.clear()
+        self._thread = threading.Thread(target=self._update_loop, daemon=True, name="FCC_Update")
+        self._thread.start()
+        logger.info("[FCC] Flight Control Computer started")
 
     def stop(self):
-        self.running.set()
-        if self.thread is not None:
-            self.thread.join()
-            logger.info("Flight Control System stopped.")
+        self._running.set()
+        if self._thread:
+            self._thread.join(timeout=2)
+        logger.info("[FCC] Flight Control Computer stopped")
 
-    def get_data(self):
-        with self.lock:
-            return self.fcs_data
+    def get_data(self) -> Dict[str, Any]:
+        with self._lock:
+            return dict(self._fcs_data)
 
-    def set_altitude(self, altitude):
-        with self.lock:
-            self.altitude = altitude
-            logger.info(f"Altitude set to {altitude} feet.")
+    def get_status(self) -> Dict[str, Any]:
+        return {'running': self._thread is not None and self._thread.is_alive(),
+                'healthy': True, **self.get_data()}
 
-    def set_speed(self, speed):
-        with self.lock:
-            self.speed = speed
-            logger.info(f"Speed set to {speed} knots.")
+    # Manual overrides (used by CLI / tests)
+    def set_altitude(self, v):
+        with self._lock: self.altitude = float(v)
+    def set_speed(self, v):
+        with self._lock: self.speed = float(v)
+    def set_heading(self, v):
+        with self._lock: self.heading = float(v) % 360
 
-    def set_heading(self, heading):
-        with self.lock:
-            self.heading = heading % 360
-            logger.info(f"Heading set to {self.heading} degrees.")
 
-    def receive_message(self):
-        message = self.messaging.receive_message()
-        if message:
-            self._process_received_message(message)
-
-    def _process_received_message(self, message):
-        # Extract the data from the MIL-STD-1553B_Message
-        data = message.data
-        
-        # Process the received message data
-        if 'altitude' in data:
-            self.set_altitude(data['altitude'])
-        if 'speed' in data:
-            self.set_speed(data['speed'])
-        if 'heading' in data:
-            self.set_heading(data['heading'])
-        # Handle other parameters as needed
-
-# Example usage
-if __name__ == "__main__":
-    fcs = FlightControlComputer()
-    fcs.start()
-    fcs.monitor()
-    fcs.receive_message()
-    fcs.stop()
+def get_flight_control_computer() -> FlightControlComputer:
+    global _flight_control_computer
+    if _flight_control_computer is None:
+        _flight_control_computer = FlightControlComputer()
+    return _flight_control_computer

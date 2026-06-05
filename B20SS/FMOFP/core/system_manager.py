@@ -4,7 +4,7 @@ System Manager for Flight Management Operating Flight Program
 import threading
 import time
 import traceback
-import asyncio             
+import asyncio
 import FMOFP.Utils.common.fetching as fetching
 from FMOFP.Systems.radarManagement.radarControl import get_radar_management_system
 from FMOFP.Systems.radarManagement.radar_messaging.radarMessenger import get_radar_messenger
@@ -53,13 +53,13 @@ class SystemManager:
     def get_component(self, component_name):
         """Get a component by name"""
         return self.components.get(component_name)
-        
+
     def register_component(self, component_name, component):
         """Register a component with the system manager"""
         logger.info(f"Registering component: {component_name}")
         self.components[component_name] = component
         return True
-        
+
     def register_message_handler(self, handler_name, handler_function):
         """Register a message handler function with the system manager"""
         logger.info(f"Registering message handler: {handler_name}")
@@ -68,7 +68,7 @@ class SystemManager:
 
     def initialize_components(self):
         if self._initialization_complete:
-            
+
             return
 
         logger.info("Initializing system components")
@@ -76,29 +76,29 @@ class SystemManager:
             # Initialize event bus first
             logger.info("Initializing event bus")
             self.components['event_bus'] = self.event_bus
-            
+
             # Initialize message queue manager first
             logger.info("Initializing message queue manager")
             queue_manager = get_message_queue_manager()
             self.components['message_queue_manager'] = queue_manager
-            
+
             # Initialize async message handler
             logger.info("Initializing async message handler")
             async_handler = get_Async_message_handler()
             self.components['async_message_handler'] = async_handler
-            
+
             # Initialize message routing service
             logger.info("Initializing message routing service")
             from FMOFP.local_messaging.routing.MessageRoutingService import get_message_routing_service
             routing_service = get_message_routing_service()
             self.components['message_routing_service'] = routing_service
-            
+
             # Initialize display response service
             logger.info("Initializing display response service")
             from FMOFP.local_messaging.routing.response_services.system_response_services.DisplayResponseService import get_display_response_service
             display_response_service = get_display_response_service()
             self.components['display_response_service'] = display_response_service
-            
+
             # Initialize VIL response service
             logger.info("Initializing VIL response service")
             from FMOFP.storage.DBM import DatabaseManager
@@ -107,53 +107,53 @@ class SystemManager:
             from FMOFP.local_messaging.routing.response_services.data_response_services.vil_response_service import VILResponseService
             vil_response_service = VILResponseService(radar_db)
             self.components['vil_response_service'] = vil_response_service
-            
+
             # Connect services
             routing_service.set_display_response_service(display_response_service)
             routing_service._vil_service = vil_response_service
-            
+
             # Initialize flight management and radar systems first
             logger.info("Initializing flight management system")
             flight_management = get_flightManagementSystem()
             self.components['flightManagementSystem'] = flight_management
-            
+
             # Initialize FMS messaging components
             logger.info("Initializing FMS messaging components")
             self.components['fms_message_handler'] = get_fms_message_handler()
             self.components['fms_messenger'] = get_fms_messenger()
-            
+
             # Initialize radar management
             logger.info("Initializing radar management")
             radar_management = get_radar_management_system()
             self.components['radar_management'] = radar_management
-            
+
             # Initialize radar messaging components in order
             logger.info("Initializing radar messaging components")
             self.components['radar_message_handler'] = get_radar_message_handler()
             self.components['radar_messenger'] = get_radar_messenger()
-            
+
             # Set radar response service in routing service
             routing_service.set_radar_response_service(self.components['radar_message_handler'].response_service)
-            
+
             # Initialize display components in order
             logger.info("Initializing display components")
-            
+
             # Create display tree manager first
             display_tree = get_display_tree_manager()
             self.components['display_tree_manager'] = display_tree
             logger.info("Display tree manager initialized")
-            
+
             # Create display message handler (but don't set async handler yet)
             display_handler = get_display_message_handler()
             display_handler.display_tree = display_tree  # Set tree manager reference
             self.components['display_message_handler'] = display_handler
             logger.info("Display message handler created")
-            
+
             # Create display messenger
             display_messenger = get_display_messenger()
             self.components['display_messenger'] = display_messenger
             logger.info("Display messenger created")
-            
+
             # Verify display components
             if not self.components['display_tree_manager']:
                 raise RuntimeError("Display tree manager not properly initialized")
@@ -161,9 +161,9 @@ class SystemManager:
                 raise RuntimeError("Display message handler not properly initialized")
             if not self.components['display_messenger']:
                 raise RuntimeError("Display messenger not properly initialized")
-            
+
             logger.info("All display components initialized successfully")
-            
+
             # Initialize unified routing system
             logger.info("Initializing unified routing system")
             from FMOFP.local_messaging.routing.system_integration import initialize_routing_system
@@ -171,7 +171,7 @@ class SystemManager:
             initialize_routing_system()
             unified_router = get_unified_router()
             self.components['unified_router'] = unified_router
-            
+
             # Initialize remaining components
             logger.info("Initializing remaining components")
             self.components['UserCLI_Control'] = get_user_cli()
@@ -182,6 +182,28 @@ class SystemManager:
             self.components['schedule_message'] = get_schedule_message()
             logger.info("All components initialized successfully")
             self._initialization_complete = True
+
+            # Pre-register Phase 2 singletons (they start later in start_FM_system)
+            try:
+                from FMOFP.Systems.flightControlSys.flightControlComputer.flightControlComputer import get_flight_control_computer
+                self.components['flight_control_computer'] = get_flight_control_computer()
+            except Exception as e:
+                logger.warning(f"FCC pre-register failed: {e}")
+            try:
+                from FMOFP.Systems.engineManagement.ecu.engineControlUnit import get_engine_control_unit
+                self.components['engine_control_unit'] = get_engine_control_unit()
+            except Exception as e:
+                logger.warning(f"ECU pre-register failed: {e}")
+            try:
+                from FMOFP.Systems.comms.messaging_service import get_comms_service
+                self.components['comms_service'] = get_comms_service()
+            except Exception as e:
+                logger.warning(f"CommsService pre-register failed: {e}")
+            try:
+                from FMOFP.Systems.missionPlanning.missionService import get_mission_service
+                self.components['mission_service'] = get_mission_service()
+            except Exception as e:
+                logger.warning(f"MissionService pre-register failed: {e}")
         except Exception as e:
             logger.error(f"Error initializing components: {str(e)}")
             raise
@@ -206,14 +228,14 @@ class SystemManager:
                     # Only process string keys to avoid duplicates
                     if not isinstance(display_id, str):
                         continue
-                        
+
                     # Check if container is running
                     if not display.is_running():
                         continue
-                        
+
                     # Update container
                     display.update()
-                    
+
                     # Also update the actual display inside the container if needed
                     if display_id == 'pfd' and hasattr(display, 'pfd') and display.pfd:
                         if hasattr(display.pfd, 'update'):
@@ -226,7 +248,7 @@ class SystemManager:
                             display.display.update()
                     elif display_id == 'hud' and hasattr(display, 'hud') and display.hud:
                         if hasattr(display.hud, 'update'):
-                            
+
                             display.hud.update()
                     elif display_id == 'hud' and hasattr(display, 'hud') and display.hud:
                         if hasattr(display.hud, 'update'):
@@ -236,7 +258,7 @@ class SystemManager:
 
     async def initialize_system(self):
         if self._initialization_complete:
-            
+
             return
 
         logger.info("Initializing system")
@@ -265,35 +287,35 @@ class SystemManager:
             logger.info("Starting display system")
             if not self.display_manager:
                 self.display_manager = get_display_manager()
-                
+
                 # Initialize display tree first
                 logger.info("Initializing display tree manager")
                 display_tree = self.components.get('display_tree_manager')
                 if not display_tree:
                     logger.error("Display tree manager not found in components")
                     raise RuntimeError("Display tree manager not found")
-                
+
                 # Initialize display tree
                 if not display_tree._initialized:
                     await display_tree.initialize()
                     if not display_tree._initialized:
                         raise RuntimeError("Display tree manager failed to initialize")
                     logger.info("Display tree manager initialization verified")
-                
+
                 # Initialize display manager
                 logger.info("Initializing display manager")
                 await self.display_manager.initialize()
                 if not hasattr(self.display_manager, '_init_complete') or not self.display_manager._init_complete:
                     raise RuntimeError("Display manager failed to initialize")
                 logger.info("Display manager initialization verified")
-                
+
                 # Start display manager
                 logger.info("Starting display manager")
                 await self.display_manager.start()
                 if not self.display_manager._running:
                     raise RuntimeError("Display manager failed to start")
                 logger.info("Display manager startup verified")
-                
+
                 # Connect display manager to messenger
                 logger.info("Connecting display manager to messenger")
                 display_messenger = self.components.get('display_messenger')
@@ -301,23 +323,23 @@ class SystemManager:
                     raise RuntimeError("Display messenger not found in components")
                 display_messenger.set_display_manager(self.display_manager)
                 logger.info("Display manager connected to messenger")
-                
+
                 # Verify displays are running with enhanced container verification
                 for display_id in ['pfd', 'mfd', 'radar_display', 'hud']:
                     if display_id not in self.display_manager.displays:
                         raise RuntimeError(f"Display {display_id} not found")
-                    
+
                     display_container = self.display_manager.displays[display_id]
-                    
+
                     # First check if the container is running
                     if not display_container.is_running():
                         logger.error(f"Display container {display_id} reports not running")
-                        
+
                         # Check if container is initialized
                         if hasattr(display_container, '_initialized') and not display_container._initialized:
                             logger.error(f"Display container {display_id} is not initialized")
                             raise RuntimeError(f"Display container {display_id} is not initialized")
-                        
+
                         # Check if actual display exists in container
                         if display_id == 'pfd' and (not hasattr(display_container, 'pfd') or not display_container.pfd):
                             logger.error(f"PFD container has no display instance")
@@ -331,10 +353,10 @@ class SystemManager:
                         elif display_id == 'hud' and (not hasattr(display_container, 'hud') or not display_container.hud):
                             logger.error(f"HUD container has no display instance")
                             raise RuntimeError(f"HUD container has no display instance")
-                        
+
                         # If we get here, the container exists but is not running
                         raise RuntimeError(f"Display {display_id} not running")
-                    
+
                     # Additional verification for actual display inside container
                     if display_id == 'pfd':
                         if not hasattr(display_container, 'pfd') or not display_container.pfd:
@@ -364,7 +386,7 @@ class SystemManager:
                         if hasattr(display_container.hud, 'is_running') and not display_container.hud.is_running():
                             logger.error(f"HUD display inside container is not running")
                             raise RuntimeError(f"HUD display inside container is not running")
-                    
+
                     logger.info(f"Display {display_id} running verified (both container and display)")
 
             self.state_manager.set_state(SystemState.INITIALIZED)
@@ -398,60 +420,60 @@ class SystemManager:
                 else:
                     logger.warning(f"Failed to start thread '{thread_name}'")
             else:
-                
+
                 pass
 
     async def start_async_components(self):
         """Start all async components."""
         logger.info("Starting async components")
-        
+
         # Start event bus first
         logger.info("Starting event bus")
         self.start_thread_if_not_running("Event_Bus", self.event_bus._process_events)
         self.event_bus.start()
-        
+
         # Start message queue manager
         logger.info("Starting message queue manager")
         queue_manager = self.components['message_queue_manager']
         queue_manager.start()
         logger.info(f"MessageQueueManager started with instance ID: {id(queue_manager)}")
-        
+
         # Log RT_Listener instance ID for comparison
         from FMOFP.MIL_STD_1553B.Remote_Terminal.RT_connect.RT_socket import get_rt_listener
         rt_listener = get_rt_listener()
         logger.info(f"System Manager using RT_Listener instance: {id(rt_listener)}")
-        
-        # Start async message handler 
+
+        # Start async message handler
         logger.info("Starting async message handler")
         async_handler = self.components['async_message_handler']
-        
+
         singleton_handler = get_Async_message_handler()
-        
+
         # If we have different instances, use the singleton
         if id(async_handler) != id(singleton_handler):
             logger.warning(f"AsyncMessageHandler instance mismatch: {id(async_handler)} != {id(singleton_handler)}")
             logger.warning("Using singleton instance instead")
             async_handler = singleton_handler
             self.components['async_message_handler'] = singleton_handler
-        
+
         # Check if already started
         if not async_handler.started or not async_handler.running:
             await self.start_async_component("AsyncMessageHandler", async_handler)
-        
-        
+
+
         # Wait for async handler to be fully started and in RUNNING state
         if not async_handler.started or not async_handler.running or (hasattr(async_handler, '_state') and async_handler._state not in [2, 4]):  # 2=RUNNING, 4=DEGRADED
             logger.warning("Waiting for AsyncMessageHandler to start...")
             for _ in range(30):  # Try for 3 seconds
                 if async_handler.started and async_handler.running and hasattr(async_handler, '_state') and async_handler._state in [2, 4]:
-                    logger.info(f"AsyncMessageHandler is now running in state: {HandlerState.to_string(async_handler._state)}")  
+                    logger.info(f"AsyncMessageHandler is now running in state: {HandlerState.to_string(async_handler._state)}")
                     break
                 await asyncio.sleep(0.1)
             else:
                 logger.error("AsyncMessageHandler failed to start within timeout")
                 # Force restart with more aggressive approach
                 logger.warning("Attempting to restart AsyncMessageHandler with aggressive approach")
-                
+
                 # First stop completely
                 try:
                     async_handler.stop()
@@ -462,17 +484,17 @@ class SystemManager:
                         await asyncio.sleep(0.1)
                 except Exception as e:
                     logger.error(f"Error stopping AsyncMessageHandler: {e}")
-                
+
                 # Then start fresh
                 try:
                     # Reset state to STOPPED
                     if hasattr(async_handler, '_set_state'):
                         async_handler._set_state(0)  # 0 = STOPPED
-                    
+
                     # Start with fresh workers
                     async_handler.workers = []
                     async_handler._worker_ready_events = []
-                    
+
                     # Start with fresh executor
                     if hasattr(async_handler, 'executor') and async_handler.executor:
                         try:
@@ -480,10 +502,10 @@ class SystemManager:
                         except Exception:
                             pass
                     async_handler.executor = None
-                    
+
                     # Now start
                     await self.start_async_component("AsyncMessageHandler", async_handler)
-                    
+
                     # Wait for start to complete
                     for _ in range(30):  # Wait up to 3 seconds
                         if async_handler.started and async_handler.running and hasattr(async_handler, '_state') and async_handler._state in [2, 4]:
@@ -498,7 +520,7 @@ class SystemManager:
 
         # Initialize database manager after async handler is running
         logger.info("Initializing database manager")
-        
+
         def _initialize_database_manager():
             from FMOFP.storage.DBM import DatabaseManager
             dbm = DatabaseManager('FMOFP/dbConfig.xml')
@@ -507,63 +529,63 @@ class SystemManager:
             async_handler._db_initialized.set()  # Signal database is ready
             logger.info("Database initialization complete")
             return dbm
-            
+
         # Track this operation to ensure it only happens once
         track_operation('db_init', 'system_manager', _initialize_database_manager)
 
         # Start FMS messaging components in order
         logger.info("Starting FMS messaging components")
-        
+
         # 1. Start FMS message handler
         logger.info("Starting FMS message handler")
         fms_message_handler = self.components['fms_message_handler']
         fms_message_handler.set_async_handler(async_handler)
         await self.start_async_component("FMSMessageHandler", fms_message_handler)
-        
+
         # 2. Start FMS messenger
         logger.info("Starting FMS messenger")
         fms_messenger = self.components['fms_messenger']
         await self.start_async_component("FMSMessenger", fms_messenger)
-        
+
         # Start FMS system
         logger.info("Starting FMS system")
         flight_management = self.components['flightManagementSystem']
         flight_management.set_messenger(fms_messenger)
         await self.start_async_component("flightManagementSystem", flight_management)
-        
+
         # Start radar messaging components in order
         logger.info("Starting radar messaging components")
-        
+
         # 1. Start radar message handler
         logger.info("Starting radar message handler")
         radar_message_handler = self.components['radar_message_handler']
         radar_message_handler.set_async_handler(async_handler)
         await self.start_async_component("RadarMessageHandler", radar_message_handler)
-        
+
         # 2. Start radar messenger
         # started by radar control
-        
+
         # Start display messaging components in order
         logger.info("Starting display messaging components")
-        
+
         # 1. Start display message handler
         logger.info("Starting display message handler")
         display_message_handler = self.components['display_message_handler']
-        
+
         # Get interface display message handler
         from FMOFP.Interfaces.userInterface.messaging.interface_display_message_handler import get_interface_display_message_handler  # TODO: Interface handler should be started in displays somewhere
         interface_handler = get_interface_display_message_handler()
-        
+
         # Set async handler on the main display handler only
         logger.info("Setting async handler on display message handler")
         try:
-            # Only set async_handler on the main display handler 
+            # Only set async_handler on the main display handler
             display_message_handler.set_async_handler(async_handler)
             logger.info("Successfully set async_handler on display message handler")
         except Exception as e:
             logger.error(f"Error setting async_handler on display handler: {e}")
             raise RuntimeError(f"Failed to set async handler: {e}")
-        
+
         # Start interface handler first
         logger.info("Starting interface display message handler")
         await interface_handler.start()
@@ -571,7 +593,7 @@ class SystemManager:
             logger.error("Interface display message handler failed to start")
             raise RuntimeError("Interface display message handler failed to start")
         logger.info("Interface display message handler running")
-        
+
         # Now start the regular display message handler
         logger.info("Starting main display message handler")
         await self.start_async_component("DisplayMessageHandler", display_message_handler)
@@ -579,11 +601,11 @@ class SystemManager:
             logger.error("DisplayMessageHandler failed to start")
             raise RuntimeError("DisplayMessageHandler failed to start")
         logger.info("Display message handler running")
-        
+
         # 2. Start display messenger
         logger.info("Starting display messenger")
         await self.start_async_component("DisplayMessenger", self.components['display_messenger'])
-        
+
         # Start unified router
         logger.info("Starting unified router")
         unified_router = self.components.get('unified_router')
@@ -600,17 +622,17 @@ class SystemManager:
                         logger.error(f"Error in unified router thread: {e}")
                         break
                 logger.info("Unified router thread stopped")
-            
+
             # Start unified router thread with the wrapper function
             self.start_thread_if_not_running("UnifiedRouter", unified_router_thread)
             logger.info("Unified router started")
         else:
             logger.warning("Unified router component not found")
-            
+
         # Start remaining components
         logger.info("Starting remaining components")
         for component_name, component in self.components.items():
-            if component_name not in ['event_bus', 'async_message_handler', 
+            if component_name not in ['event_bus', 'async_message_handler',
                                     'radar_message_handler', 'radar_messenger',
                                     'display_message_handler', 'display_messenger',
                                     'unified_router']:
@@ -621,7 +643,7 @@ class SystemManager:
                         await self.start_async_component(component_name, component)
                     else:
                         self.start_thread_if_not_running(component_name, component.start)
-        
+
         logger.info("All async components started successfully")
         return True
 
@@ -644,7 +666,7 @@ class SystemManager:
 
             # Initialize system using create_task
             init_task = loop.create_task(self.initialize_system())
-            
+
             # Start the main loop
             self.start_thread_if_not_running("Main_Loop", self.main_loop)
 
@@ -652,14 +674,14 @@ class SystemManager:
             self.logger.info("Starting BC threads...")
             self.listenerBC = get_Bus_Controller()
             self.start_thread_if_not_running("BC Listener", self.listenerBC.start_listener)
-            
+
             self.logger.info("Starting RT threads...")
             listenerRT = Remote_Terminal()
             self.start_thread_if_not_running("RT Listener", listenerRT.start_listener)
 
             # Start User CLI threads
             for component_name, component in self.components.items():
-                if component_name == 'UserCLI_Control':                
+                if component_name == 'UserCLI_Control':
                     self.start_thread_if_not_running(f"{component_name}", component.commandLineThreadControl)
                 elif component_name == 'UserCLI_Input':
                     self.start_thread_if_not_running(f"{component_name}", component.get_commands)
@@ -677,34 +699,93 @@ class SystemManager:
             logger.info("Starting flight management system")
             flight_management = self.components['flightManagementSystem']
             flight_management.start()
-            
+
             logger.info("Starting radar management system")
             radar_management = self.components['radar_management']
             radar_management.start()
-            
+
             logger.info("Adding RadarMain thread")
             thread_manager.add_thread(name="RadarMain", target=radar_management._update_loop)
             logger.info("Starting RadarMain thread")
-            self.start_thread_if_not_running("RadarMain", radar_management._update_loop)            
-            
+            self.start_thread_if_not_running("RadarMain", radar_management._update_loop)
+
             logger.info("Adding RadarManagement thread")
             thread_manager.add_thread(name="RadarManagement", target=radar_management.update)
             self.start_thread_if_not_running("RadarManagement", radar_management.update)
-            
+
+            # ── Phase 2: aircraft subsystems ──────────────────────────────────
+
+            # Flight Control Computer
+            try:
+                logger.info("Starting Flight Control Computer")
+                from FMOFP.Systems.flightControlSys.flightControlComputer.flightControlComputer import get_flight_control_computer
+                fcc = get_flight_control_computer()
+                fcc.start()
+                self.components['flight_control_computer'] = fcc
+                logger.info("Flight Control Computer started")
+            except Exception as e:
+                logger.error(f"FCC startup failed (non-fatal): {e}")
+
+            # Navigation Service (GPS + INS + fusion)
+            try:
+                logger.info("Starting Navigation Service")
+                from FMOFP.Systems.nav.navService import get_nav_service
+                nav_svc = get_nav_service()
+                nav_svc.start()
+                self.components['nav_service'] = nav_svc
+                logger.info("Navigation Service started")
+            except Exception as e:
+                logger.error(f"NavService startup failed (non-fatal): {e}")
+
+            # Engine Control Unit
+            try:
+                logger.info("Starting Engine Control Unit")
+                from FMOFP.Systems.engineManagement.ecu.engineControlUnit import get_engine_control_unit
+                ecu = get_engine_control_unit()
+                ecu.start()
+                self.components['engine_control_unit'] = ecu
+                logger.info("Engine Control Unit started")
+            except Exception as e:
+                logger.error(f"ECU startup failed (non-fatal): {e}")
+
+            # Communications Service
+            try:
+                logger.info("Starting Communications Service")
+                from FMOFP.Systems.comms.messaging_service import get_comms_service
+                comms = get_comms_service()
+                comms.start()
+                self.components['comms_service'] = comms
+                logger.info("Communications Service started")
+            except Exception as e:
+                logger.error(f"CommsService startup failed (non-fatal): {e}")
+
+            # Mission Planning Service
+            try:
+                logger.info("Starting Mission Planning Service")
+                from FMOFP.Systems.missionPlanning.missionService import get_mission_service
+                mission = get_mission_service()
+                mission.start()
+                self.components['mission_service'] = mission
+                logger.info("Mission Planning Service started")
+            except Exception as e:
+                logger.error(f"MissionService startup failed (non-fatal): {e}")
+
+            # ── end Phase 2 ───────────────────────────────────────────────────
+
             # Start display management system
             logger.info("Starting display management system")
             if self.display_manager:
                 logger.info("Display system already running via Qt timer")
-            
+
             # Start the health monitor
             self.start_thread_if_not_running("HealthMonitor", self.health_monitor)
-            
+
             # Start remote systems
             self.systems_startup.start()
 
             self.state_manager.set_state(SystemState.RUNNING)
             logger.info("All system components started")
-            
+
             active_threads = thread_manager.get_active_threads()
             logger.debug(f"Active threads: {active_threads}")
 
@@ -761,13 +842,13 @@ class SystemManager:
     def stop(self):
         logger.info(f"Stopping Flight Management Operating Flight Program. Thread ID: {threading.get_ident()}")
         self.running = False
-        
+
         # Stop display timer
         if self.display_timer and self.display_timer.isActive():
             self.display_timer.stop()
-        
+
         self.stop_system()
-        
+
         logger.info(f"Flight Management Operating Flight Program stopped. Thread ID: {threading.get_ident()}")
 
     def stop_system(self):
@@ -788,7 +869,7 @@ class SystemManager:
                     self.components['fms_messenger'].stop()
                 if 'fms_message_handler' in self.components:
                     self.components['fms_message_handler'].stop()
-                    
+
             # Stop radar components
             radar_management = self.components.get('radar_management')
             if radar_management:
@@ -819,6 +900,18 @@ class SystemManager:
                 if 'display_message_handler' in self.components:
                     self.components['display_message_handler'].stop()
 
+            # ── Phase 2 subsystem stops ───────────────────────────────────────
+            for name in ('flight_control_computer', 'engine_control_unit',
+                         'nav_service', 'comms_service', 'mission_service'):
+                comp = self.components.get(name)
+                if comp and hasattr(comp, 'stop'):
+                    try:
+                        logger.info(f"Stopping {name}")
+                        comp.stop()
+                    except Exception as e:
+                        logger.warning(f"Error stopping {name}: {e}")
+            # ── end Phase 2 stops ─────────────────────────────────────────────
+
             # Stop display response service
             display_response_service = self.components.get('display_response_service')
             if display_response_service:
@@ -829,7 +922,7 @@ class SystemManager:
                         stop_task = loop.create_task(display_response_service.stop())
                 else:
                     display_response_service.stop()
-                    
+
             # Stop VIL response service
             vil_response_service = self.components.get('vil_response_service')
             if vil_response_service:
@@ -868,7 +961,7 @@ class SystemManager:
             if queue_manager:
                 logger.info("Stopping message queue manager")
                 queue_manager.stop()
-                
+
             # Stop event bus last
             event_bus = self.components.get('event_bus')
             if event_bus:
@@ -892,7 +985,7 @@ class SystemManager:
 
             # Clean up any remaining threads
             thread_manager.stop_all_threads()
-            
+
             self.state_manager.set_state(SystemState.SHUTDOWN)
             logger.info("All system components stopped")
             self.shutdown_event.set()
@@ -914,16 +1007,16 @@ class SystemManager:
     def is_system_ready(self):
         # Check if system state is running or normal
         state_check = self.state_manager.get_state() in [SystemState.RUNNING, SystemState.NORMAL]
-        
+
         # Check if user_cli component exists and is ready
         user_cli = self.get_component('user_cli')
         cli_check = user_cli is not None and hasattr(user_cli, 'is_cli_ready') and user_cli.is_cli_ready()
-        
+
         # If user_cli doesn't exist, only check system state
         if user_cli is None:
             logger.warning("user_cli component not found, checking only system state")
             return state_check
-        
+
         # Return combined check result
         return state_check and cli_check
 

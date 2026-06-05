@@ -1,135 +1,143 @@
-import Utils.common.fetching as fetching
+"""
+Engine Control Unit (ECU)
+
+Simulates a turbofan engine for the B20SS:
+  - Thrust, N1/N2 RPM, EGT, fuel flow, oil pressure/temp, vibration
+  - Persists via current DBM API (flight_control_computer db)
+  - Publishes get_data() for EICAS and FMS consumers
+  - Singleton: get_engine_control_unit()
+"""
+
 import random
+import math
 import time
 import threading
-import json              # CHANGE TO XML
-from storage.DBM import DatabaseManager
-from FMOFP.MIL_STD_1553B.Messaging import send1553Msg
-from FMOFP.MIL_STD_1553B.mil_std_1553B  import MIL_STD_1553B_Message
+import json
+from typing import Dict, Any
+
 from FMOFP.Utils.logger.sys_logger import get_logger
 
 logger = get_logger()
 
+_ecu_instance = None
+
+
 class EngineControlUnit:
     def __init__(self):
-        self.aircraft = 'aircraft'
-        self.db_name = "system_data.db"
-        self.key = "B20SS"
-        self.ecu_data = {}
-        self.running = threading.Event()
-        self.lock = threading.Lock()
-        self.thrust = 0  # Thrust in percentage (0-100)
-        self.fuel_flow = 0  # Fuel flow in kg/h
-        self.engine_temp = 20  # Engine temperature in Celsius
-        self.engine_pressure = 1013  # Engine pressure in hPa
-        self.db = DatabaseManager(self.db_name, self.key)
-        self._setup_database()
-        self.thread = None
+        self._lock    = threading.Lock()
+        self._running = threading.Event()
+        self._thread  = None
 
-        # Initialize messaging
-        self.messaging = send1553Msg()
-        self.rt_address = 2  # Assign a unique RT address for the Engine Control Unit
+        # Engine state
+        self.thrust_pct     = 70.0    # 0-100 %
+        self.n1_pct         = 78.5    # fan speed %
+        self.n2_pct         = 84.2    # core speed %
+        self.egt_c          = 665.0   # exhaust gas temp °C
+        self.ff_kgh         = 2400.0  # fuel flow kg/h
+        self.oil_psi        = 60.0
+        self.oil_temp_c     = 92.0
+        self.vibration      = 0.3
+        self.compressor_eff = 88.0    # %
 
-    def _setup_database(self):
+        self._ecu_data: Dict[str, Any] = {}
+        self._db = None
+        self._init_db()
+
+    def _init_db(self):
         try:
-            table_name = 'ecu_data'
-            received_from = 'engine_sensors'
-            information_type = 'engine_control_data'
-            field_data_dict = {'id': 'INTEGER PRIMARY KEY', 'data': 'TEXT'}
-            
-            if table_name is not None and received_from is not None and information_type is not None and field_data_dict is not None:
-                self.db.create_table(table_name, received_from, information_type, field_data_dict)
-            else:
-                logger.warning("Skipping create_table call due to None values")
+            from FMOFP.storage.DBM import DatabaseManager
+            db_manager = DatabaseManager('FMOFP/dbConfig.xml')
+            self._db = db_manager.get_system_db('flight_control_computer')
+            self._db.create_table('ecu_data', {
+                'id':        'INTEGER PRIMARY KEY AUTOINCREMENT',
+                'timestamp': 'REAL NOT NULL',
+                'data':      'TEXT NOT NULL',
+            })
+            logger.info("[ECU] Database initialised")
         except Exception as e:
-            logger.error(f"Database setup failed: {e}")
+            logger.warning(f"[ECU] DB init failed (non-fatal): {e}")
 
-    def adjust_engine_parameters(self):
-        with self.lock:
-            self.thrust += random.uniform(-1, 1)
-            self.fuel_flow = self.thrust * 50  # Simple linear relationship
-            self.engine_temp += random.uniform(-0.5, 0.5)
-            self.engine_pressure += random.uniform(-1, 1)
+    def _adjust(self):
+        t = time.time()
+        with self._lock:
+            self.thrust_pct     = max(0, min(100, self.thrust_pct + random.uniform(-0.5, 0.5)))
+            self.n1_pct         = 0.80 * self.thrust_pct + 18 + random.gauss(0, 0.1)
+            self.n2_pct         = 0.75 * self.thrust_pct + 22 + random.gauss(0, 0.1)
+            self.egt_c          = 350 + self.thrust_pct * 4.5 + random.gauss(0, 1)
+            self.ff_kgh         = self.thrust_pct * 42 + random.gauss(0, 5)
+            self.oil_psi        = 60 + 4 * math.sin(t * 0.1) + random.gauss(0, 0.2)
+            self.oil_temp_c     = 92 + 8 * math.sin(t * 0.05 + 1) + random.gauss(0, 0.1)
+            self.vibration      = 0.2 + 0.15 * abs(math.sin(t * 0.3)) + random.gauss(0, 0.01)
+            self.compressor_eff = max(75, min(98, self.compressor_eff + random.uniform(-0.1, 0.1)))
 
-            # Ensure values are within realistic ranges
-            self.thrust = max(0, min(100, self.thrust))
-            self.fuel_flow = max(0, self.fuel_flow)
-            self.engine_temp = max(0, min(1000, self.engine_temp))
-            self.engine_pressure = max(900, min(1100, self.engine_pressure))
-
-    def monitor(self):
-        with self.lock:
-            self.ecu_data = {
-                'thrust': round(self.thrust, 2),
-                'fuel_flow': round(self.fuel_flow, 2),
-                'engine_temp': round(self.engine_temp, 2),
-                'engine_pressure': round(self.engine_pressure, 2),
-                'rpm': int(self.thrust * 100),  # RPM increases with thrust
-                'exhaust_gas_temp': round(self.engine_temp * 1.5, 2),  # EGT is typically higher than engine temp
-                'oil_pressure': random.uniform(30, 70),  # Oil pressure in PSI
-                'vibration': random.uniform(0, 5),  # Engine vibration level
-                'compressor_efficiency': random.uniform(80, 95),  # Compressor efficiency in percentage
+    def _snapshot(self):
+        with self._lock:
+            self._ecu_data = {
+                'thrust_pct':     round(self.thrust_pct, 2),
+                'n1_pct':         round(self.n1_pct, 2),
+                'n2_pct':         round(self.n2_pct, 2),
+                'egt_c':          round(self.egt_c, 1),
+                'ff_kgh':         round(self.ff_kgh, 1),
+                'oil_psi':        round(self.oil_psi, 2),
+                'oil_temp_c':     round(self.oil_temp_c, 2),
+                'vibration':      round(self.vibration, 3),
+                'compressor_eff': round(self.compressor_eff, 2),
+                'timestamp':      time.time(),
             }
-            self.send_ecu_data(self.ecu_data)
 
-    def send_ecu_data(self, ecu_data):
-        message = MIL_STD_1553B_Message(self.rt_address, 0, ecu_data)
-        self.messaging.send_message(message)
+    def _persist(self):
+        if self._db is None:
+            return
+        try:
+            self._db.insert_into_table('ecu_data', {
+                'timestamp': self._ecu_data['timestamp'],
+                'data':      json.dumps(self._ecu_data),
+            })
+        except Exception as e:
+            logger.debug(f"[ECU] DB insert skipped: {e}")
 
-    def update(self):
-        while not self.running.is_set():
+    def _update_loop(self):
+        logger.info("[ECU] Update loop started")
+        while not self._running.is_set():
             try:
-                self.adjust_engine_parameters()
-                self.monitor()
-                with self.lock:
-                    self.db.insert_into_table('ecu_data', {'data': json.dumps(self.ecu_data)})
+                self._adjust()
+                self._snapshot()
+                self._persist()
             except Exception as e:
-                logger.error(f"ECU monitoring failed: {e}")
+                logger.error(f"[ECU] Update error: {e}")
                 time.sleep(5)
-            else:
-                time.sleep(0.5)  # Update every half second for responsive engine control
+                continue
+            time.sleep(0.5)   # 2 Hz
 
     def start(self):
-        if self.thread is None or not self.thread.is_alive():
-            self.running.clear()
-            self.thread = threading.Thread(target=self.update)   # THREAD STARTED IN WRONG PLACE - SHOULD START IN system_manager.py
-            self.thread.start()
-            logger.info("Engine Control Unit started.")
+        if self._thread and self._thread.is_alive():
+            return
+        self._running.clear()
+        self._thread = threading.Thread(target=self._update_loop, daemon=True, name="ECU_Update")
+        self._thread.start()
+        logger.info("[ECU] Engine Control Unit started")
 
     def stop(self):
-        self.running.set()
-        if self.thread is not None:
-            self.thread.join()
-            logger.info("Engine Control Unit stopped.")
+        self._running.set()
+        if self._thread:
+            self._thread.join(timeout=2)
+        logger.info("[ECU] Engine Control Unit stopped")
 
-    def get_data(self):
-        with self.lock:
-            return self.ecu_data
+    def get_data(self) -> Dict[str, Any]:
+        with self._lock:
+            return dict(self._ecu_data)
 
-    def set_thrust(self, thrust):
-        with self.lock:
-            self.thrust = max(0, min(100, thrust))
-            logger.info(f"Thrust set to {self.thrust}%.")
+    def get_status(self) -> Dict[str, Any]:
+        return {'running': self._thread is not None and self._thread.is_alive(),
+                'healthy': True, **self.get_data()}
 
-    def receive_message(self):
-        message = self.messaging.receive_message()
-        if message:
-            self._process_received_message(message)
+    def set_thrust(self, pct: float):
+        with self._lock:
+            self.thrust_pct = max(0, min(100, float(pct)))
 
-    def _process_received_message(self, message):
-        # Extract the data from the MIL-STD-1553B_Message
-        data = message.data
-        
-        # Process the received message data
-        logger.info(f"Received message data: {data}")
-        # Here you would typically parse the message data and take appropriate action
-        # For example, adjusting engine parameters based on commands
 
-# Example usage
-if __name__ == "__main__":
-    ecu = EngineControlUnit()
-    ecu.start()
-    ecu.monitor()
-    ecu.receive_message()
-    ecu.stop()
-
+def get_engine_control_unit() -> EngineControlUnit:
+    global _ecu_instance
+    if _ecu_instance is None:
+        _ecu_instance = EngineControlUnit()
+    return _ecu_instance

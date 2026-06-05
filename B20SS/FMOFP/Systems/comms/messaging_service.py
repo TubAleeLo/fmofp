@@ -1,114 +1,183 @@
-# messaging_service.py
-# This is a remote messaging service.  NEEDS to be refactored to be specific this this system.  Each system should have its own local version of this service.
-#       TODO: update with message types and topics specific to the system
-#
-# This is a messaging service that uses asyncio and XML-based messages to publish and subscribe to messages.
-# MessageBroker manages message topics and subscribers
-# MessagingService provides methods for publishing and subscribing to messages
-# SensorDataMessage represents a sensor data message and provides methods for converting the message to and from XML.
-# 
+"""
+Communications Messaging Service
 
+Unified manager for all comms subsystems (radio, satcom, data link).
+Starts each subsystem's update loop and exposes get_data() for the MFD
+comms page and EICAS.
 
-import asyncio
-import xml.etree.ElementTree as ET
-from typing import Any, Callable, Dict
+Singleton: get_comms_service()
+"""
+
+import threading
+import time
+import random
+import json
+from typing import Dict, Any
+
 from FMOFP.Utils.logger.sys_logger import get_logger
 
 logger = get_logger()
 
-class Message:
-    def __init__(self, sender, receiver, content):
-        self.sender = sender
-        self.receiver = receiver
-        self.content = content
+_comms_service = None
 
-    def __repr__(self):
-        return f"Message(sender={self.sender}, receiver={self.receiver}, content={self.content})"
 
-class MessageBroker:
+class CommsService:
+    """Lightweight wrapper that owns radio, satcom, and data-link state."""
+
     def __init__(self):
-        self.topics = {}
-        self.subscribers = {}
+        self._lock    = threading.Lock()
+        self._running = threading.Event()
+        self._thread  = None
+        self._db      = None
+        self._init_db()
 
-    def subscribe(self, topic, callback):
-        if topic not in self.subscribers:
-            self.subscribers[topic] = []
-        self.subscribers[topic].append(callback)
+        # Radio state
+        self._radio = {
+            'frequency':      118.0,   # MHz
+            'mode':           'AM',
+            'volume':         50,
+            'squelch':        3,
+            'signal_strength': 0.0,
+            'active':         False,
+        }
 
-    def unsubscribe(self, topic, callback):
-        if topic in self.subscribers:
-            self.subscribers[topic].remove(callback)
+        # SatCom state
+        self._satcom = {
+            'connection_status': 'disconnected',
+            'signal_strength':   0.0,
+            'data_rate':         0.0,     # kbps
+            'latency_ms':        0.0,
+            'satellite_id':      None,
+        }
 
-    async def publish(self, topic, message):
-        if topic in self.subscribers:
-            await asyncio.gather(*[callback(message) for callback in self.subscribers[topic]])
+        # Data link state
+        self._datalink = {
+            'link_status':       'inactive',
+            'messages_sent':     0,
+            'messages_received': 0,
+            'error_rate':        0.0,
+        }
 
-class MessagingService:
-    def __init__(self):
-        self.broker = MessageBroker()
-
-    def subscribe(self, topic, callback):
-        self.broker.subscribe(topic, callback)
-
-    def unsubscribe(self, topic, callback):
-        self.broker.unsubscribe(topic, callback)
-
-    async def publish(self, topic, message):
-        if hasattr(message, 'to_xml'):
-            # Handle XML messages
-            await self.broker.publish(topic, ET.tostring(message.to_xml()))
-        else:
-            # Handle dictionary messages directly
-            await self.broker.publish(topic, message)
-
-    async def run(self):
-        """Run the messaging service."""
+    def _init_db(self):
         try:
-            while True:
-                await asyncio.sleep(0.1)  # More responsive sleep
+            from FMOFP.storage.DBM import DatabaseManager
+            db_manager = DatabaseManager('FMOFP/dbConfig.xml')
+            self._db = db_manager.get_system_db('radio')
+            self._db.create_table('comms_data', {
+                'id':        'INTEGER PRIMARY KEY AUTOINCREMENT',
+                'timestamp': 'REAL NOT NULL',
+                'subsystem': 'TEXT NOT NULL',
+                'data':      'TEXT NOT NULL',
+            })
+            logger.info("[COMMS] Database initialised")
         except Exception as e:
-            logger.error(f"Error in messaging service: {e}")
-            raise
+            logger.warning(f"[COMMS] DB init failed (non-fatal): {e}")
 
-async def sample_publisher(service):
-    topic = "sensor_data"
-    message = SensorDataMessage(temperature=25.5, pressure=1010.2)
-    await service.publish(topic, message)
-    logger.info(f"Published to {topic}: {message.to_xml()}")
+    # ------------------------------------------------------------------ simulation
 
-async def sample_subscriber(service):
-    topic = "sensor_data"
-    service.subscribe(topic, lambda xml_str: logger.info(f"Received from {topic}: {SensorDataMessage.from_xml(ET.fromstring(xml_str))}"))
+    def _simulate(self):
+        with self._lock:
+            # Radio
+            self._radio['signal_strength'] = max(0, min(100,
+                self._radio['signal_strength'] + random.uniform(-3, 3)))
+            self._radio['active'] = self._radio['signal_strength'] > 20
 
-class SensorDataMessage:
-    def __init__(self, temperature: float, pressure: float):
-        self.temperature = temperature
-        self.pressure = pressure
+            # SatCom
+            if self._satcom['connection_status'] == 'connected':
+                self._satcom['signal_strength'] = max(0, min(100,
+                    self._satcom['signal_strength'] + random.uniform(-1, 1)))
+                self._satcom['data_rate'] = max(0,
+                    self._satcom['data_rate'] + random.uniform(-5, 5))
+                self._satcom['latency_ms'] = max(200,
+                    self._satcom['latency_ms'] + random.uniform(-10, 10))
+            else:
+                if random.random() < 0.01:
+                    self._satcom['connection_status'] = 'connected'
+                    self._satcom['signal_strength']   = random.uniform(40, 80)
+                    self._satcom['data_rate']         = random.uniform(50, 200)
+                    self._satcom['latency_ms']        = random.uniform(200, 600)
+                    self._satcom['satellite_id']      = random.randint(1, 12)
 
-    def to_xml(self):
-        root = ET.Element("sensor_data")
-        temp = ET.SubElement(root, "temperature")
-        temp.text = str(self.temperature)
-        pressure = ET.SubElement(root, "pressure")
-        pressure.text = str(self.pressure)
-        return root
+            # Data link
+            if self._satcom['connection_status'] == 'connected':
+                self._datalink['link_status'] = 'active'
+                self._datalink['messages_sent']     += random.randint(0, 2)
+                self._datalink['messages_received'] += random.randint(0, 2)
+                self._datalink['error_rate'] = max(0,
+                    self._datalink['error_rate'] + random.uniform(-0.1, 0.1))
+            else:
+                self._datalink['link_status'] = 'inactive'
 
-    @classmethod
-    def from_xml(cls, xml_root):
-        temperature = float(xml_root.find("temperature").text)
-        pressure = float(xml_root.find("pressure").text)
-        return cls(temperature, pressure)
+    def _persist(self):
+        if self._db is None:
+            return
+        try:
+            ts = time.time()
+            for subsystem, data in [('radio',   self._radio),
+                                    ('satcom',  self._satcom),
+                                    ('datalink', self._datalink)]:
+                self._db.insert_into_table('comms_data', {
+                    'timestamp': ts,
+                    'subsystem': subsystem,
+                    'data':      json.dumps(data),
+                })
+        except Exception as e:
+            logger.debug(f"[COMMS] DB insert skipped: {e}")
 
-    def __str__(self):
-        return f"SensorDataMessage(temperature={self.temperature}, pressure={self.pressure})"
+    def _update_loop(self):
+        logger.info("[COMMS] Update loop started")
+        while not self._running.is_set():
+            try:
+                self._simulate()
+                self._persist()
+            except Exception as e:
+                logger.error(f"[COMMS] Update error: {e}")
+                time.sleep(5)
+                continue
+            time.sleep(1.0)   # 1 Hz
 
-async def main():
-    service = MessagingService()
+    # ------------------------------------------------------------------ public API
 
-    publisher_task = asyncio.create_task(sample_publisher(service))
-    subscriber_task = asyncio.create_task(sample_subscriber(service))
+    def start(self):
+        if self._thread and self._thread.is_alive():
+            return
+        self._running.clear()
+        self._thread = threading.Thread(target=self._update_loop, daemon=True, name="COMMS_Update")
+        self._thread.start()
+        logger.info("[COMMS] Communications service started")
 
-    await service.run()
+    def stop(self):
+        self._running.set()
+        if self._thread:
+            self._thread.join(timeout=2)
+        logger.info("[COMMS] Communications service stopped")
 
-if __name__ == "__main__":
-    asyncio.run(main())
+    def get_data(self) -> Dict[str, Any]:
+        with self._lock:
+            return {
+                'radio':    dict(self._radio),
+                'satcom':   dict(self._satcom),
+                'datalink': dict(self._datalink),
+            }
+
+    def get_status(self) -> Dict[str, Any]:
+        d = self.get_data()
+        return {'running': self._thread is not None and self._thread.is_alive(),
+                'healthy': True, **d}
+
+    # Manual controls
+    def set_radio_frequency(self, freq: float):
+        with self._lock:
+            self._radio['frequency'] = round(float(freq), 3)
+
+    def set_radio_mode(self, mode: str):
+        with self._lock:
+            if mode in ('AM', 'FM', 'USB', 'LSB'):
+                self._radio['mode'] = mode
+
+
+def get_comms_service() -> CommsService:
+    global _comms_service
+    if _comms_service is None:
+        _comms_service = CommsService()
+    return _comms_service

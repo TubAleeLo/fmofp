@@ -4,8 +4,8 @@
 
 
 import threading
-from xml.etree import ElementTree as ET
-from Systems.comms.messaging_service import MessagingService, Message
+from typing import Optional
+from FMOFP.Systems.comms.messaging_service import get_comms_service
 
 from FMOFP.Utils.logger.sys_logger import get_logger
 
@@ -17,7 +17,7 @@ class BaseNode:
         self.value = value
         self.children = {}
         self.lock = threading.Lock()
-        self.messaging_service = MessagingService()
+        self.messaging_service = get_comms_service()
 
     def add_child(self, child_node):
         with self.lock:
@@ -35,33 +35,23 @@ class BaseNode:
                 logger.info(f"Removed child {name} from {self.name}")
 
     async def save_to_db(self):
+        """Persist this node. TODO: wire to DBM when storage layer is ready."""
         with self.lock:
-            message = Message(
-                sender=self.name,
-                receiver="DatabaseManager",
-                content={"action": "save_node", "node": self.__dict__}
-            )
-            await self.messaging_service.publish("database_topic", message)
-            logger.info(f"Sent save message for node {self.name} to database")
+            logger.info(f"[NODE] save_to_db: {self.name} value={self.value}")
 
     async def load_from_db(self, name):
+        """Load a node by name. TODO: wire to DBM when storage layer is ready."""
         with self.lock:
-            message = Message(
-                sender=self.name,
-                receiver="DatabaseManager",
-                content={"action": "load_node", "name": name}
-            )
-            self.messaging_service.subscribe("database_topic_response", self._handle_load_response)
-            await self.messaging_service.publish("database_topic", message)
+            logger.info(f"[NODE] load_from_db: requested name={name}")
 
-    def _handle_load_response(self, xml_str):
-        response = Message.from_xml(ET.fromstring(xml_str))
-        if response.content.get("status") == "success":
-            node_data = response.content.get("node")
-            self.name = node_data['name']
-            self.value = node_data['value']
-            self.children = node_data['children']
-            logger.info(f"Loaded node {self.name} from database")
+    def _handle_load_response(self, data: dict) -> None:
+        """Handle a database load response. TODO: wire to DBM when storage layer is ready."""
+        if data.get("status") == "success":
+            node_data = data.get("node", {})
+            self.name = node_data.get('name', self.name)
+            self.value = node_data.get('value', self.value)
+            self.children = node_data.get('children', self.children)
+            logger.info(f"[NODE] Loaded node {self.name} from database")
 
     def __repr__(self):
         return f"BaseNode(name={self.name}, value={self.value})"
@@ -70,7 +60,7 @@ class BaseNode:
 class LinkedListNode:
     def __init__(self, data):
         self.data = data
-        self.next = None
+        self.next: Optional['LinkedListNode'] = None
 
     def __repr__(self):
         return f"LinkedListNode(data={self.data})"
@@ -80,7 +70,7 @@ class LinkedList:
     def __init__(self):
         self.head = None
         self.lock = threading.Lock()
-        self.messaging_service = MessagingService()
+        self.messaging_service = get_comms_service()
 
     def append(self, data):
         new_node = LinkedListNode(data)

@@ -12,7 +12,7 @@ import asyncio
 import xml.etree.ElementTree as ET
 from FMOFP.Utils.common import fetching
 from typing import Any, Dict, Optional, List
-from FMOFP.Systems.comms.messaging_service import MessagingService, SensorDataMessage
+from FMOFP.Systems.comms.messaging_service import get_comms_service
 from FMOFP.MIL_STD_1553B.Bus_Controller.BC_connect.BC_socket import get_bc_sender, get_bc_listener
 from FMOFP.MIL_STD_1553B.Bus_Controller.BC_messaging.BC_msg import BC_construct, BC_deconstruct
 from FMOFP.Utils.logger.sys_logger import get_logger
@@ -25,18 +25,18 @@ class send1553Msg:
         self.bcm = BusControllerModule()
         self.sent_frames = []
         self._lock = threading.Lock()
-        
-        
+
+
     #   PRIMARY method to send messages from local system to the bus controller -> RTs
-    async def send_message(self, command: str, data: List[str], request_id: Optional[str] = None, metadata: Optional[Dict[str, Any]] = None) -> Optional[str]:
+    async def send_message(self, command: str, data: List[str], request_id: Optional[str] = None, metadata: Optional[Dict[str, Any]] = None) -> Optional[List[str]]:
         """Send a MIL-STD-1553B message.
-        
+
         Args:
-            command: Command word (16-bit binary string) 
+            command: Command word (16-bit binary string)
             data: List of data words (16-bit binary strings)
             request_id: Optional request ID for tracking responses
             metadata: Optional metadata dictionary to encode into data words
-            
+
         Returns:
             Optional[str]: Message ID if sent successfully, None otherwise
         """
@@ -44,11 +44,11 @@ class send1553Msg:
             # Normalize command
             if isinstance(command, list) and len(command) == 1:
                 command = command[0]
-                
+
             # Normalize data
             if not isinstance(data, list):
                 data = [data]
-                
+
             # Log command details
             logger.debug(f"Sending command: {command}")
             logger.debug(f"Sending data: {data}")
@@ -57,18 +57,18 @@ class send1553Msg:
                 raise ValueError("No metadata provided")
 
             logger.debug(f"Metadata: {metadata}")
-            
+
             # Send command through bus controller
             sent_frame = await self.bcm._sendCommandComms(command, data, request_id, metadata)
-            
+
             # Track sent frame
             if sent_frame:
                 with self._lock:
                     self.sent_frames.append(sent_frame)
                 return sent_frame
-                
+
             return None
-            
+
         except Exception as e:
             logger.error(f"Error in send_message: {str(e)}")
             logger.error(traceback.format_exc())
@@ -79,9 +79,9 @@ class BusControllerModule:
     COMMAND_SYNC = "100"  # Command word sync pattern
     DATA_SYNC = "001"     # Data word sync pattern
     STATUS_SYNC = "100"   # Status word sync pattern (same as command)
-    
+
     def __init__(self):
-        self.messaging_service = MessagingService()
+        self.messaging_service = get_comms_service()
         self.bcc = BC_construct()
         self.bcd = BC_deconstruct()
         self.bcs = get_bc_sender()
@@ -100,7 +100,7 @@ class BusControllerModule:
         word_with_sync = sync + word
         parity = self.calculate_parity(word_with_sync)
         result = word_with_sync + parity
-        
+
         # Validate the result has odd parity
         ones_count = result.count('1')
         if ones_count % 2 != 1:
@@ -108,13 +108,13 @@ class BusControllerModule:
             # Fix parity if needed
             result = result[:-1] + ('0' if result[:-1].count('1') % 2 == 1 else '1')
             logger.info(f"Corrected word parity: {result}")
-            
+
         return result
 
     async def _sendCommandComms(self, command: str, data: List[str], request_id: Optional[str] = None, metadata: Optional[Dict[str, Any]] = None) -> Optional[List[str]]:
         """
         Send command and data words to RT.
-        
+
         Args:
             command: Command word (16-bit binary string)
             data: List of data words (16-bit binary strings)
@@ -125,40 +125,40 @@ class BusControllerModule:
             try:
                 # Check command format
                 command = self.commandCheck(command)
-                
+
                 # Get command components
                 RT_address, t_or_r, sub_add_or_mode_code, data_word_count = self.formatCommand(command)
                 logger.debug(f"RT address: {RT_address}")
                 logger.debug(f"T/R flag: {t_or_r}")
                 logger.debug(f"Subaddress/mode code: {sub_add_or_mode_code}")
                 logger.debug(f"Data word count: {data_word_count}")
-                
+
                 # Format command frame
                 command_frame = self.add_sync_and_parity(command, True)
                 logger.debug(f"Command frame: {command_frame}")
-                
+
                 # Encode metadata if provided
                 metadata_data_words = []
                 if metadata:
                     try:
                         # Import metadata codec
                         from FMOFP.MIL_STD_1553B.metadata_codec import MetadataCodec
-                        
+
                         # Add debug logging
                         logger.info(f"[MESSAGING] Encoding metadata: {metadata}")
-                        
+
                         # Just ensure command_name is in metadata if it exists
                         if 'command_type' in metadata:
                             logger.info(f"[MESSAGING] Found command_name in metadata: {metadata['command_type']}")
-                        else:   
+                        else:
                             raise ValueError("No metadata in message")
-                        
+
                         # Check for precipitation indicators
                         if 'command_type' in metadata and 'PRECIP' in str(metadata['command_type']):
                             metadata['precipitation_message'] = True
                             metadata['command_type'] = 'precipitation_data'
                             logger.info(f"[MESSAGING] Added precipitation_message flag to metadata based on command_name")
-                        
+
                         # Encode metadata into data words
                         metadata_data_words = MetadataCodec.encode_metadata(metadata)
                         logger.info(f"[MESSAGING] Encoded metadata into {len(metadata_data_words)} data words: {metadata_data_words}")
@@ -167,7 +167,7 @@ class BusControllerModule:
                         logger.error(f"Error encoding metadata: {e}")
                         logger.error(traceback.format_exc())
                         # Continue without metadata if encoding fails
-                
+
                 # Format data frames (metadata + regular data)
                 all_data = metadata_data_words + data
                 data_frames = []
@@ -182,16 +182,16 @@ class BusControllerModule:
                         # Ensure 16-bit length
                         if len(data_word) != 16:
                             data_word = format(int(data_word, 2), '016b')
-                    
+
                     # Add sync and parity
                     data_frame = self.add_sync_and_parity(data_word, False)
                     logger.debug(f"Data frame: {data_frame}")
                     data_frames.append(data_frame)
-                
+
                 # Combine frames
                 frames = [command_frame] + data_frames
                 logger.debug(f"Complete frame list: {frames}")
-                
+
                 # Send frames with request_id and metadata
 
                 message = {
@@ -201,11 +201,11 @@ class BusControllerModule:
                     'message_type': metadata.get('message_type') if metadata else None
                 }
                 logger.info(f"[MESSAGING] Added metadata to message dictionary: {metadata}")
-                
+
                 if self.bcs.BC_send_message(message):
                     # Wait for RT response
                     await asyncio.sleep(0.1)
-                    
+
                     # Check for RT response
                     if self.bcl.data_received:
                         response = self.bcl.data_received.pop(0)
@@ -237,7 +237,7 @@ class BusControllerModule:
                                         logger.info(f"Published status word message: {status_message}")
                         except Exception as e:
                             logger.error(f"Error processing RT response: {str(e)}")
-                    
+
                     # Publish frames with request_id
                     message_data = {
                         "frames": frames,
@@ -245,12 +245,12 @@ class BusControllerModule:
                     }
                     if request_id:
                         message_data["request_id"] = request_id
-                    await self.messaging_service.publish("1553_bus", SensorDataMessage(message_data, 0))
+                    logger.debug(f"[1553B] Frames sent: request_id={request_id}, frame_count={len(frames)}")
                     return frames
-                    
+
                 else:
                     logger.warning(f"Failed to send message, attempt {attempt + 1} of {self.max_retries}")
-                    
+
             except Exception as e:
                 logger.error(f"Error in _sendCommandComms, attempt {attempt + 1}: {str(e)}")
                 logger.error(traceback.format_exc())
@@ -258,7 +258,7 @@ class BusControllerModule:
                     await asyncio.sleep(self.retry_delay)
                 else:
                     raise
-                    
+
         return None
 
     def commandCheck(self, received: Any) -> str:
@@ -315,7 +315,7 @@ class ScheduleMessage:
     _message_rates_loaded = False
     _message_rates_lock = threading.Lock()
     _shared_message_rates = {}
-    
+
     def __init__(self):
         from FMOFP.Utils.common.thread_manager import ThreadManager
         self.thread_manager = ThreadManager()
@@ -325,16 +325,16 @@ class ScheduleMessage:
         self.bcm = BusControllerModule()
         self.running = False
         self.message_rates = {}
-        
+
         # Load message rates only once
         self.load_message_rates()
-        
+
         # Only add the periodic loader thread if we're the first instance
         if not ScheduleMessage._message_rates_loaded:
             self.thread_manager.add_thread("MessageRateLoader", self.periodic_load_message_rates)
-            
+
         self.scheduler = Schedule(self.major_frame_time, self.minor_frame_times)
-        
+
     def load_message_rates(self):
         def _load_message_rates_impl():
             # Load message rates from file
@@ -349,10 +349,10 @@ class ScheduleMessage:
                     for msg_type in root.findall('*'):
                         msg_name = msg_type.tag
                         rate_element = msg_type.find('rate_hz')
-                        if rate_element is not None:
+                        if rate_element is not None and rate_element.text is not None:
                             rate_hz = float(rate_element.text)
                             new_rates[msg_name] = rate_hz
-                    
+
                     if new_rates:
                         self.message_rates = new_rates
                         # Store in class-level shared dictionary
@@ -378,7 +378,7 @@ class ScheduleMessage:
                 logger.error(traceback.format_exc())
                 if not self.message_rates:
                     return self.set_default_rates()
-        
+
         # Use the class lock to prevent race conditions
         with ScheduleMessage._message_rates_lock:
             # If message rates are already loaded, use the shared rates
@@ -386,14 +386,14 @@ class ScheduleMessage:
                 logger.info("Message rates already loaded, using cached values")
                 self.message_rates = ScheduleMessage._shared_message_rates.copy()
                 return self.message_rates
-        
+
         # Track this operation to ensure it only happens once
         result = track_operation('message_rates_load', 'messageRateConfig.xml', _load_message_rates_impl)
-        
+
         # If operation was already completed, use the shared rates
         if result is None and ScheduleMessage._message_rates_loaded:
             self.message_rates = ScheduleMessage._shared_message_rates.copy()
-            
+
         return self.message_rates
 
     def set_default_rates(self):
@@ -404,17 +404,17 @@ class ScheduleMessage:
             'command_msg': 2,
             'log_msg': 0.5
         }
-        
+
         # Set instance and class-level rates
         self.message_rates = default_rates.copy()
-        
+
         # Use the class lock to prevent race conditions
         with ScheduleMessage._message_rates_lock:
             # Only update shared rates if not already set
             if not ScheduleMessage._message_rates_loaded:
                 ScheduleMessage._shared_message_rates = default_rates.copy()
                 ScheduleMessage._message_rates_loaded = True
-                
+
         logger.info("Using default message rates")
         logger.info(f"Default message rates: {self.message_rates}")
         return default_rates
@@ -422,11 +422,11 @@ class ScheduleMessage:
     def periodic_load_message_rates(self):
         while self.running:
             time.sleep(300)  # Try to reload every 5 minutes
-            
+
             # Reset the loaded flag to force a reload
             with ScheduleMessage._message_rates_lock:
                 ScheduleMessage._message_rates_loaded = False
-                
+
             # Reload the rates
             self.load_message_rates()
 
