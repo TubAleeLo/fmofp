@@ -96,6 +96,8 @@ class TacticalSituationDisplay(BaseDisplay):
 
         # Threat vectors (simulated — position relative to own ship, nm)
         self._threats: List[Dict] = []
+        self._track_history: Dict[str, List] = {}  # contact_id -> [(x,y)...]
+        self._rwr_contacts: List[Dict] = []        # from DefensiveService
 
         # ── FMS handles ────────────────────────────────────────────────────
         self._fms         = None
@@ -182,6 +184,13 @@ class TacticalSituationDisplay(BaseDisplay):
                 # Pull real fused tracks; fall back to simulation
                 # if fusion not yet running.
                 self._threats = self._get_fused_threats()
+
+                # RWR contacts from DefensiveService
+                try:
+                    from FMOFP.Systems.defensiveSys.defensiveService import get_defensive_service
+                    self._rwr_contacts = get_defensive_service().get_rwr_contacts()
+                except Exception:
+                    pass
 
             self._safe_update()
 
@@ -352,26 +361,92 @@ class TacticalSituationDisplay(BaseDisplay):
                                  Qt.AlignmentFlag.AlignLeft,
                                  wp.get("name", f"WP{idx}"))
 
-        # Threat contacts
+        # Threat contacts — threat rings, track history, IFF symbology, velocity vectors
+        f_t = QFont("Monospace", 6)
+        _THREAT_RING = QColor(180, 40, 40, 60)
+
         for thr in self._threats:
-            b = math.radians(thr["bearing"] - 90)
-            d = thr["range_nm"]
-            tx = cx + (d / max_nm) * rad * math.cos(b)
-            ty = cy + (d / max_nm) * rad * math.sin(b)
+            b   = math.radians(thr.get("bearing", 0) - 90)
+            d   = thr.get("range_nm", 0)
+            tx  = cx + (d / max_nm) * rad * math.cos(b)
+            ty  = cy + (d / max_nm) * rad * math.sin(b)
             col = _RED if thr.get("hostile") else _AMBER
+            tid = thr.get("type", "UNK")
+            is_hostile = thr.get("hostile", False)
+
+            # Track history trail
+            ckey = f"{tid}_{int(thr.get('bearing', 0))}"
+            if ckey not in self._track_history:
+                self._track_history[ckey] = []
+            hist = self._track_history[ckey]
+            hist.append((tx, ty))
+            if len(hist) > 20:
+                hist.pop(0)
+            if len(hist) > 1:
+                for hi in range(1, len(hist)):
+                    tc = QColor(col)
+                    tc.setAlpha(int(80 * hi / len(hist)))
+                    painter.setPen(QPen(tc, 1, Qt.PenStyle.DotLine))
+                    painter.drawLine(QPointF(*hist[hi-1]), QPointF(*hist[hi]))
+
+            # Threat ring for SAM/MISSILE (10 nm)
+            if is_hostile and tid in ("SAM", "MISSILE"):
+                ring_r = (10.0 / max_nm) * rad
+                painter.setPen(QPen(_THREAT_RING, 1, Qt.PenStyle.DashLine))
+                painter.setBrush(Qt.BrushStyle.NoBrush)
+                painter.drawEllipse(QPointF(tx, ty), ring_r, ring_r)
+
+            # IFF symbology
             painter.setPen(QPen(col, 2))
             painter.setBrush(Qt.BrushStyle.NoBrush)
-            # X symbol for threat
             sz = 6.0
-            painter.drawLine(QPointF(tx - sz, ty - sz), QPointF(tx + sz, ty + sz))
-            painter.drawLine(QPointF(tx + sz, ty - sz), QPointF(tx - sz, ty + sz))
-            # Range label
-            f_t = QFont("Monospace", 6)
+            if is_hostile:
+                # X = hostile
+                painter.drawLine(QPointF(tx - sz, ty - sz), QPointF(tx + sz, ty + sz))
+                painter.drawLine(QPointF(tx + sz, ty - sz), QPointF(tx - sz, ty + sz))
+            elif thr.get("identity", "UNKNOWN") == "FRIENDLY":
+                # Circle = friendly
+                painter.drawEllipse(QPointF(tx, ty), sz, sz)
+            else:
+                # Diamond = unknown
+                pts = [QPointF(tx, ty-sz), QPointF(tx+sz, ty),
+                       QPointF(tx, ty+sz), QPointF(tx-sz, ty), QPointF(tx, ty-sz)]
+                for pi in range(len(pts)-1):
+                    painter.drawLine(pts[pi], pts[pi+1])
+
+            # Velocity vector
+            vx = thr.get("vx", 0)
+            vy = thr.get("vy", 0)
+            if abs(vx) > 0.1 or abs(vy) > 0.1:
+                spd = math.sqrt(vx*vx + vy*vy)
+                vang = math.atan2(vy, vx)
+                vec_len = min(spd / max_nm * rad * 3, 20)
+                vex = tx + vec_len * math.cos(vang)
+                vey = ty + vec_len * math.sin(vang)
+                painter.setPen(QPen(col, 1))
+                painter.drawLine(QPointF(tx, ty), QPointF(vex, vey))
+                for da in (0.4, -0.4):
+                    painter.drawLine(QPointF(vex, vey),
+                        QPointF(vex - 5*math.cos(vang+da), vey - 5*math.sin(vang+da)))
+
+            # Label
             painter.setFont(f_t)
             painter.setPen(QPen(col))
-            painter.drawText(QRectF(tx + 8, ty - 6, 40, 12),
-                             Qt.AlignmentFlag.AlignLeft,
-                             f"{d:.0f}nm")
+            painter.drawText(QRectF(tx + 8, ty - 6, 50, 12),
+                             Qt.AlignmentFlag.AlignLeft, f"{tid} {d:.0f}nm")
+
+        # RWR contacts from DefensiveService (bearing-only, on ring edge)
+        for rwr in self._rwr_contacts:
+            b  = math.radians(rwr.get("bearing_deg", 0) - 90)
+            rx = cx + rad * math.cos(b)
+            ry = cy + rad * math.sin(b)
+            painter.setPen(QPen(_RED, 2))
+            painter.setBrush(_RED)
+            painter.drawEllipse(QPointF(rx, ry), 4, 4)
+            painter.setFont(QFont("Monospace", 6))
+            painter.setPen(QPen(_RED))
+            painter.drawText(QRectF(rx + 5, ry - 5, 20, 10),
+                             Qt.AlignmentFlag.AlignLeft, rwr.get("band", "?"))
 
         # Heading readout
         f_hdg = QFont("Monospace", 9, QFont.Weight.Bold)

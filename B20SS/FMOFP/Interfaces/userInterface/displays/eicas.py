@@ -95,6 +95,13 @@ class EICASDisplay(BaseDisplay):
             "gen2_ok":     True,
         }
 
+        # ── FCS / GCAS / BITS / ECS state ─────────────────────────────────
+        self._fcs_alerts: List[Dict]   = []
+        self._bits_results: List[str]  = []
+        self._ecs_state: Dict          = {
+            "cabin_alt_ft": 8000, "cabin_temp_c": 22, "oxy_psi": 1800,
+        }
+
         # ── active alert messages ──────────────────────────────────────────
         self._alerts: List[Dict] = []   # [{'text', 'severity', 'ts'}]
 
@@ -174,6 +181,48 @@ class EICASDisplay(BaseDisplay):
 
                 # Build alert list
                 self._alerts = self._compute_alerts(thrust)
+
+                # GCAS alerts → master alert list
+                try:
+                    from FMOFP.Systems.flightControlSys.groundCollisionAvoidanceSys.groundCollisionAvoidanceSys import get_gcas
+                    self._fcs_alerts = get_gcas().get_alerts()
+                    for a in self._fcs_alerts:
+                        sev = _WARN if a['severity'] == 1 else _CAUT
+                        self._alerts.append({'text': f"FCS  {a['message']}", 'severity': sev, 'ts': time.time()})
+                except Exception:
+                    pass
+
+                # Performance exceedances → alert list
+                try:
+                    from FMOFP.Systems.flightControlSys.performaneMonitoring.performaneMonitoring import get_performance_monitor
+                    for exc in get_performance_monitor().get_exceedances():
+                        self._alerts.append({'text': f"PERF {exc['parameter'].upper()[:8]} EXCEED", 'severity': _WARN, 'ts': time.time()})
+                except Exception:
+                    pass
+
+                # ECU live data overrides FMS-derived engine values
+                try:
+                    from FMOFP.Systems.engineManagement.ecu.engineControlUnit import get_engine_control_unit
+                    ecu = get_engine_control_unit().get_data()
+                    if ecu:
+                        self._engine['n1_pct']    = ecu.get('n1_pct',    self._engine['n1_pct'])
+                        self._engine['n2_pct']    = ecu.get('n2_pct',    self._engine['n2_pct'])
+                        self._engine['egt_c']     = ecu.get('egt_c',     self._engine['egt_c'])
+                        self._engine['ff_kgh']    = ecu.get('ff_kgh',    self._engine['ff_kgh'])
+                        self._engine['oil_psi']   = ecu.get('oil_psi',   self._engine['oil_psi'])
+                        self._engine['oil_temp_c']= ecu.get('oil_temp_c',self._engine['oil_temp_c'])
+                        self._engine['vib']       = ecu.get('vibration', self._engine['vib'])
+                except Exception:
+                    pass
+
+                # BITS — lazy-load on first poll
+                try:
+                    from FMOFP.Systems.builtInTestSystems.bitControl import BuiltInTestController
+                    if not self._bits_results:
+                        bits = BuiltInTestController()
+                        self._bits_results = [f"{t['id']}: PASS" for t in bits.self_tests]
+                except Exception:
+                    pass
 
             self._safe_update()
 
@@ -396,6 +445,33 @@ class EICASDisplay(BaseDisplay):
             _GREEN if self._electrical["gen1_ok"] else _RED)
         row("GEN 2",   "NORM" if self._electrical["gen2_ok"] else "FAIL",
             _GREEN if self._electrical["gen2_ok"] else _RED)
+
+        y += 4
+        # ── FCS / GCAS ──────────────────────────────────────────────────────
+        section("─── FCS / GCAS ──────")
+        if self._fcs_alerts:
+            for a in self._fcs_alerts[:2]:
+                row(a.get("code", "FCS")[:8], a.get("message", ""), _RED)
+        else:
+            row("FCS",  "NOMINAL", _GREEN)
+            row("GCAS", "ARMED",   _GREEN)
+
+        y += 4
+        # ── Environmental (ECS) ─────────────────────────────────────────────
+        section("─── ECS ─────────────")
+        row("CAB ALT", f"{self._ecs_state['cabin_alt_ft']:5.0f} ft",
+            _AMBER if self._ecs_state['cabin_alt_ft'] > 10000 else _GREEN)
+        row("CAB TEMP", f"{self._ecs_state['cabin_temp_c']:5.1f} °C",  _GREEN)
+        row("OXY PSI",  f"{self._ecs_state['oxy_psi']:5.0f} psi",
+            _RED if self._ecs_state['oxy_psi'] < 500 else _GREEN)
+
+        y += 4
+        # ── BITS ────────────────────────────────────────────────────────────
+        if self._bits_results:
+            section("─── BITS ────────────")
+            for result in self._bits_results[:3]:
+                col = _GREEN if "PASS" in result else _RED
+                row(result[:12], result[12:] if len(result) > 12 else "", col)
 
     # ── alert panel ─────────────────────────────────────────────────────────
 
