@@ -46,6 +46,15 @@ class MissionService:
         except Exception as e:
             logger.warning(f"[MISSION] MissionPlanningSystem unavailable: {e}")
 
+        # Full mission coordinator (exposes route, targeting, oob)
+        self._ctrl = None
+        try:
+            from FMOFP.Systems.missionPlanning.missionControl import MissionControl
+            self._ctrl = MissionControl()
+            logger.info("[MISSION] MissionControl attached")
+        except Exception as e:
+            logger.warning(f"[MISSION] MissionControl unavailable: {e}")
+
     def _init_db(self):
         try:
             from FMOFP.storage.DBM import DatabaseManager
@@ -62,12 +71,13 @@ class MissionService:
             logger.warning(f"[MISSION] DB init failed (non-fatal): {e}")
 
     def _update(self):
-        """Sync position from FMS if available."""
+        """Sync position from FMS and tick MissionControl if available."""
         try:
             from FMOFP.Systems.flightManagementSys.flightManagementSystem import get_flightManagementSystem
             fms = get_flightManagementSystem()
             fd  = fms.get_flight_data()
             nav = fd.get('navigation', {})
+            vel = fd.get('velocity', {})
             if nav:
                 with self._lock:
                     self._current_position = {
@@ -75,12 +85,20 @@ class MissionService:
                         'lon':    nav.get('longitude', self._current_position['lon']),
                         'alt_ft': nav.get('altitude',  self._current_position['alt_ft']),
                     }
-                    if self._mps:
-                        self._mps.update_current_position(
-                            self._current_position['lat'],
-                            self._current_position['lon'],
-                            self._current_position['alt_ft'],
-                        )
+                if self._mps:
+                    self._mps.update_current_position(
+                        self._current_position['lat'],
+                        self._current_position['lon'],
+                        self._current_position['alt_ft'],
+                    )
+                if self._ctrl:
+                    gs = vel.get('groundspeed', 450.0)
+                    self._ctrl.tick(
+                        self._current_position['lat'],
+                        self._current_position['lon'],
+                        self._current_position['alt_ft'],
+                        gs,
+                    )
         except Exception:
             pass   # FMS not yet ready — silent
 
@@ -133,7 +151,7 @@ class MissionService:
 
     def get_data(self) -> Dict[str, Any]:
         with self._lock:
-            return {
+            base = {
                 'phase':            self._phase,
                 'current_position': dict(self._current_position),
                 'waypoints':        list(self._waypoints),
@@ -141,6 +159,18 @@ class MissionService:
                 'threats':          list(self._threats),
                 'active_waypoint':  self._active_waypoint_idx,
             }
+        # Merge richer ctrl snapshot when available
+        if self._ctrl:
+            try:
+                snap = self._ctrl.get_snapshot()
+                base['phase']   = snap.get('phase', base['phase'])
+                base['route']   = snap.get('route',  {})
+                base['targets'] = snap.get('targets', base['targets'])
+                base['engaged'] = snap.get('engaged', [])
+                base['oob_summary'] = snap.get('oob_summary', {})
+            except Exception:
+                pass
+        return base
 
     def get_status(self) -> Dict[str, Any]:
         return {'running': self._thread is not None and self._thread.is_alive(),
@@ -162,13 +192,154 @@ class MissionService:
 
     def set_phase(self, phase: str):
         valid = ('PLANNING', 'INGRESS', 'OBJECTIVE', 'EGRESS', 'COMPLETE')
-        if phase in valid:
+        if phase.upper() in valid:
             with self._lock:
-                self._phase = phase
-            logger.info(f"[MISSION] Phase → {phase}")
+                self._phase = phase.upper()
+            if self._ctrl:
+                self._ctrl.set_phase(phase)
+            logger.info(f"[MISSION] Phase → {phase.upper()}")
+
+    def advance_phase(self) -> str:
+        if self._ctrl:
+            new_phase = self._ctrl.advance_phase()
+            with self._lock:
+                self._phase = new_phase
+            return new_phase
+        order = ['PLANNING', 'INGRESS', 'OBJECTIVE', 'EGRESS', 'COMPLETE']
+        with self._lock:
+            try:
+                idx = order.index(self._phase)
+            except ValueError:
+                idx = 0
+            self._phase = order[min(idx + 1, len(order) - 1)]
+            return self._phase
+
+    def add_waypoint(self, name: str = '', lat: float = 0.0,
+                     lon: float = 0.0, alt_ft: float = 0.0,
+                     wp_type: str = 'NAV') -> Dict[str, Any]:
+        with self._lock:
+            wp = {'id': len(self._waypoints), 'lat': lat, 'lon': lon,
+                  'alt_ft': alt_ft, 'name': name, 'type': wp_type}
+            self._waypoints.append(wp)
+        if self._mps:
+            self._mps.add_waypoint(lat, lon, alt_ft)
+        if self._ctrl:
+            from FMOFP.Systems.missionPlanning.routeManagement.handleRoute import WaypointType
+            wt = WaypointType[wp_type.upper()] if wp_type.upper() in WaypointType.__members__ else WaypointType.NAV
+            self._ctrl.route.add_waypoint(name, lat, lon, alt_ft, wt)
+        return wp
+
+    def get_route(self) -> List[Dict]:
+        if self._ctrl:
+            return self._ctrl.route.get_full_route()
+        with self._lock:
+            return list(self._waypoints)
+
+    def get_nav_data(self) -> Dict[str, Any]:
+        if self._ctrl:
+            return self._ctrl.route.get_nav_data()
+        with self._lock:
+            return {'route': list(self._waypoints), 'active_index': self._active_waypoint_idx}
+
+    def designate_target(self, name: str = 'TGT', lat: float = 0.0,
+                         lon: float = 0.0, alt_ft: float = 0.0,
+                         priority: int = 3, target_type: str = 'POINT') -> Dict[str, Any]:
+        if self._ctrl:
+            from FMOFP.Systems.missionPlanning.targeting.targeting import Target, TargetStatus
+            t_id = f"T{len(self._ctrl.targeting.targets) + 1:04d}"
+            tgt  = Target(t_id, target_type, (lat, lon, alt_ft), priority)
+            tgt.status = TargetStatus.DESIGNATED
+            self._ctrl.targeting.add_target(tgt)
+            # Insert TGT waypoint
+            self._ctrl.route.insert_target(f"TGT-{t_id}", lat, lon, alt_ft)
+            with self._lock:
+                self._targets.append(tgt.to_dict())
+            return tgt.to_dict()
+        # Fallback
+        with self._lock:
+            entry = {'id': f"T{len(self._targets)+1:04d}", 'name': name,
+                     'lat': lat, 'lon': lon, 'alt_ft': alt_ft,
+                     'priority': priority, 'status': 'DESIGNATED', 'type': target_type}
+            self._targets.append(entry)
+        return entry
+
+    def engage_target(self, target_id: str, weapon: str) -> bool:
+        if self._ctrl:
+            return self._ctrl.targeting.engage_target(target_id, weapon)
+        return False
+
+    def radar_target_update(self, target_id: str, lat: float, lon: float,
+                            alt_ft: float, speed: float = 0.0,
+                            heading: float = 0.0,
+                            quality: float = 0.8) -> bool:
+        if self._ctrl:
+            return self._ctrl.targeting.update_from_radar(
+                target_id, lat, lon, alt_ft, speed, heading, quality)
+        return False
+
+    def get_targets(self) -> List[Dict]:
+        if self._ctrl:
+            return self._ctrl.targeting.get_prioritised()
+        with self._lock:
+            return list(self._targets)
+
+    def add_unit(self, data: Dict) -> Optional[Dict]:
+        if self._ctrl:
+            from FMOFP.Systems.missionPlanning.orderOfBattle.orderOfBattle import Unit
+            try:
+                pos = data.get('position', (0, 0, 0))
+                unit = Unit(
+                    id=data.get('id', 'U?'),
+                    type=data.get('type', 'UNKNOWN'),
+                    affiliation=data.get('affiliation', 'UNKNOWN'),
+                    position=tuple(pos) if not isinstance(pos, tuple) else pos,
+                    capabilities=data.get('capabilities', []),
+                    threat_level=int(data.get('threat_level', 0)),
+                )
+                self._ctrl.oob.add_unit(unit)
+                return unit.to_dict()
+            except Exception as e:
+                logger.error(f"[MISSION] add_unit error: {e}")
+        return None
+
+    def get_oob(self) -> Dict[str, Any]:
+        if self._ctrl:
+            return {
+                'summary':  self._ctrl.oob.summary(),
+                'friendly': self._ctrl.oob.get_by_affiliation('friendly'),
+                'enemy':    self._ctrl.oob.get_by_affiliation('enemy'),
+                'neutral':  self._ctrl.oob.get_by_affiliation('neutral'),
+            }
+        return {'summary': {}, 'friendly': [], 'enemy': [], 'neutral': []}
+
+    def get_threats(self, min_level: int = 1) -> List[Dict]:
+        if self._ctrl:
+            return self._ctrl.oob.get_threats(min_level)
+        return []
+
+    def set_objectives(self, objectives: List[str]) -> None:
+        if self._ctrl:
+            self._ctrl.set_objectives(objectives)
+
+    def set_roe(self, rules: List[str]) -> None:
+        if self._ctrl:
+            self._ctrl.set_roe(rules)
+
+    def update_intelligence(self, data: Dict) -> None:
+        if self._ctrl:
+            self._ctrl.update_intelligence(data)
+
+    def optimise_route(self) -> int:
+        if self._ctrl:
+            return self._ctrl.optimise_route_for_threats()
+        return 0
+
+    def add_target(self, lat: float, lon: float, priority: int = 1, name: str = ''):
+        """Legacy API — delegates to designate_target."""
+        return self.designate_target(name=name, lat=lat, lon=lon, priority=priority)
 
 
-def get_mission_service() -> MissionService:
+def get_mission_service() -> 'MissionService':
     global _mission_service
     if _mission_service is None:
         _mission_service = MissionService()

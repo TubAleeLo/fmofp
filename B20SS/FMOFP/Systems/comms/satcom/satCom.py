@@ -33,31 +33,38 @@ class SatCom:
 
     def _setup_database(self):
         try:
-            table_name = 'satcom_data'
-            received_from = 'satcom_system'
-            information_type = 'communication_data'
-            field_data_dict = {'id': 'INTEGER PRIMARY KEY', 'data': 'TEXT'}
-
-            if table_name is not None and received_from is not None and information_type is not None and field_data_dict is not None:
-                self.db.create_table(table_name, received_from, information_type, field_data_dict)
-            else:
-                logger.warning("Skipping create_table call due to None values")
+            self.db.create_table('satcom_data', {
+                'id':   'INTEGER PRIMARY KEY AUTOINCREMENT',
+                'data': 'TEXT NOT NULL',
+            })
         except Exception as e:
             logger.error(f"Database setup failed: {e}")
 
     def simulate_satcom_parameters(self):
         with self.lock:
-            # Simulate connection status changes
-            if random.random() < 0.02:  # 2% chance of connection status change
-                self.connection_status = random.choice(['connected', 'disconnected', 'acquiring'])
-
+            # Small chance of connection status change
             if self.connection_status == 'connected':
-                self.signal_strength = random.uniform(60, 100)  # Signal strength in dB
-                self.data_rate = random.uniform(0.1, 2)  # Data rate in Mbps
-                self.latency = random.uniform(500, 1000)  # Latency in ms
-                if not self.satellite_id:
-                    self.satellite_id = f"SAT-{random.randint(1000, 9999)}"
+                if random.random() < 0.005:   # 0.5% dropout chance
+                    self.connection_status = 'disconnected'
+                    self.signal_strength = 0
+                    self.data_rate = 0
+                    self.latency = 0
+                    self.satellite_id = None
+                else:
+                    self.signal_strength = random.uniform(60, 100)
+                    self.data_rate = random.uniform(0.1, 2)
+                    self.latency = random.uniform(500, 1000)
+            elif self.connection_status == 'acquiring':
+                if random.random() < 0.08:   # 8% per tick → links within ~12 s on average
+                    self.connection_status = 'connected'
+                    self.signal_strength  = random.uniform(60, 100)
+                    self.data_rate        = random.uniform(0.1, 2)
+                    self.latency          = random.uniform(500, 1000)
+                    self.satellite_id     = f"SAT-{random.randint(1000, 9999)}"
+                    logger.info(f"[SATCOM] Linked to {self.satellite_id}")
             else:
+                if random.random() < 0.02:   # 2% spontaneous connection attempt
+                    self.connection_status = 'acquiring'
                 self.signal_strength = 0
                 self.data_rate = 0
                 self.latency = 0
@@ -67,16 +74,15 @@ class SatCom:
         with self.lock:
             self.satcom_data = {
                 'connection_status': self.connection_status,
-                'signal_strength': round(self.signal_strength, 2),
-                'data_rate': round(self.data_rate, 2),
-                'latency': round(self.latency, 2),
-                'satellite_id': self.satellite_id,
-                'elevation_angle': random.uniform(0, 90) if self.connection_status == 'connected' else 0,
-                'azimuth_angle': random.uniform(0, 360) if self.connection_status == 'connected' else 0,
-                'frequency_band': random.choice(['L', 'Ku', 'Ka']) if self.connection_status == 'connected' else None,
-                'bit_error_rate': random.uniform(0, 0.001) if self.connection_status == 'connected' else 0,
+                'signal_strength':   round(self.signal_strength, 2),
+                'data_rate_kbps':    round(self.data_rate * 1000, 1),   # Mbps → kbps
+                'latency_ms':        round(self.latency, 2),
+                'satellite_id':      self.satellite_id,
+                'elevation_deg':     random.uniform(0, 90)  if self.connection_status == 'connected' else 0,
+                'azimuth_deg':       random.uniform(0, 360) if self.connection_status == 'connected' else 0,
+                'band':              random.choice(['L', 'Ku', 'Ka']) if self.connection_status == 'connected' else None,
+                'bit_error_rate':    random.uniform(0, 0.001) if self.connection_status == 'connected' else 0,
             }
-#            self.message_handler.send_satcom_data(self.satcom_data)
 
     def update(self):
         while not self.running.is_set():
@@ -108,6 +114,11 @@ class SatCom:
         with self.lock:
             return self.satcom_data
 
+    def is_connected(self) -> bool:
+        """Return True when actively linked to a satellite."""
+        with self.lock:
+            return self.connection_status == 'connected'
+
     def send_message(self, message):
         if self.connection_status == 'connected':
             logger.info(f"Sending message via SatCom: {message}")
@@ -117,34 +128,20 @@ class SatCom:
             logger.warning("Cannot send message: SatCom not connected")
             return False
 
-    def receive_message(self):
-        message = self.message_handler.receive_message()
-        if message:
-            self._process_received_message(message)
-
     def _process_received_message(self, message):
-        # Process the received message
         logger.info(f"Received SatCom message: {message}")
-        # Here you would typically parse the message and take appropriate action
-        # For example, updating satcom parameters or forwarding to other systems
 
     def acquire_satellite(self):
-        if self.connection_status != 'connected':
-            logger.info("Attempting to acquire satellite...")
-            # Simulate satellite acquisition process
-            acquisition_time = random.uniform(5, 30)
-            time.sleep(acquisition_time)
-            if random.random() < 0.8:  # 80% chance of successful acquisition
-                self.connection_status = 'connected'
-                self.satellite_id = f"SAT-{random.randint(1000, 9999)}"
-                logger.info(f"Satellite acquired. Connected to {self.satellite_id}")
-                return True
-            else:
-                logger.warning("Failed to acquire satellite")
-                return False
-        else:
-            logger.info("Already connected to a satellite")
-            return True
+        """Non-blocking acquisition trigger. Sets status to 'acquiring';
+        simulate_satcom_parameters will complete the link on a future tick."""
+        with self.lock:
+            if self.connection_status != 'connected':
+                self.connection_status = 'acquiring'
+                logger.info("[SATCOM] Satellite acquisition triggered")
+
+    def force_acquire(self):
+        """Alias for acquire_satellite (compatibility)."""
+        self.acquire_satellite()
 
 # Example usage
 if __name__ == "__main__":

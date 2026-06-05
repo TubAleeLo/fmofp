@@ -45,7 +45,7 @@ class CommsService:
         self._satcom = {
             'connection_status': 'disconnected',
             'signal_strength':   0.0,
-            'data_rate':         0.0,     # kbps
+            'data_rate_kbps':    0.0,
             'latency_ms':        0.0,
             'satellite_id':      None,
         }
@@ -53,8 +53,10 @@ class CommsService:
         # Data link state
         self._datalink = {
             'link_status':       'inactive',
-            'messages_sent':     0,
-            'messages_received': 0,
+            'mode':              'LOS',
+            'channel':           1,
+            'packets_sent':      0,
+            'packets_received':  0,
             'error_rate':        0.0,
         }
 
@@ -86,23 +88,31 @@ class CommsService:
             if self._satcom['connection_status'] == 'connected':
                 self._satcom['signal_strength'] = max(0, min(100,
                     self._satcom['signal_strength'] + random.uniform(-1, 1)))
-                self._satcom['data_rate'] = max(0,
-                    self._satcom['data_rate'] + random.uniform(-5, 5))
+                self._satcom['data_rate_kbps'] = max(0,
+                    self._satcom['data_rate_kbps'] + random.uniform(-5, 5))
                 self._satcom['latency_ms'] = max(200,
                     self._satcom['latency_ms'] + random.uniform(-10, 10))
             else:
                 if random.random() < 0.01:
                     self._satcom['connection_status'] = 'connected'
                     self._satcom['signal_strength']   = random.uniform(40, 80)
-                    self._satcom['data_rate']         = random.uniform(50, 200)
+                    self._satcom['data_rate_kbps']    = random.uniform(50, 200)
                     self._satcom['latency_ms']        = random.uniform(200, 600)
                     self._satcom['satellite_id']      = random.randint(1, 12)
+                elif self._satcom['connection_status'] == 'acquiring':
+                    if random.random() < 0.05:   # 5% per tick while acquiring
+                        self._satcom['connection_status'] = 'connected'
+                        self._satcom['signal_strength']   = random.uniform(40, 80)
+                        self._satcom['data_rate_kbps']    = random.uniform(50, 200)
+                        self._satcom['latency_ms']        = random.uniform(200, 600)
+                        self._satcom['satellite_id']      = random.randint(1, 12)
+                        logger.info("[COMMS] Satellite acquired")
 
             # Data link
             if self._satcom['connection_status'] == 'connected':
                 self._datalink['link_status'] = 'active'
-                self._datalink['messages_sent']     += random.randint(0, 2)
-                self._datalink['messages_received'] += random.randint(0, 2)
+                self._datalink['packets_sent']     += random.randint(0, 2)
+                self._datalink['packets_received'] += random.randint(0, 2)
                 self._datalink['error_rate'] = max(0,
                     self._datalink['error_rate'] + random.uniform(-0.1, 0.1))
             else:
@@ -174,6 +184,60 @@ class CommsService:
         with self._lock:
             if mode in ('AM', 'FM', 'USB', 'LSB'):
                 self._radio['mode'] = mode
+
+    def set_radio_volume(self, volume: int) -> None:
+        with self._lock:
+            self._radio['volume'] = max(0, min(100, int(volume)))
+
+    def set_radio_squelch(self, squelch: int) -> None:
+        with self._lock:
+            self._radio['squelch'] = max(0, min(9, int(squelch)))
+
+    def transmit_radio(self, message: str) -> bool:
+        with self._lock:
+            active = self._radio.get('active', False)
+        if active:
+            logger.info(f"[COMMS] Radio TX: {message[:80]}")
+            return True
+        logger.warning("[COMMS] Radio TX failed: no signal")
+        return False
+
+    def acquire_satellite(self) -> None:
+        """Trigger a satellite acquisition attempt (sets status to 'acquiring')."""
+        with self._lock:
+            if self._satcom['connection_status'] != 'connected':
+                self._satcom['connection_status'] = 'acquiring'
+                logger.info("[COMMS] Satellite acquisition triggered")
+
+    def send_satcom(self, message: str) -> bool:
+        with self._lock:
+            connected = self._satcom['connection_status'] == 'connected'
+        if connected:
+            logger.info(f"[COMMS] SatCom TX: {message[:80]}")
+            return True
+        logger.warning("[COMMS] SatCom TX failed: not connected")
+        return False
+
+    def set_datalink_mode(self, mode: str) -> None:
+        if mode in ('LOS', 'BLOS'):
+            with self._lock:
+                self._datalink['mode'] = mode
+            logger.info(f"[COMMS] DataLink mode → {mode}")
+
+    def set_datalink_channel(self, channel: int) -> None:
+        with self._lock:
+            self._datalink['channel'] = max(1, min(20, int(channel)))
+
+    def send_datalink(self, message: str, priority: int = 2) -> bool:
+        with self._lock:
+            active = self._datalink.get('link_status') == 'active'
+        if active:
+            with self._lock:
+                self._datalink['packets_sent'] += 1
+            logger.info(f"[COMMS] DataLink TX (pri={priority}): {message[:80]}")
+            return True
+        logger.warning("[COMMS] DataLink TX failed: link inactive")
+        return False
 
 
 def get_comms_service() -> CommsService:

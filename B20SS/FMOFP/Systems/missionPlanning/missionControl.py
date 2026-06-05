@@ -13,214 +13,180 @@ from FMOFP.Utils.logger.sys_logger import get_logger
 logger = get_logger()
 
 class MissionPhase(Enum):
-    PLANNING = 1
-    INGRESS = 2
+    PLANNING  = 1
+    INGRESS   = 2
     OBJECTIVE = 3
-    EGRESS = 4
-    COMPLETE = 5
+    EGRESS    = 4
+    COMPLETE  = 5
 
 class Waypoint:
     def __init__(self, id: int, lat: float, lon: float, alt: float):
-        self.id = id
+        self.id  = id
         self.lat = lat
         self.lon = lon
         self.alt = alt
 
 class Target:
     def __init__(self, id: int, lat: float, lon: float, priority: int):
-        self.id = id
-        self.lat = lat
-        self.lon = lon
+        self.id       = id
+        self.lat      = lat
+        self.lon      = lon
         self.priority = priority
-        self.status = "Pending"
+        self.status   = "Pending"
 
 class Threat:
     def __init__(self, id: int, lat: float, lon: float, threat_level: int):
-        self.id = id
-        self.lat = lat
-        self.lon = lon
+        self.id           = id
+        self.lat          = lat
+        self.lon          = lon
         self.threat_level = threat_level
 
 class MissionPlanningSystem:
     def __init__(self):
-        self.phase = MissionPhase.PLANNING
-        self.waypoints: List[Waypoint] = []
-        self.targets: Dict[int, Target] = {}
-        self.threats: Dict[int, Threat] = {}
-        self.current_position = (35.414750000000004, -97.3866388888889, 1290.6)  # lat, lon, alt
-        self.lock = threading.Lock()
-        self.db = DatabaseManager('FMOFP/dbConfig.xml').get_system_db('mission')
-        self.message_handler = MessageHandler()
-        self.aircraft_speed = 500  # km/h, assuming a constant speed for simplicity
+        self.phase            = MissionPhase.PLANNING
+        self.waypoints:  List[Waypoint]      = []
+        self.targets:    Dict[int, Target]   = {}
+        self.threats:    Dict[int, Threat]   = {}
+        self.current_position = (35.414750000000004, -97.3866388888889, 1290.6)
+        self.lock             = threading.Lock()
+        self.aircraft_speed   = 500  # km/h
+
+        # DB is optional — failures are non-fatal
+        self._db = None
+        try:
+            self._db = DatabaseManager('FMOFP/dbConfig.xml').get_system_db('mission_management_system')
+        except Exception as e:
+            logger.warning(f"[MPS] DB unavailable (non-fatal): {e}")
+
+        try:
+            from FMOFP.local_messaging.routing.MessageRoutingService import get_message_routing_service
+            self.message_handler = _MessageHandlerShim(get_message_routing_service())
+        except Exception:
+            self.message_handler = _MessageHandlerShim(None)
 
     def set_phase(self, phase: MissionPhase):
         with self.lock:
             self.phase = phase
-            self.db.update_table('mission_status', {'phase': phase.value}, {'id': 1})
             self._send_phase_update()
 
     def _send_phase_update(self):
         try:
-            message = {
-                'type': 'mission_phase_update',
-                'phase': self.phase.value
-            }
+            message = {'type': 'mission_phase_update', 'phase': self.phase.value}
             self.message_handler.send_mission_data(message)
         except Exception as e:
-            logger.error(f"Failed to send phase update: {e}")
+            logger.debug(f"[MPS] Phase update send failed: {e}")
 
     def add_waypoint(self, lat: float, lon: float, alt: float):
         with self.lock:
-            try:
-                waypoint_id = len(self.waypoints) + 1
-                waypoint = Waypoint(waypoint_id, lat, lon, alt)
-                self.waypoints.append(waypoint)
-                self.db.insert_into_table('mission_waypoints', {
-                    'id': waypoint_id,
-                    'latitude': lat,
-                    'longitude': lon,
-                    'altitude': alt
-                })
-                logger.info(f"Added waypoint {waypoint_id}")
-            except Exception as e:
-                logger.error(f"Failed to add waypoint: {e}")
+            wp_id   = len(self.waypoints) + 1
+            waypoint = Waypoint(wp_id, lat, lon, alt)
+            self.waypoints.append(waypoint)
+            logger.info(f"[MPS] Added waypoint {wp_id}")
 
     def add_target(self, lat: float, lon: float, priority: int):
         with self.lock:
-            try:
-                target_id = len(self.targets) + 1
-                target = Target(target_id, lat, lon, priority)
-                self.targets[target_id] = target
-                self.db.insert_into_table('mission_targets', {
-                    'id': target_id,
-                    'latitude': lat,
-                    'longitude': lon,
-                    'priority': priority,
-                    'status': target.status
-                })
-                logger.info(f"Added target {target_id}")
-            except Exception as e:
-                logger.error(f"Failed to add target: {e}")
+            t_id   = len(self.targets) + 1
+            target = Target(t_id, lat, lon, priority)
+            self.targets[t_id] = target
+            logger.info(f"[MPS] Added target {t_id}")
 
     def add_threat(self, lat: float, lon: float, threat_level: int):
         with self.lock:
-            try:
-                threat_id = len(self.threats) + 1
-                threat = Threat(threat_id, lat, lon, threat_level)
-                self.threats[threat_id] = threat
-                self.db.insert_into_table('mission_threats', {
-                    'id': threat_id,
-                    'latitude': lat,
-                    'longitude': lon,
-                    'threat_level': threat_level
-                })
-                logger.info(f"Added threat {threat_id}")
-            except Exception as e:
-                logger.error(f"Failed to add threat: {e}")
+            th_id  = len(self.threats) + 1
+            threat = Threat(th_id, lat, lon, threat_level)
+            self.threats[th_id] = threat
+            logger.info(f"[MPS] Added threat {th_id}")
 
     def update_current_position(self, lat: float, lon: float, alt: float):
         with self.lock:
-            try:
-                self.current_position = (lat, lon, alt)
-                self.db.update_table('mission_status', {
-                    'current_lat': lat,
-                    'current_lon': lon,
-                    'current_alt': alt
-                }, {'id': 1})
-            except Exception as e:
-                logger.error(f"Failed to update current position: {e}")
+            self.current_position = (lat, lon, alt)
 
     def get_next_waypoint(self) -> Waypoint:
         if not self.waypoints:
             return None
         return min(self.waypoints, key=lambda w: self._calculate_distance(w))
 
-
-
     def _calculate_distance(self, point: Union[Waypoint, Target, Threat]) -> float:
         lat1, lon1, _ = self.current_position
-        lat2, lon2 = point.lat, point.lon
-        return math.sqrt((lat2 - lat1)**2 + (lon2 - lon1)**2)
+        return math.sqrt((point.lat - lat1) ** 2 + (point.lon - lon1) ** 2)
 
     def calculate_eta(self, waypoint: Waypoint) -> float:
-        distance = self._calculate_distance(waypoint)
-        return distance / self.aircraft_speed  # ETA in hours
+        return self._calculate_distance(waypoint) / self.aircraft_speed
 
     def update_target_status(self, target_id: int, status: str):
         with self.lock:
-            try:
-                if target_id in self.targets:
-                    self.targets[target_id].status = status
-                    self.db.update_table('mission_targets', {'status': status}, {'id': target_id})
-                    logger.info(f"Updated target {target_id} status to {status}")
-            except Exception as e:
-                logger.error(f"Failed to update target status: {e}")
+            if target_id in self.targets:
+                self.targets[target_id].status = status
+                logger.info(f"[MPS] Target {target_id} → {status}")
 
     def assess_threats(self):
-        threat_assessment = {}
+        assessment = {}
         for threat_id, threat in self.threats.items():
-            distance = self._calculate_distance(threat)
-            threat_assessment[threat_id] = {
-                'distance': distance,
+            dist = self._calculate_distance(threat)
+            assessment[threat_id] = {
+                'distance':     dist,
                 'threat_level': threat.threat_level,
-                'risk_factor': threat.threat_level / distance  # Simple risk calculation
+                'risk_factor':  threat.threat_level / max(dist, 0.001),
             }
-        return threat_assessment
+        return assessment
 
     def optimize_route(self):
-        # Simple route optimization: sort waypoints by distance and adjust for high-priority targets
         self.waypoints.sort(key=lambda w: self._calculate_distance(w))
-
-        # Insert high-priority targets into the route
-        for target_id, target in sorted(self.targets.items(), key=lambda x: x[1].priority, reverse=True):
-            insert_index = next((i for i, w in enumerate(self.waypoints) if self._calculate_distance(w) > self._calculate_distance(target)), len(self.waypoints))
-            self.waypoints.insert(insert_index, Waypoint(target.id, target.lat, target.lon, self.current_position[2]))
-
-        # Avoid high-risk areas by adjusting waypoints
+        for t_id, target in sorted(self.targets.items(),
+                                    key=lambda x: x[1].priority, reverse=True):
+            insert_idx = next(
+                (i for i, w in enumerate(self.waypoints)
+                 if self._calculate_distance(w) > self._calculate_distance(target)),
+                len(self.waypoints))
+            self.waypoints.insert(insert_idx,
+                Waypoint(target.id, target.lat, target.lon, self.current_position[2]))
         threat_assessment = self.assess_threats()
-        for i, waypoint in enumerate(self.waypoints):
-            for threat_id, assessment in threat_assessment.items():
-                if assessment['risk_factor'] > 0.5:  # Arbitrary threshold
-                    # Move waypoint away from the threat
-                    waypoint.lat += (waypoint.lat - self.threats[threat_id].lat) * 0.1
-                    waypoint.lon += (waypoint.lon - self.threats[threat_id].lon) * 0.1
-
-        logger.info("Route optimized based on targets and threats")
+        for i, wp in enumerate(self.waypoints):
+            for th_id, assessment in threat_assessment.items():
+                if assessment['risk_factor'] > 0.5:
+                    wp.lat += (wp.lat - self.threats[th_id].lat) * 0.1
+                    wp.lon += (wp.lon - self.threats[th_id].lon) * 0.1
+        logger.info("[MPS] Route optimised")
 
     def send_mission_update(self):
         try:
-            next_waypoint = self.get_next_waypoint()
-            if next_waypoint:
+            nwp = self.get_next_waypoint()
+            if nwp:
                 message = {
-                    'type': 'mission_update',
-                    'phase': self.phase.value,
-                    'next_waypoint': {
-                        'id': next_waypoint.id,
-                        'lat': next_waypoint.lat,
-                        'lon': next_waypoint.lon,
-                        'alt': next_waypoint.alt
-                    },
-                    'eta': self.calculate_eta(next_waypoint)
+                    'type': 'mission_update', 'phase': self.phase.value,
+                    'next_waypoint': {'id': nwp.id, 'lat': nwp.lat,
+                                      'lon': nwp.lon, 'alt': nwp.alt},
+                    'eta': self.calculate_eta(nwp),
                 }
                 self.message_handler.send_mission_data(message)
         except Exception as e:
-            logger.error(f"Failed to send mission update: {e}")
+            logger.debug(f"[MPS] Mission update send failed: {e}")
+
+
+class _MessageHandlerShim:
+    """Thin shim so MissionPlanningSystem.message_handler calls don't crash."""
+    def __init__(self, routing_service):
+        self._rs = routing_service
+
+    def send_mission_data(self, message):
+        pass   # no-op — routing happens through MissionService / MissionMessageHandler
+
 
 class MissionManagementSystem:
     def __init__(self):
-        self.mps = MissionPlanningSystem()
-        self.running = False
-        self.update_interval = 1  # seconds
-        self.thread = None
-
+        self.mps              = MissionPlanningSystem()
+        self.running          = False
+        self.update_interval  = 1
+        self.thread           = None
 
     def run(self):
         self.running = True
 
-
     def stop(self):
         self.running = False
-
+        if self.thread:
+            self.thread.join()
+        logger.info("[MMS] Mission Management System stopped.")
 
     def update(self):
         while self.running:
@@ -231,10 +197,9 @@ class MissionManagementSystem:
                 self.mps.send_mission_update()
                 time.sleep(self.update_interval)
             except Exception as e:
-                logger.error(f"Error in mission management update: {e}")
+                logger.error(f"[MMS] Update error: {e}")
 
     def update_position(self):
-        # Simulate position updates (in a real system, this would come from the GPS)
         lat, lon, alt = self.mps.current_position
         lat += random.uniform(-0.0001, 0.0001)
         lon += random.uniform(-0.0001, 0.0001)
@@ -242,32 +207,23 @@ class MissionManagementSystem:
         self.mps.update_current_position(lat, lon, alt)
 
     def check_waypoints(self):
-        next_waypoint = self.mps.get_next_waypoint()
-        if next_waypoint:
-            distance = self.mps._calculate_distance(next_waypoint)
-            if distance < 0.001:  # If within 100 meters of the waypoint
-                self.mps.waypoints.remove(next_waypoint)
-                logger.info(f"Reached waypoint {next_waypoint.id}")
-                if not self.mps.waypoints:
-                    self.mps.set_phase(MissionPhase.OBJECTIVE)
+        nwp = self.mps.get_next_waypoint()
+        if nwp and self.mps._calculate_distance(nwp) < 0.001:
+            self.mps.waypoints.remove(nwp)
+            logger.info(f"[MMS] Reached waypoint {nwp.id}")
+            if not self.mps.waypoints:
+                self.mps.set_phase(MissionPhase.OBJECTIVE)
 
     def update_targets(self):
         for target in self.mps.targets.values():
-            if target.status == "Pending" and random.random() < 0.1:  # 10% chance to engage a target
+            if target.status == "Pending" and random.random() < 0.1:
                 self.mps.update_target_status(target.id, "Engaged")
-                logger.info(f"Engaged target {target.id}")
 
     def start(self):
         self.running = True
-        self.thread = threading.Thread(target=self.update)   # THREAD STARTED IN WRONG PLACE - SHOULD START IN system_manager.py
+        self.thread  = threading.Thread(target=self.update, daemon=True)
         self.thread.start()
-        logger.info("Mission Management System started.")
-
-    def stop(self):
-        self.running = False
-        if self.thread:
-            self.thread.join()
-        logger.info("Mission Management System stopped.")
+        logger.info("[MMS] Mission Management System started.")
 
     def set_phase(self, phase: MissionPhase):
         self.mps.set_phase(phase)
@@ -284,20 +240,116 @@ class MissionManagementSystem:
     def optimize_route(self):
         self.mps.optimize_route()
 
+
+# ── MissionControl ────────────────────────────────────────────────────────────
+# New coordinator class that owns RouteManager, TargetingSystem, OrderOfBattle,
+# and MissionData. Used by MissionService._ctrl.
+
+class MissionControl:
+    """
+    Top-level mission planning coordinator.
+    Owns: route (RouteManager), targeting (Targeting), oob (OrderOfBattle).
+    MissionService exposes its API; MissionMessageHandler reaches through _ctrl.
+    """
+
+    def __init__(self):
+        from FMOFP.Systems.missionPlanning.routeManagement.handleRoute import RouteManager
+        from FMOFP.Systems.missionPlanning.targeting.targeting import Targeting
+        from FMOFP.Systems.missionPlanning.orderOfBattle.orderOfBattle import OrderOfBattle
+
+        self._lock    = threading.Lock()
+        self.route    = RouteManager()
+        self.targeting = Targeting()
+        self.oob       = OrderOfBattle()
+
+        self._phase        = 'PLANNING'
+        self._objectives:  List[str] = []
+        self._roe:         List[str] = []
+        self._intelligence: dict     = {}
+
+        logger.info("[MISSION_CTRL] MissionControl initialised")
+
+    # ── Phase ──────────────────────────────────────────────────────────────────
+
+    @property
+    def phase(self) -> str:
+        with self._lock:
+            return self._phase
+
+    def set_phase(self, phase: str) -> None:
+        valid = ('PLANNING', 'INGRESS', 'OBJECTIVE', 'EGRESS', 'COMPLETE')
+        phase_up = phase.upper()
+        if phase_up in valid:
+            with self._lock:
+                self._phase = phase_up
+            logger.info(f"[MISSION_CTRL] Phase → {phase_up}")
+
+    def advance_phase(self) -> str:
+        order = ['PLANNING', 'INGRESS', 'OBJECTIVE', 'EGRESS', 'COMPLETE']
+        with self._lock:
+            try:
+                idx = order.index(self._phase)
+            except ValueError:
+                idx = 0
+            if idx < len(order) - 1:
+                self._phase = order[idx + 1]
+            new_phase = self._phase
+        logger.info(f"[MISSION_CTRL] Phase advanced → {new_phase}")
+        return new_phase
+
+    # ── Per-tick ──────────────────────────────────────────────────────────────
+
+    def tick(self, lat: float, lon: float, alt_ft: float,
+             groundspeed_kts: float = 450.0) -> None:
+        self.route.update_position(lat, lon, alt_ft, groundspeed_kts)
+        self.targeting.simulate_tick()
+
+    # ── Route delegation ──────────────────────────────────────────────────────
+
+    def update_unit_position(self, unit_id: str, lat: float, lon: float,
+                              alt_ft: float) -> bool:
+        return self.oob.update_unit_position(unit_id, (lat, lon, alt_ft))
+
+    def optimise_route_for_threats(self) -> int:
+        threats = self.oob.get_threats(min_level=2)
+        adjusted = 0
+        for t in threats:
+            pos = t.get('position', (0, 0, 0))
+            adjusted += self.route.deviate_from_threat(pos[0], pos[1])
+        return adjusted
+
+    # ── Mission data ──────────────────────────────────────────────────────────
+
+    def set_objectives(self, objectives: List[str]) -> None:
+        with self._lock:
+            self._objectives = list(objectives)
+
+    def set_roe(self, rules: List[str]) -> None:
+        with self._lock:
+            self._roe = list(rules)
+
+    def update_intelligence(self, data: dict) -> None:
+        with self._lock:
+            self._intelligence.update(data)
+
+    # ── Snapshot ──────────────────────────────────────────────────────────────
+
+    def get_snapshot(self) -> dict:
+        return {
+            'phase':       self.phase,
+            'route':       self.route.get_nav_data(),
+            'oob_summary': self.oob.summary(),
+            'targets':     self.targeting.get_prioritised(),
+            'engaged':     self.targeting.get_engaged(),
+        }
+
+
 # Example usage
 if __name__ == "__main__":
     mms = MissionManagementSystem()
     mms.start()
-
-    # Add some example waypoints, targets, and threats
     mms.add_waypoint(35.4148, -97.3867, 1300)
-    mms.add_waypoint(35.4150, -97.3870, 1350)
     mms.add_target(35.4149, -97.3868, 2)
-    mms.add_threat(35.4151, -97.3869, 3)
-
     mms.optimize_route()
-
-    # Let the system run for a while
-    time.sleep(30)
-
+    time.sleep(5)
     mms.stop()
