@@ -70,10 +70,14 @@ REQUIRED_PACKAGES = [
 ]
 
 # Local wheel directories to search (preferred over PyPI)
-WHEEL_DIRS = [
-    SCRIPT_DIR / "PyQt6",
-    SCRIPT_DIR / "python packages",
-]
+# On Windows, prefer bundled wheels; on Linux/macOS fall straight through to PyPI.
+if platform.system() == "Windows":
+    WHEEL_DIRS = [
+        SCRIPT_DIR / "PyQt6",
+        SCRIPT_DIR / "python packages",
+    ]
+else:
+    WHEEL_DIRS = []  # No bundled wheels for Linux/macOS — use PyPI via _pip_install
 
 # ---------------------------------------------------------------------------
 # Helpers

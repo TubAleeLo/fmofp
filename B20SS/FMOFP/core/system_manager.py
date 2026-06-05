@@ -796,6 +796,25 @@ class SystemManager:
             except Exception as e:
                 logger.error(f"PerformanceMonitor startup failed (non-fatal): {e}")
 
+            # ── Phase 5: scenario engine + sensor service ─────────────────────
+            try:
+                from FMOFP.Interfaces.scenarios.scenarioEngine import get_scenario_engine
+                scenario_engine = get_scenario_engine()
+                self.components['scenario_engine'] = scenario_engine
+                logger.info("ScenarioEngine registered (call load() + start() to run a scenario)")
+            except Exception as e:
+                logger.error(f"ScenarioEngine startup failed (non-fatal): {e}")
+
+            try:
+                from FMOFP.Systems.sensorManagement.sensorService import get_sensor_service
+                sensor_service = get_sensor_service()
+                sensor_service.start()
+                self.components['sensor_service'] = sensor_service
+                logger.info("SensorService started")
+            except Exception as e:
+                logger.error(f"SensorService startup failed (non-fatal): {e}")
+            # ── end Phase 5 ───────────────────────────────────────────────────
+
             # ── end Phase 3 ───────────────────────────────────────────────────
 
             # Start display management system
@@ -948,6 +967,17 @@ class SystemManager:
                         comp.stop()
                     except Exception as e:
                         logger.warning(f"Error stopping {name}: {e}")
+            # ── Phase 5 subsystem stops ──────────────────────────────────────
+            for name in ('scenario_engine', 'sensor_service'):
+                comp = self.components.get(name)
+                if comp and hasattr(comp, 'stop'):
+                    try:
+                        logger.info(f"Stopping {name}")
+                        comp.stop()
+                    except Exception as e:
+                        logger.warning(f"Error stopping {name}: {e}")
+            # ── end Phase 5 stops ─────────────────────────────────────────────
+
             # ── end Phase 3 stops ─────────────────────────────────────────────
 
             # Stop display response service

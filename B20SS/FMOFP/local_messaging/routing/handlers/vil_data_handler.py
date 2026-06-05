@@ -142,8 +142,8 @@ class VILDataHandler(BaseMessageHandler):
             bool: True if storage successful, False otherwise
         """
         try:
-            logger.info(f"[VIL_FLOW] Starting storage of VIL data with request_id: {getattr(vil_data, 'request_id', None)}")
-            logger.info(f"[VIL_FLOW] Input WeatherRadarVILData object: {vil_data.__dict__}")
+            logger.debug(f"[VIL_FLOW] Starting storage of VIL data with request_id: {getattr(vil_data, 'request_id', None)}")
+            logger.debug(f"[VIL_FLOW] Input WeatherRadarVILData object: {vil_data.__dict__}")
 
             # Verify required fields are present and add defaults if missing
             required_fields = ['request_id', 'position', 'value', 'layer_count', 'intensity']
@@ -191,7 +191,7 @@ class VILDataHandler(BaseMessageHandler):
                     subaddress_name = 'radar_display'  # Use consistent subaddress identifier
                     command_word = register_command_word(system_id, 0, subaddress_name, 'data', 'vil')
                     additional_info['command_word'] = command_word
-                    logger.info(f"[VIL_FLOW] Generated command word: {command_word} for system={system_id}, subaddress={subaddress_name}")
+                    logger.debug(f"[VIL_FLOW] Generated command word: {command_word} for system={system_id}, subaddress={subaddress_name}")
 
                 # Add mode information if available
                 if 'mode' not in additional_info:

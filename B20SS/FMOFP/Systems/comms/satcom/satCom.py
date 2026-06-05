@@ -5,7 +5,7 @@ import random
 import time
 import threading
 import json   # CHANGE TO XML
-from storage.DBM import DatabaseManager
+from FMOFP.storage.DBM import DatabaseManager
 
 from FMOFP.Utils.logger.sys_logger import get_logger
 
@@ -24,7 +24,7 @@ class SatCom:
         self.data_rate = 0
         self.latency = 0
         self.satellite_id = None
-        self.db = DatabaseManager(self.db_name, self.key)
+        self.db = DatabaseManager('FMOFP/dbConfig.xml').get_system_db('comms')
         self._setup_database()
         self.thread = None
 
@@ -37,7 +37,7 @@ class SatCom:
             received_from = 'satcom_system'
             information_type = 'communication_data'
             field_data_dict = {'id': 'INTEGER PRIMARY KEY', 'data': 'TEXT'}
-            
+
             if table_name is not None and received_from is not None and information_type is not None and field_data_dict is not None:
                 self.db.create_table(table_name, received_from, information_type, field_data_dict)
             else:
@@ -50,7 +50,7 @@ class SatCom:
             # Simulate connection status changes
             if random.random() < 0.02:  # 2% chance of connection status change
                 self.connection_status = random.choice(['connected', 'disconnected', 'acquiring'])
-            
+
             if self.connection_status == 'connected':
                 self.signal_strength = random.uniform(60, 100)  # Signal strength in dB
                 self.data_rate = random.uniform(0.1, 2)  # Data rate in Mbps

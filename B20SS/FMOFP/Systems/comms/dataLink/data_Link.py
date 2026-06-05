@@ -6,7 +6,7 @@ import time
 import threading
 import xml.etree.ElementTree as ET
 from queue import Queue, PriorityQueue
-from storage.DBM import DatabaseManager
+from FMOFP.storage.DBM import DatabaseManager
 
 from FMOFP.Utils.logger.sys_logger import get_logger
 
@@ -24,7 +24,7 @@ class DataLink:
         self.signal_strength = 0
         self.data_rate = 0
         self.latency = 0
-        self.db = DatabaseManager(self.db_name, self.key)
+        self.db = DatabaseManager('FMOFP/dbConfig.xml').get_system_db('comms')
         self._setup_database()
         self.thread = None
         self.message_queue = PriorityQueue()
@@ -36,7 +36,7 @@ class DataLink:
             received_from = 'datalink_system'
             information_type = 'communication_data'
             field_data_dict = {'id': 'INTEGER PRIMARY KEY', 'data': 'TEXT'}
-            
+
             if table_name is not None and received_from is not None and information_type is not None and field_data_dict is not None:
                 self.db.create_table(table_name, received_from, information_type, field_data_dict)
             else:
@@ -48,7 +48,7 @@ class DataLink:
         with self.lock:
             if random.random() < 0.05:  # 5% chance of connection status change
                 self.connection_status = random.choice(['connected', 'disconnected', 'connecting'])
-            
+
             if self.connection_status == 'connected':
                 if self.datalink_mode == 'LOS':
                     self.signal_strength = random.uniform(80, 100)

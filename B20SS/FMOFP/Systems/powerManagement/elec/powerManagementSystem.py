@@ -5,7 +5,7 @@ import random
 import time
 import threading
 import json    # CHANGE TO XML
-from storage.DBM import DatabaseManager
+from FMOFP.storage.DBM import DatabaseManager
 from FMOFP.Utils.logger.sys_logger import get_logger
 
 logger = get_logger()
@@ -22,7 +22,7 @@ class PowerManagementSystem:
         self.aux_battery_charge = 100  # Auxiliary battery charge in percentage
         self.generator_output = 0  # Generator output in kW
         self.total_power_consumption = 0  # Total power consumption in kW
-        self.db = DatabaseManager(self.db_name, self.key)
+        self.db = DatabaseManager('FMOFP/dbConfig.xml').get_system_db('power')
         self._setup_database()
         self.thread = None
 
@@ -35,7 +35,7 @@ class PowerManagementSystem:
             received_from = 'power_management_sensors'
             information_type = 'power_management_data'
             field_data_dict = {'id': 'INTEGER PRIMARY KEY', 'data': 'TEXT'}
-            
+
             if table_name is not None and received_from is not None and information_type is not None and field_data_dict is not None:
                 self.db.create_table(table_name, received_from, information_type, field_data_dict)
             else:

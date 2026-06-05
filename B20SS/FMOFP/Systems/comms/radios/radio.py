@@ -5,7 +5,7 @@ import random
 import time
 import threading
 import json       # CHANGE TO XML
-from storage.DBM import DatabaseManager
+from FMOFP.storage.DBM import DatabaseManager
 
 from FMOFP.Utils.logger.sys_logger import get_logger
 
@@ -24,7 +24,7 @@ class Radio:
         self.volume = 50  # Default volume (0-100)
         self.squelch = 3  # Default squelch level (0-9)
         self.signal_strength = 0
-        self.db = DatabaseManager(self.db_name, self.key)
+        self.db = DatabaseManager('FMOFP/dbConfig.xml').get_system_db('comms')
         self._setup_database()
         self.thread = None
 
@@ -37,7 +37,7 @@ class Radio:
             received_from = 'radio_system'
             information_type = 'communication_data'
             field_data_dict = {'id': 'INTEGER PRIMARY KEY', 'data': 'TEXT'}
-            
+
             if table_name is not None and received_from is not None and information_type is not None and field_data_dict is not None:
                 self.db.create_table(table_name, received_from, information_type, field_data_dict)
             else:

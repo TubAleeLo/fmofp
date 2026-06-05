@@ -6,7 +6,7 @@ import time
 from typing import List, Tuple, Dict
 from typing import Union
 import Utils.common.fetching as fetching
-from storage.DBM import DatabaseManager
+from FMOFP.storage.DBM import DatabaseManager
 from FMOFP.MIL_STD_1553B.Messaging import ScheduleMessage
 from FMOFP.Utils.logger.sys_logger import get_logger
 
@@ -49,7 +49,7 @@ class MissionPlanningSystem:
         self.threats: Dict[int, Threat] = {}
         self.current_position = (35.414750000000004, -97.3866388888889, 1290.6)  # lat, lon, alt
         self.lock = threading.Lock()
-        self.db = DatabaseManager('system_data.db', 'B20SS')
+        self.db = DatabaseManager('FMOFP/dbConfig.xml').get_system_db('mission')
         self.message_handler = MessageHandler()
         self.aircraft_speed = 500  # km/h, assuming a constant speed for simplicity
 
@@ -75,7 +75,7 @@ class MissionPlanningSystem:
                 waypoint_id = len(self.waypoints) + 1
                 waypoint = Waypoint(waypoint_id, lat, lon, alt)
                 self.waypoints.append(waypoint)
-                self.db.insert_data('mission_waypoints', {
+                self.db.insert_into_table('mission_waypoints', {
                     'id': waypoint_id,
                     'latitude': lat,
                     'longitude': lon,
@@ -91,7 +91,7 @@ class MissionPlanningSystem:
                 target_id = len(self.targets) + 1
                 target = Target(target_id, lat, lon, priority)
                 self.targets[target_id] = target
-                self.db.insert_data('mission_targets', {
+                self.db.insert_into_table('mission_targets', {
                     'id': target_id,
                     'latitude': lat,
                     'longitude': lon,
@@ -108,7 +108,7 @@ class MissionPlanningSystem:
                 threat_id = len(self.threats) + 1
                 threat = Threat(threat_id, lat, lon, threat_level)
                 self.threats[threat_id] = threat
-                self.db.insert_data('mission_threats', {
+                self.db.insert_into_table('mission_threats', {
                     'id': threat_id,
                     'latitude': lat,
                     'longitude': lon,
@@ -136,7 +136,7 @@ class MissionPlanningSystem:
         return min(self.waypoints, key=lambda w: self._calculate_distance(w))
 
 
-    
+
     def _calculate_distance(self, point: Union[Waypoint, Target, Threat]) -> float:
         lat1, lon1, _ = self.current_position
         lat2, lon2 = point.lat, point.lon
@@ -151,7 +151,7 @@ class MissionPlanningSystem:
             try:
                 if target_id in self.targets:
                     self.targets[target_id].status = status
-                    self.db.update_data('mission_targets', {'status': status}, {'id': target_id})
+                    self.db.update_table('mission_targets', {'status': status}, {'id': target_id})
                     logger.info(f"Updated target {target_id} status to {status}")
             except Exception as e:
                 logger.error(f"Failed to update target status: {e}")
@@ -170,12 +170,12 @@ class MissionPlanningSystem:
     def optimize_route(self):
         # Simple route optimization: sort waypoints by distance and adjust for high-priority targets
         self.waypoints.sort(key=lambda w: self._calculate_distance(w))
-        
+
         # Insert high-priority targets into the route
         for target_id, target in sorted(self.targets.items(), key=lambda x: x[1].priority, reverse=True):
             insert_index = next((i for i, w in enumerate(self.waypoints) if self._calculate_distance(w) > self._calculate_distance(target)), len(self.waypoints))
             self.waypoints.insert(insert_index, Waypoint(target.id, target.lat, target.lon, self.current_position[2]))
-        
+
         # Avoid high-risk areas by adjusting waypoints
         threat_assessment = self.assess_threats()
         for i, waypoint in enumerate(self.waypoints):
@@ -184,7 +184,7 @@ class MissionPlanningSystem:
                     # Move waypoint away from the threat
                     waypoint.lat += (waypoint.lat - self.threats[threat_id].lat) * 0.1
                     waypoint.lon += (waypoint.lon - self.threats[threat_id].lon) * 0.1
-        
+
         logger.info("Route optimized based on targets and threats")
 
     def send_mission_update(self):
@@ -212,7 +212,7 @@ class MissionManagementSystem:
         self.running = False
         self.update_interval = 1  # seconds
         self.thread = None
-        
+
 
     def run(self):
         self.running = True
@@ -288,16 +288,16 @@ class MissionManagementSystem:
 if __name__ == "__main__":
     mms = MissionManagementSystem()
     mms.start()
-    
+
     # Add some example waypoints, targets, and threats
     mms.add_waypoint(35.4148, -97.3867, 1300)
     mms.add_waypoint(35.4150, -97.3870, 1350)
     mms.add_target(35.4149, -97.3868, 2)
     mms.add_threat(35.4151, -97.3869, 3)
-    
+
     mms.optimize_route()
-    
+
     # Let the system run for a while
     time.sleep(30)
-    
+
     mms.stop()

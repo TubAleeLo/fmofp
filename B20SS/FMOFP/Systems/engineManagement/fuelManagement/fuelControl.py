@@ -4,7 +4,7 @@ import random
 from typing import Dict, List
 from collections import defaultdict
 import Utils.common.fetching as fetching
-from storage.DBM import DatabaseManager
+from FMOFP.storage.DBM import DatabaseManager
 from FMOFP.MIL_STD_1553B.Messaging import ScheduleMessage
 from FMOFP.MIL_STD_1553B.mil_std_1553B  import MIL_STD_1553B_Message
 from FMOFP.Utils.logger.sys_logger import get_logger
@@ -55,34 +55,34 @@ class FuelSystem:
         self.fuel_lines: Dict[str, List[str]] = defaultdict(list)
         self.transfer_rates: Dict[str, float] = {}
         self.lock = threading.Lock()
-        self.db = DatabaseManager('system_data.db', 'B2OSS')
+        self.db = DatabaseManager('FMOFP/dbConfig.xml').get_system_db('engine')
         self.messaging = ScheduleMessage()
         self.rt_address = 3  # Assign a unique RT address for the Fuel Management System
 
     def add_tank(self, name: str, capacity: float):
         self.tanks[name] = FuelTank(name, capacity)
-        self.db.insert_data('fuel_tanks', {'name': name, 'capacity': capacity, 'current_level': capacity})
+        self.db.insert_into_table('fuel_tanks', {'name': name, 'capacity': capacity, 'current_level': capacity})
 
     def add_engine(self, name: str, max_thrust: float):
         self.engines[name] = Engine(name, max_thrust)
-        self.db.insert_data('engines', {'name': name, 'max_thrust': max_thrust})
+        self.db.insert_into_table('engines', {'name': name, 'max_thrust': max_thrust})
 
     def connect_tank_to_engine(self, tank_name: str, engine_name: str, transfer_rate: float):
         self.fuel_lines[tank_name].append(engine_name)
         self.transfer_rates[(tank_name, engine_name)] = transfer_rate
-        self.db.insert_data('fuel_lines', {'tank_name': tank_name, 'engine_name': engine_name, 'transfer_rate': transfer_rate})
+        self.db.insert_into_table('fuel_lines', {'tank_name': tank_name, 'engine_name': engine_name, 'transfer_rate': transfer_rate})
 
     def set_engine_thrust(self, engine_name: str, thrust_percentage: float):
         if engine_name in self.engines:
             self.engines[engine_name].set_thrust(thrust_percentage)
-            self.db.update_data('engines', {'current_thrust': self.engines[engine_name].current_thrust}, {'name': engine_name})
+            self.db.update_table('engines', {'current_thrust': self.engines[engine_name].current_thrust}, {'name': engine_name})
 
     def transfer_fuel(self, source_tank: str, destination_tank: str, amount: float):
         with self.lock:
             transferred = self.tanks[source_tank].consume(amount)
             self.tanks[destination_tank].refill(transferred)
-            self.db.update_data('fuel_tanks', {'current_level': self.tanks[source_tank].current_level}, {'name': source_tank})
-            self.db.update_data('fuel_tanks', {'current_level': self.tanks[destination_tank].current_level}, {'name': destination_tank})
+            self.db.update_table('fuel_tanks', {'current_level': self.tanks[source_tank].current_level}, {'name': source_tank})
+            self.db.update_table('fuel_tanks', {'current_level': self.tanks[destination_tank].current_level}, {'name': destination_tank})
 
     def update(self, delta_time: float):
         with self.lock:
@@ -93,7 +93,7 @@ class FuelSystem:
                     fuel_consumed = tank.consume(fuel_required)
                     if fuel_consumed < fuel_required:
                         logger.info(f"Warning: Engine {engine_name} is not receiving enough fuel from tank {tank_name}")
-                    self.db.update_data('fuel_tanks', {'current_level': tank.current_level}, {'name': tank_name})
+                    self.db.update_table('fuel_tanks', {'current_level': tank.current_level}, {'name': tank_name})
 
     def get_fuel_status(self) -> Dict[str, float]:
         return {tank.name: tank.current_level for tank in self.tanks.values()}

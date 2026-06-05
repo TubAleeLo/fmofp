@@ -164,8 +164,8 @@ class PrecipitationDataHandler(BaseMessageHandler):
             bool: True if storage successful, False otherwise
         """
         try:
-            logger.info(f"[LOC_PRECIP_DATA_HDLR_PRECIP_FLOW] Starting storage of precipitation data with request_id: {getattr(precipitation_data, 'request_id', None)}")
-            logger.info(f"[LOC_PRECIP_DATA_HDLR_PRECIP_FLOW] Input PrecipitationData object: {precipitation_data.__dict__}")
+            logger.debug(f"[LOC_PRECIP_DATA_HDLR_PRECIP_FLOW] Starting storage of precipitation data with request_id: {getattr(precipitation_data, 'request_id', None)}")
+            logger.debug(f"[LOC_PRECIP_DATA_HDLR_PRECIP_FLOW] Input PrecipitationData object: {precipitation_data.__dict__}")
 
             # Verify required fields are present and add defaults if missing
             required_fields = ['request_id', 'position', 'type', 'rate', 'intensity']
@@ -213,7 +213,7 @@ class PrecipitationDataHandler(BaseMessageHandler):
                     subaddress_name = 'radar_display'  # Use consistent subaddress identifier
                     command_word = register_command_word(system_id, 0, subaddress_name, 'data', 'precipitation')
                     additional_info['command_word'] = command_word
-                    logger.info(f"[LOC_PRECIP_DATA_HDLR_PRECIP_FLOW] Generated command word: {command_word} for system={system_id}, subaddress={subaddress_name}")
+                    logger.debug(f"[LOC_PRECIP_DATA_HDLR_PRECIP_FLOW] Generated command word: {command_word} for system={system_id}, subaddress={subaddress_name}")
 
                 # Add mode information if available
                 if 'mode' not in additional_info:
@@ -956,11 +956,11 @@ class PrecipitationDataHandler(BaseMessageHandler):
                         return False
                 else:
                     # Transfer not complete yet, wait for more blocks
-                    logger.info(f"[PRECIPITATION_FLOW_DEBUG] Block transfer not complete yet: {sequence_number}/{total_sequences}")
+                    logger.debug(f"[PRECIPITATION_FLOW_DEBUG] Block transfer not complete yet: {sequence_number}/{total_sequences}")
 
                     # Get status for logging
                     status = transfer_manager.get_transfer_status(request_id)
-                    logger.info(f"[PRECIPITATION_FLOW_DEBUG] Transfer status: {status['received_blocks']}/{status['total_blocks']} blocks received ({status['percent_complete']:.1f}% complete)")
+                    logger.debug(f"[PRECIPITATION_FLOW_DEBUG] Transfer status: {status['received_blocks']}/{status['total_blocks']} blocks received ({status['percent_complete']:.1f}% complete)")
 
                     # Return true since we've handled this block
                     return True
