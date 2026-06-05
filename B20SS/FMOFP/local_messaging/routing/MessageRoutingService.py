@@ -35,15 +35,17 @@ class MessageRoutingService:
             self.radar_response_service = None
             self.display_response_service = None
             self._vil_service = None  # Initialize VIL service reference
-            
+            self._comms_service = None    # CommsService reference
+            self._mission_service = None  # MissionService reference
+
             # Initialize unified router
             from FMOFP.local_messaging.routing.unified_router import get_unified_router
             self.unified_router = get_unified_router()
-            
+
             # Initialize routing registry
             from FMOFP.local_messaging.routing.routing_registry import get_routing_registry
             self.routing_registry = get_routing_registry()
-            
+
             # Load routing configuration
             try:
                 self.routing_registry.load_from_xml(
@@ -54,7 +56,7 @@ class MessageRoutingService:
             except Exception as e:
                 logger.error(f"Error loading routing registry: {e}")
                 logger.error(traceback.format_exc())
-            
+
             self._initialized = True
             logger.info("MessageRoutingService initialized with Unified Router")
             logger.info(f"Unified Router instance ID: {id(self.unified_router)}")
@@ -77,6 +79,16 @@ class MessageRoutingService:
         else:
             logger.warning("Attempted to set null radar_response_service")
 
+    def set_comms_service(self, service) -> None:
+        """Register CommsService so route_comms_message can use it directly."""
+        self._comms_service = service
+        logger.info("CommsService registered with MessageRoutingService")
+
+    def set_mission_service(self, service) -> None:
+        """Register MissionService so route_mission_message can use it directly."""
+        self._mission_service = service
+        logger.info("MissionService registered with MessageRoutingService")
+
     async def stop(self):
         """Stop the message routing service."""
         logger.info("Stopping message routing service")
@@ -95,24 +107,24 @@ class MessageRoutingService:
         try:
             # Log routing attempt
             logger.info(f"[ACK] Routing status word with request_id: {message.get('request_id')} via UnifiedRouter")
-            
+
             # Add message type if not present
             if 'message_type' not in message:
                 message['message_type'] = 'radar_statusWord'
-                
+
             # Add command type if not present
             if 'command_type' not in message:
                 message['command_type'] = 'status_word'
-                
+
             # Route through UnifiedRouter
             from FMOFP.local_messaging.routing.system_integration import route_message
             result = route_message(message)
-            
+
             if result:
                 logger.info(f"[ACK] Successfully routed status word with request_id: {message.get('request_id')}")
             else:
                 logger.error(f"[ACK] Failed to route status word with request_id: {message.get('request_id')}")
-                
+
             return result
         except Exception as e:
             logger.error(f"Error routing status word: {e}")
@@ -153,7 +165,7 @@ class MessageRoutingService:
             else:
                 # Normal operation
                 await self.radar_response_service.handle_status_word_async(status_word_message)
-            
+
             logger.info(f"Routed status word with request_id: {request_id}")
         except Exception as e:
             logger.error(f"Error routing status word: {e}")
@@ -161,7 +173,7 @@ class MessageRoutingService:
 
     async def route_event(self, event_data: Dict[str, Any]):
         """Route event data to appropriate handlers.
-        
+
         Args:
             event_data: Dictionary containing event data
         """
@@ -174,7 +186,7 @@ class MessageRoutingService:
                 raise Exception("Display message handler not found")
 
             ## Handle display mode changed events
-            
+
             ## Extract event type
             event_type = event_data.get('event_type')
             if not event_type:
@@ -188,11 +200,11 @@ class MessageRoutingService:
                 # Get display message handler
                 from FMOFP.local_messaging.routing.handlers.system_message_handlers.DisplayMessageHandler import get_display_message_handler
                 display_handler = get_display_message_handler()
-                
+
                 if display_handler and mode:
                     # Import radar display modes
                     from FMOFP.local_messaging.radar_display_modes import RadarDisplayMode
-                    
+
                     # Map the mode string to RadarDisplayMode enum
                     mode_map = {
                         'STANDBY': RadarDisplayMode.STANDBY,
@@ -201,13 +213,13 @@ class MessageRoutingService:
                         'TURBULENCE': RadarDisplayMode.TURBULENCE,
                         'WINDSHEAR': RadarDisplayMode.WINDSHEAR
                     }
-                    
+
                     # Get the display mode - use the actual mode from the event
                     # If mode is not in the map, log an error but continue with the original mode string
                     if mode in mode_map:
                         display_mode = mode_map[mode]
                         logger.warning(f"[DISPLAY_MODE] Mapped mode {mode} to {display_mode.name}")
-                        
+
                         # Create enhanced command data with explicit flags to prevent loops
                         enhanced_command_data = {
                             'mode': display_mode.name,
@@ -217,7 +229,7 @@ class MessageRoutingService:
                             '_prevent_rerouting': True,  # Add explicit flag to prevent re-routing
                             'transaction_id': str(uuid.uuid4())  # Add unique transaction ID
                         }
-                        
+
                         # Send mode change through proper channel
                         logger.warning(f"[DISPLAY_MODE] Setting display mode to {display_mode.name} for {display_type}")
                         await display_handler.send_request(
@@ -235,7 +247,7 @@ class MessageRoutingService:
         except Exception as e:
             logger.error(f"[ROUTE_EVENT] Error routing event: {e}")
             logger.error(traceback.format_exc())
-    
+
     async def route_mode_change(self, message: Dict[str, Any]):
         """Route mode change data to storage using UnifiedRouter"""
         try:
@@ -243,28 +255,28 @@ class MessageRoutingService:
             request_id = message.get('request_id')
             if not request_id:
                 raise ValueError("[MSG_ROUTE_MODE_CHANGE] message missing request_id")
-                
+
             # Log routing attempt
             logger.info(f"[MSG_ROUTE_MODE_CHANGE] Routing mode change with request_id: {request_id} via UnifiedRouter")
-            
+
             # Add message_type if not present
             if 'message_type' not in message:
                 radar_type = message.get('radar_type', 'weather_radar')
                 message['message_type'] = f"{radar_type}_modeChangeRequest"
-                
+
             # Make sure command_type is set
             if 'command_type' not in message:
                 message['command_type'] = 'mode_change'
-                
+
             # Route through UnifiedRouter
             from FMOFP.local_messaging.routing.system_integration import route_message
             result = route_message(message)
-            
+
             if result:
                 logger.info(f"[MSG_ROUTE_MODE_CHANGE] Successfully routed mode change with request_id: {request_id}")
             else:
                 logger.error(f"[MSG_ROUTE_MODE_CHANGE] Failed to route mode change with request_id: {request_id}")
-                
+
             return result
         except Exception as e:
             logger.error(f"[MSG_ROUTE_MODE_CHANGE] Error routing mode change: {e}")
@@ -304,7 +316,7 @@ class MessageRoutingService:
         except Exception as e:
             logger.error(f"Error getting command acknowledgments: {e}")
             return []
-            
+
     async def _ensure_vil_service(self):
         """Ensure VIL service is available, creating it if necessary"""
         if not self._vil_service:
@@ -312,32 +324,32 @@ class MessageRoutingService:
             from FMOFP.core.system_manager import get_system_manager
             system_manager = get_system_manager()
             self._vil_service = system_manager.get_component('vil_response_service')
-            
+
             if not self._vil_service:
                 logger.warning("[VIL_FLOW] VIL Response Service not found in system manager - creating fallback instance")
                 # Create a new VIL Response Service instance
                 from FMOFP.local_messaging.routing.response_services.data_response_services.vil_response_service import VILResponseService
                 from FMOFP.storage.DBM import DatabaseManager
-                
+
                 # Get radar database
                 db_manager = DatabaseManager('FMOFP/dbConfig.xml')
                 radar_db = db_manager.get_system_db('radar_management')
-                
+
                 # Create VIL service
                 self._vil_service = VILResponseService(radar_db)
-                
+
                 # Start the service
                 event_loop = asyncio.get_event_loop()
                 await self._vil_service.start(event_loop=event_loop)
-                
+
                 # Register with system manager
                 system_manager.register_component('vil_response_service', self._vil_service)
                 logger.info("[VIL_FLOW] Created and registered new VIL Response Service instance")
             else:
                 logger.info("[VIL_FLOW] Retrieved VIL Response Service from system manager")
-        
+
         return self._vil_service
-        
+
     # New helper method for precipitation service
     async def _ensure_precipitation_service(self):
         """Ensure Precipitation service is available, creating it if necessary"""
@@ -345,26 +357,26 @@ class MessageRoutingService:
         from FMOFP.core.system_manager import get_system_manager
         system_manager = get_system_manager()
         precip_service = system_manager.get_component('precipitation_response_service')
-        
+
         if not precip_service:
             logger.warning("[LOC_MSG_RT_SERV_PRECIP_FLOW] Precipitation Response Service not found in system manager - creating fallback instance")
             # Create a new Precipitation Response Service instance
             from FMOFP.local_messaging.routing.response_services.data_response_services.precipitation_response_service import get_precipitation_response_service
             from FMOFP.storage.DBM import DatabaseManager
-            
+
             # Get the service using the singleton
             precip_service = get_precipitation_response_service()
-            
+
             # Start the service
             event_loop = asyncio.get_event_loop()
             await precip_service.start(event_loop=event_loop)
-            
+
             # Register with system manager
             system_manager.register_component('precipitation_response_service', precip_service)
             logger.info("[LOC_MSG_RT_SERV_PRECIP_FLOW] Created and registered new Precipitation Response Service instance")
         else:
             logger.info("[LOC_MSG_RT_SERV_PRECIP_FLOW] Retrieved Precipitation Response Service from system manager")
-        
+
         return precip_service
 
     async def route_vil_data(self, message: Dict[str, Any]):
@@ -377,24 +389,24 @@ class MessageRoutingService:
 
             # Log routing attempt
             logger.info(f"[VIL_FLOW] Routing VIL data with request_id: {request_id} via UnifiedRouter")
-            
+
             # Add message_type if not present
             if 'message_type' not in message:
                 message['message_type'] = 'weather_radarVILResponse'
-                
+
             # Make sure command_type is set
             if 'command_type' not in message:
                 message['command_type'] = 'vil_data'
-                
+
             # Route through UnifiedRouter
             from FMOFP.local_messaging.routing.system_integration import route_message
             result = route_message(message)
-            
+
             if result:
                 logger.info(f"[VIL_FLOW] Successfully routed VIL data with request_id: {request_id}")
             else:
                 logger.error(f"[VIL_FLOW] Failed to route VIL data with request_id: {request_id}")
-                
+
             return result
         except Exception as e:
             logger.error(f"Error routing VIL data: {e}")
@@ -405,14 +417,14 @@ class MessageRoutingService:
     async def route_precipitation_data(self, message: Dict[str, Any]):
         """
         Route precipitation data to display system.
-        
+
         This method handles converting various formats of precipitation data into
         proper PrecipitationData objects, taking into account serialization/deserialization
         that may have occurred during message transmission.
-        
+
         Args:
             message: Dictionary containing precipitation data and metadata
-            
+
         Raises:
             ValueError: If no valid precipitation data could be extracted
         """
@@ -421,7 +433,7 @@ class MessageRoutingService:
             if message.get('metadata', {}).get('_processed_by_routing_service', False):
                 logger.warning("[PRECIPITATION_FLOW] Detected routing loop - message already processed by routing service")
                 return
-            
+
             # Extract request_id if present
             request_id = message.get('request_id')
             if not request_id:
@@ -430,14 +442,14 @@ class MessageRoutingService:
 
             # Extract original precipitation data with enhanced checking
             precipitation_data = None
-            
+
             # Try different locations where precipitation data might be stored
             for key in ['precipitation_data', 'data', 'precipitation']:
                 if key in message and message[key] is not None:
                     precipitation_data = message[key]
                     logger.info(f"[PRECIPITATION_FLOW] Found precipitation data in '{key}' field")
                     break
-                    
+
             # Check for nested data structures
             if precipitation_data is None and 'metadata' in message and isinstance(message['metadata'], dict):
                 metadata = message['metadata']
@@ -454,7 +466,7 @@ class MessageRoutingService:
                             precipitation_data = metadata[key]
                             logger.info(f"[PRECIPITATION_FLOW] Found precipitation data in metadata.{key}")
                             break
-            
+
             if precipitation_data is None:
                 logger.error("[PRECIPITATION_FLOW] No precipitation data found in message")
                 # Log the complete message structure without sensitive data
@@ -462,14 +474,14 @@ class MessageRoutingService:
                 if 'metadata' in message and isinstance(message['metadata'], dict):
                     logger.error(f"[PRECIPITATION_FLOW] Metadata keys: {list(message['metadata'].keys())}")
                 raise ValueError("No precipitation data found in message")
-            
+
             # Import here to avoid circular imports
             from FMOFP.local_messaging.messageConfigurations.weather_radar_data import PrecipitationData
-            
+
             # Log detailed message for debugging
             logger.info(f"[PRECIPITATION_FLOW] Routing precipitation data to display system")
             logger.info(f"[PRECIPITATION_FLOW] Precipitation data type: {type(precipitation_data)}")
-            
+
             # Enhanced data conversion with better null handling
             def extract_position(data_point):
                 """Extract position from various formats."""
@@ -479,21 +491,21 @@ class MessageRoutingService:
                     if position is not None:
                         # Return tuple as is
                         return position
-                    
+
                     # Try to get x, y coordinates
                     x = data_point.get('x', data_point.get('position_x'))
                     y = data_point.get('y', data_point.get('position_y'))
-                    
+
                     if x is not None and y is not None:
                         return (float(x), float(y))
-                    
+
                     # Try to get x_position, y_position
                     x = data_point.get('x_position')
                     y = data_point.get('y_position')
-                    
+
                     if x is not None and y is not None:
                         return (float(x), float(y))
-                        
+
                     # Default to (0.0, 0.0) if no position found
                     return (0.0, 0.0)
                 elif hasattr(data_point, 'position'):
@@ -504,10 +516,10 @@ class MessageRoutingService:
                     return (float(data_point.position_x), float(data_point.position_y))
                 else:
                     return (0.0, 0.0)
-            
+
             # Create proper precipitation data objects
             precipitation_data_objects = []
-            
+
             # Handle list of data points
             if isinstance(precipitation_data, list):
                 for data_point in precipitation_data:
@@ -515,28 +527,28 @@ class MessageRoutingService:
                         # Skip None values in the list
                         if data_point is None:
                             continue
-                            
+
                         # Handle dictionary format (most common after serialization)
                         if isinstance(data_point, dict):
                             # Extract position from dictionary with fallback to defaults
                             position = extract_position(data_point)
-                            
+
                             # Extract other properties with fallbacks
                             precip_type = data_point.get('type', 'unknown')
                             # Handle string vs list format for rate
                             rate = data_point.get('rate', 20.0)
                             if isinstance(rate, list) and len(rate) > 0:
                                 rate = rate[0]
-                            # Handle string vs float for intensity    
+                            # Handle string vs float for intensity
                             intensity = data_point.get('intensity', 0.5)
                             if isinstance(intensity, str):
                                 try:
                                     intensity = float(intensity)
                                 except (ValueError, TypeError):
                                     intensity = 0.5
-                            
+
                             show_values = bool(data_point.get('show_values', True))
-                            
+
                             # Create PrecipitationData object with extracted values
                             precip_obj = PrecipitationData(
                                 position=position,
@@ -545,17 +557,17 @@ class MessageRoutingService:
                                 intensity=float(intensity),
                                 show_values=show_values
                             )
-                            
+
                             # Add request_id and timestamp
                             precip_obj.request_id = request_id
                             precip_obj.timestamp = message.get('timestamp', time.time())
-                            
+
                             # Add any additional info
                             if 'additional_info' not in precip_obj.additional_info and 'additional_info' in data_point:
                                 precip_obj.additional_info = data_point.get('additional_info', {})
-                                
+
                             precipitation_data_objects.append(precip_obj)
-                            
+
                         # Handle objects with attributes (may be original PrecipitationData objects)
                         elif hasattr(data_point, 'position') or (hasattr(data_point, 'x') and hasattr(data_point, 'y')):
                             # This might be a PrecipitationData object already
@@ -567,13 +579,13 @@ class MessageRoutingService:
                             else:
                                 # Create a new PrecipitationData from the object
                                 position = extract_position(data_point)
-                                
+
                                 # Extract other properties
                                 precip_type = getattr(data_point, 'type', 'unknown')
                                 rate = getattr(data_point, 'rate', 20.0)
                                 intensity = getattr(data_point, 'intensity', 0.5)
                                 show_values = bool(getattr(data_point, 'show_values', True))
-                                
+
                                 precip_obj = PrecipitationData(
                                     position=position,
                                     type=precip_type,
@@ -581,25 +593,25 @@ class MessageRoutingService:
                                     intensity=float(intensity),
                                     show_values=show_values
                                 )
-                                
+
                                 # Add request_id and timestamp
                                 precip_obj.request_id = request_id
                                 precip_obj.timestamp = message.get('timestamp', time.time())
-                                
+
                                 # Add any additional info
                                 if hasattr(data_point, 'additional_info'):
                                     precip_obj.additional_info = getattr(data_point, 'additional_info', {})
-                                    
+
                                 precipitation_data_objects.append(precip_obj)
                         else:
                             # Try to convert other formats - last resort
                             logger.warning(f"[PRECIPITATION_FLOW] Unrecognized data point format: {type(data_point)}")
-                            
+
                             # Try to convert to string and extract key information
                             data_str = str(data_point)
                             if 'position' in data_str or 'type' in data_str:
                                 logger.info(f"[PRECIPITATION_FLOW] Attempting to parse data from string representation")
-                                
+
                                 # Create a default precipitation object and continue
                                 precip_obj = PrecipitationData(
                                     position=(0.0, 0.0),
@@ -608,7 +620,7 @@ class MessageRoutingService:
                                     intensity=0.5,
                                     show_values=True
                                 )
-                                
+
                                 precip_obj.request_id = request_id
                                 precip_obj.timestamp = message.get('timestamp', time.time())
                                 precipitation_data_objects.append(precip_obj)
@@ -618,7 +630,7 @@ class MessageRoutingService:
                         logger.error(traceback.format_exc())
                         # Continue to the next data point
                         continue
-            
+
             # Handle single data point (object or dictionary)
             elif precipitation_data is not None:
                 try:
@@ -626,7 +638,7 @@ class MessageRoutingService:
                     if isinstance(precipitation_data, dict):
                         # Extract position
                         position = extract_position(precipitation_data)
-                        
+
                         # Extract other properties with fallbacks
                         precip_type = precipitation_data.get('type', 'unknown')
                         rate = precipitation_data.get('rate', 20.0)
@@ -635,16 +647,16 @@ class MessageRoutingService:
                                 rate = float(rate)
                             except (ValueError, TypeError):
                                 rate = 20.0
-                                
+
                         intensity = precipitation_data.get('intensity', 0.5)
                         if isinstance(intensity, str):
                             try:
                                 intensity = float(intensity)
                             except (ValueError, TypeError):
                                 intensity = 0.5
-                                
+
                         show_values = bool(precipitation_data.get('show_values', True))
-                        
+
                         # Create PrecipitationData object
                         precip_obj = PrecipitationData(
                             position=position,
@@ -653,17 +665,17 @@ class MessageRoutingService:
                             intensity=float(intensity),
                             show_values=show_values
                         )
-                        
+
                         precip_obj.request_id = request_id
                         precip_obj.timestamp = message.get('timestamp', time.time())
-                        
+
                         # Add any additional info
                         if 'additional_info' in precipitation_data:
                             precip_obj.additional_info = precipitation_data.get('additional_info', {})
-                            
+
                         precipitation_data_objects.append(precip_obj)
-                        
-                    # Handle object format (may be original PrecipitationData object)    
+
+                    # Handle object format (may be original PrecipitationData object)
                     elif hasattr(precipitation_data, 'position') or (hasattr(precipitation_data, 'x') and hasattr(precipitation_data, 'y')):
                         # This might be a PrecipitationData object already
                         if isinstance(precipitation_data, PrecipitationData):
@@ -674,13 +686,13 @@ class MessageRoutingService:
                         else:
                             # Create a new PrecipitationData from the object
                             position = extract_position(precipitation_data)
-                            
+
                             # Extract other properties
                             precip_type = getattr(precipitation_data, 'type', 'unknown')
                             rate = getattr(precipitation_data, 'rate', 20.0)
                             intensity = getattr(precipitation_data, 'intensity', 0.5)
                             show_values = bool(getattr(precipitation_data, 'show_values', True))
-                            
+
                             precip_obj = PrecipitationData(
                                 position=position,
                                 type=precip_type,
@@ -688,19 +700,19 @@ class MessageRoutingService:
                                 intensity=float(intensity),
                                 show_values=show_values
                             )
-                            
+
                             precip_obj.request_id = request_id
                             precip_obj.timestamp = message.get('timestamp', time.time())
-                            
+
                             # Add any additional info
                             if hasattr(precipitation_data, 'additional_info'):
                                 precip_obj.additional_info = getattr(precipitation_data, 'additional_info', {})
-                                
+
                             precipitation_data_objects.append(precip_obj)
                     else:
                         # Try to parse from string representation - last resort
                         logger.warning(f"[PRECIPITATION_FLOW] Unrecognized precipitation data format: {type(precipitation_data)}")
-                        
+
                         # Create a default precipitation object as fallback
                         precip_obj = PrecipitationData(
                             position=(0.0, 0.0),
@@ -709,7 +721,7 @@ class MessageRoutingService:
                             intensity=0.5,
                             show_values=True
                         )
-                        
+
                         precip_obj.request_id = request_id
                         precip_obj.timestamp = message.get('timestamp', time.time())
                         precipitation_data_objects.append(precip_obj)
@@ -718,11 +730,11 @@ class MessageRoutingService:
                     logger.error(f"[PRECIPITATION_FLOW] Error processing single precipitation data: {single_data_error}")
                     logger.error(traceback.format_exc())
                     # Continue with the rest of the method
-            
+
             # Create at least one default data point if none were successfully created
             if not precipitation_data_objects:
                 logger.warning("[PRECIPITATION_FLOW] No valid precipitation data objects could be created - using default")
-                
+
                 # Create a default precipitation object to ensure display is updated
                 precip_obj = PrecipitationData(
                     position=(0.0, 0.0),
@@ -731,17 +743,17 @@ class MessageRoutingService:
                     intensity=0.0,
                     show_values=False
                 )
-                
+
                 precip_obj.request_id = request_id
                 precip_obj.timestamp = message.get('timestamp', time.time())
                 precip_obj.additional_info = {'fallback_data': True}
                 precipitation_data_objects.append(precip_obj)
-                
+
                 logger.info("[PRECIPITATION_FLOW] Created default precipitation data object as fallback")
-            
+
             # Log the result of conversion
             logger.info(f"[PRECIPITATION_FLOW] Successfully created {len(precipitation_data_objects)} precipitation data objects")
-            
+
             # Prepare message for display system with enhanced metadata
             precip_message = {
                 'data': precipitation_data_objects[0] if precipitation_data_objects else None,
@@ -759,32 +771,211 @@ class MessageRoutingService:
                     '_processed_by_routing_service': True  # LOOP PREVENTION FLAG
                 }
             }
-            
+
             # Preserve any metadata from the original message
             if 'metadata' in message and isinstance(message['metadata'], dict):
                 # Merge metadata with our new metadata, keeping our keys for critical fields
                 for key, value in message['metadata'].items():
                     if key not in precip_message['metadata']:
                         precip_message['metadata'][key] = value
-            
+
             # Get display message handler
             from FMOFP.local_messaging.routing.handlers.system_message_handlers.DisplayMessageHandler import get_display_message_handler
             display_handler = get_display_message_handler()
-            
+
             if not display_handler:
                 logger.error("[PRECIPITATION_FLOW] Could not get display message handler")
                 raise ValueError("Could not get display message handler")
-            
+
             # Send precipitation data to display system
             await display_handler.handle_precipitation_data(precip_message)
-            
+
             logger.info(f"[PRECIPITATION_FLOW] Successfully routed precipitation data to display system with request_id: {request_id}")
         except Exception as e:
             logger.error(f"[PRECIPITATION_FLOW] Error routing precipitation data: {e}")
             logger.error(traceback.format_exc())
             raise
 
-            
+
+    async def route_comms_message(self, message: Dict[str, Any]) -> None:
+        """
+        Route a COMMS_* message directly to CommsService.
+
+        Supported message_types (from message_types.py):
+            comms_radioFreqSet, comms_radioModeSet,
+            comms_satcomAcquire, comms_datalinkModeSet,
+            comms_transmitRadio, comms_sendSatcom, comms_sendDatalink,
+            comms_statusRequest
+        """
+        try:
+            if self._comms_service is None:
+                from FMOFP.Systems.comms.messaging_service import get_comms_service
+                self._comms_service = get_comms_service()
+
+            msg_type = message.get('message_type', '')
+            params   = message.get('params', message.get('data', {}))
+
+            if msg_type in ('comms_radioFreqSet', 'COMMS_RADIO_FREQ_SET'):
+                freq = params.get('frequency') if isinstance(params, dict) else None
+                if freq is not None:
+                    self._comms_service.set_radio_frequency(float(freq))
+
+            elif msg_type in ('comms_radioModeSet', 'COMMS_RADIO_MODE_SET'):
+                mode = params.get('mode') if isinstance(params, dict) else None
+                if mode:
+                    self._comms_service.set_radio_mode(str(mode))
+
+            elif msg_type in ('comms_satcomAcquire', 'COMMS_SATCOM_ACQUIRE'):
+                self._comms_service.acquire_satellite()
+
+            elif msg_type in ('comms_datalinkModeSet', 'COMMS_DATALINK_MODE_SET'):
+                mode = params.get('mode') if isinstance(params, dict) else None
+                if mode:
+                    self._comms_service.set_datalink_mode(str(mode))
+
+            elif msg_type in ('comms_transmitRadio', 'COMMS_TRANSMIT_RADIO'):
+                text = params.get('message', '') if isinstance(params, dict) else str(params)
+                self._comms_service.transmit_radio(text)
+
+            elif msg_type in ('comms_sendSatcom', 'COMMS_SEND_SATCOM'):
+                text = params.get('message', '') if isinstance(params, dict) else str(params)
+                self._comms_service.send_satcom(text)
+
+            elif msg_type in ('comms_sendDatalink', 'COMMS_SEND_DATALINK'):
+                text     = params.get('message', '') if isinstance(params, dict) else str(params)
+                priority = params.get('priority', 2) if isinstance(params, dict) else 2
+                self._comms_service.send_datalink(text, int(priority))
+
+            elif msg_type in ('comms_statusRequest', 'COMMS_STATUS_REQUEST'):
+                # Status requests are answered by the display layer reading CommsService directly
+                pass
+
+            logger.info(f"[ROUTE_COMMS] Handled {msg_type}")
+
+        except Exception as e:
+            logger.error(f"[ROUTE_COMMS] Error routing comms message: {e}")
+            logger.error(traceback.format_exc())
+
+    async def route_mission_message(self, message: Dict[str, Any]) -> None:
+        """
+        Route a MISSION_* message directly to MissionService.
+
+        Supported message_types (from message_types.py):
+            mission_phaseSet, mission_phaseAdvance,
+            mission_waypointAdd, mission_waypointRemove,
+            mission_targetDesignate, mission_targetEngage,
+            mission_targetBDA, mission_targetUpdate,
+            mission_unitAdd, mission_unitUpdate,
+            mission_objectivesSet, mission_roeSet,
+            mission_intelUpdate, mission_routeOptimise,
+            mission_statusRequest
+        """
+        try:
+            if self._mission_service is None:
+                from FMOFP.Systems.missionPlanning.missionService import get_mission_service
+                self._mission_service = get_mission_service()
+
+            msg_type = message.get('message_type', '')
+            params   = message.get('params', message.get('data', {}))
+            if not isinstance(params, dict):
+                params = {}
+
+            if msg_type in ('mission_phaseSet', 'MISSION_PHASE_SET'):
+                phase = params.get('phase', '')
+                if phase:
+                    self._mission_service.set_phase(str(phase))
+
+            elif msg_type in ('mission_phaseAdvance', 'MISSION_PHASE_ADVANCE'):
+                self._mission_service.advance_phase()
+
+            elif msg_type in ('mission_waypointAdd', 'MISSION_WAYPOINT_ADD'):
+                self._mission_service.add_waypoint(
+                    name   = params.get('name', 'WP'),
+                    lat    = float(params.get('lat', 0)),
+                    lon    = float(params.get('lon', 0)),
+                    alt_ft = float(params.get('alt_ft', 0)),
+                    wp_type = params.get('wp_type', 'NAV'),
+                )
+
+            elif msg_type in ('mission_waypointRemove', 'MISSION_WAYPOINT_REMOVE'):
+                wp_id = params.get('wp_id')
+                if wp_id is not None:
+                    self._mission_service._ctrl.route.remove_waypoint(int(wp_id))
+
+            elif msg_type in ('mission_targetDesignate', 'MISSION_TARGET_DESIGNATE'):
+                self._mission_service.designate_target(
+                    name        = params.get('name', 'TGT'),
+                    lat         = float(params.get('lat', 0)),
+                    lon         = float(params.get('lon', 0)),
+                    alt_ft      = float(params.get('alt_ft', 0)),
+                    priority    = int(params.get('priority', 3)),
+                    target_type = params.get('target_type', 'POINT'),
+                )
+
+            elif msg_type in ('mission_targetEngage', 'MISSION_TARGET_ENGAGE'):
+                target_id = params.get('target_id', '')
+                weapon    = params.get('weapon', 'UNSPECIFIED')
+                if target_id:
+                    self._mission_service.engage_target(target_id, weapon)
+
+            elif msg_type in ('mission_targetBDA', 'MISSION_TARGET_BDA'):
+                target_id = params.get('target_id', '')
+                destroyed = bool(params.get('destroyed', False))
+                if target_id:
+                    self._mission_service._ctrl.targeting.mark_bda_pending(target_id)
+                    self._mission_service._ctrl.targeting.assess_damage(target_id, destroyed)
+
+            elif msg_type in ('mission_targetUpdate', 'MISSION_TARGET_UPDATE'):
+                target_id = params.get('target_id', '')
+                if target_id:
+                    self._mission_service.radar_target_update(
+                        target_id    = target_id,
+                        lat          = float(params.get('lat', 0)),
+                        lon          = float(params.get('lon', 0)),
+                        alt_ft       = float(params.get('alt_ft', 0)),
+                        speed        = float(params.get('speed_kts', 0)),
+                        heading      = float(params.get('heading_deg', 0)),
+                        quality      = float(params.get('track_quality', 0.8)),
+                    )
+
+            elif msg_type in ('mission_unitAdd', 'MISSION_UNIT_ADD'):
+                unit_data = params.get('unit_data', params)
+                self._mission_service.add_unit(unit_data)
+
+            elif msg_type in ('mission_unitUpdate', 'MISSION_UNIT_UPDATE'):
+                unit_id = params.get('unit_id', '')
+                if unit_id:
+                    pos = params.get('position')
+                    if pos and len(pos) >= 2:
+                        self._mission_service._ctrl.update_unit_position(
+                            unit_id, float(pos[0]), float(pos[1]),
+                            float(pos[2]) if len(pos) > 2 else 0.0)
+                    status = params.get('status')
+                    if status:
+                        self._mission_service._ctrl.oob.update_status(unit_id, status)
+
+            elif msg_type in ('mission_objectivesSet', 'MISSION_OBJECTIVES_SET'):
+                self._mission_service.set_objectives(params.get('objectives', []))
+
+            elif msg_type in ('mission_roeSet', 'MISSION_ROE_SET'):
+                self._mission_service.set_roe(params.get('rules', []))
+
+            elif msg_type in ('mission_intelUpdate', 'MISSION_INTEL_UPDATE'):
+                self._mission_service.update_intelligence(params.get('data', params))
+
+            elif msg_type in ('mission_routeOptimise', 'MISSION_ROUTE_OPTIMISE'):
+                self._mission_service.optimise_route()
+
+            elif msg_type in ('mission_statusRequest', 'MISSION_STATUS_REQUEST'):
+                # Display reads MissionService.get_data() directly; no action needed here
+                pass
+
+            logger.info(f"[ROUTE_MISSION] Handled {msg_type}")
+
+        except Exception as e:
+            logger.error(f"[ROUTE_MISSION] Error routing mission message: {e}")
+            logger.error(traceback.format_exc())
+
     async def route_display_command(self, message: Dict[str, Any]):
         """Route display command to storage"""
         try:
@@ -809,7 +1000,7 @@ class MessageRoutingService:
 
             # Store display command with complete data
             await self.display_response_service.handle_display_command(display_command_data)
-            
+
             logger.info(f"Routed display command with request_id: {request_id}")
         except Exception as e:
             logger.error(f"Error routing display command: {e}")
@@ -817,39 +1008,39 @@ class MessageRoutingService:
 
     async def route_message(self, message: MIL_STD_1553B_Message):
         """Route a message using the Unified Router exclusively.
-        
+
         Args:
             message: The MIL-STD-1553B message to route
-            
+
         Returns:
             bool: True if the message was routed successfully, False otherwise
         """
         try:
             # Check for loop prevention flags
             metadata = {}
-            
+
             # Check if message is a dict with metadata
             if isinstance(message, dict) and 'metadata' in message:
                 metadata = message['metadata']
             # Check if message has metadata attribute
             elif hasattr(message, 'metadata') and message.metadata:
                 metadata = message.metadata
-                
+
             # Initialize routed messages set if it doesn't exist
             if not hasattr(self, '_routed_messages'):
                 self._routed_messages = set()
-                
+
             # Extract message ID from the message
             request_id = None
             if isinstance(message, dict):
                 request_id = message.get('request_id')
             elif hasattr(message, 'request_id'):
                 request_id = message.request_id
-                
+
             transaction_id = None
             if isinstance(metadata, dict):
                 transaction_id = metadata.get('transaction_id')
-                
+
             # Create a unique message identifier
             message_id = None
             if request_id:
@@ -858,24 +1049,24 @@ class MessageRoutingService:
                     command_type = message.get('command_type')
                 elif hasattr(message, 'command_type'):
                     command_type = message.command_type
-                    
+
                 if command_type:
                     message_id = f"{request_id}_{command_type}"
                 else:
                     message_id = request_id
-                    
+
             # If we have a transaction_id, use it as part of the message identifier
             if transaction_id:
                 if message_id:
                     message_id = f"{message_id}_{transaction_id}"
                 else:
                     message_id = transaction_id
-                    
+
             # Check if this message has already been processed
             if message_id and message_id in self._routed_messages:
                 logger.warning(f"[ROUTE] BREAKING LOOP - Message with ID {message_id} already routed")
                 return True
-                
+
             # Check if this message is marked as already processed
             if isinstance(metadata, dict):
                 if metadata.get('_processed_by_routing_service'):
@@ -887,16 +1078,16 @@ class MessageRoutingService:
                 if metadata.get('final_delivery_to_display'):
                     logger.warning(f"[ROUTE] BREAKING LOOP - Message marked as final delivery")
                     return True
-                    
+
                 # Mark message as processed by routing service
                 metadata['_processed_by_routing_service'] = True
-                
+
             # For dict messages, add the flag to metadata
             if isinstance(message, dict):
                 if 'metadata' not in message:
                     message['metadata'] = {}
                 message['metadata']['_processed_by_routing_service'] = True
-                
+
             # Add to routed messages set if we have an ID
             if message_id:
                 self._routed_messages.add(message_id)
@@ -905,7 +1096,7 @@ class MessageRoutingService:
                     # Remove oldest entries (this is approximation as sets don't maintain order)
                     while len(self._routed_messages) > 800:
                         self._routed_messages.pop()
-            
+
             # Log message details for debugging
             logger.info(f"[ROUTE] Routing message:")
             logger.info(f"[ROUTE]   Message ID: {message_id}")
@@ -913,20 +1104,38 @@ class MessageRoutingService:
             logger.info(f"[ROUTE]   Message type: {getattr(message, 'message_type', None)}")
             logger.info(f"[ROUTE]   Command word: {getattr(message, 'command_word', None)}")
             logger.info(f"[ROUTE]   Request ID: {request_id}")
-            
+
             # Use the Unified Router exclusively for message routing
             from FMOFP.local_messaging.routing.system_integration import route_message
-            
+
+            # Detect COMMS messages and handle directly
+            raw_type = None
+            if isinstance(message, dict):
+                raw_type = message.get('message_type') or message.get('command_type', '')
+            elif hasattr(message, 'message_type'):
+                raw_type = message.message_type or getattr(message, 'command_type', '')
+            raw_type = str(raw_type or '').lower()
+
+            if 'comms_' in raw_type or raw_type.startswith('comms'):
+                msg_dict = message if isinstance(message, dict) else vars(message)
+                await self.route_comms_message(msg_dict)
+                return True
+
+            if 'mission_' in raw_type or raw_type.startswith('mission'):
+                msg_dict = message if isinstance(message, dict) else vars(message)
+                await self.route_mission_message(msg_dict)
+                return True
+
             # Route the message using the unified router through the system_integration interface
             result = route_message(message)
-            
+
             if result:
                 logger.info("[ROUTE] Message successfully routed using Unified Router")
             else:
                 logger.error("[ROUTE] Unified Router failed to route message")
                 logger.error("[ROUTE] Message will not be processed - NO FALLBACK TO LEGACY ROUTING")
                 # Do not fall back to legacy routing if unified router fails
-            
+
             return result
 
         except Exception as e:

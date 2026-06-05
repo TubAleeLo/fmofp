@@ -103,6 +103,7 @@ class TacticalSituationDisplay(BaseDisplay):
         self._fms         = None
         self._fms_control = None
         self._fusion      = None   # RadarDataFusion singleton (lazy)
+        self._mission     = None   # MissionService singleton (lazy)
         self._lock        = threading.Lock()
 
         # ── poll timer (10 Hz) ────────────────────────────────────────────
@@ -138,6 +139,13 @@ class TacticalSituationDisplay(BaseDisplay):
             except Exception as exc:
                 logger.debug(f"[TSD] Fusion not ready: {exc}")
 
+        if self._mission is None:
+            try:
+                from FMOFP.Systems.missionPlanning.missionService import get_mission_service
+                self._mission = get_mission_service()
+            except Exception as exc:
+                logger.debug(f"[TSD] MissionService not ready: {exc}")
+
     def _poll_data(self):
         """Pull live data from FMS and update the cached state."""
         try:
@@ -167,8 +175,15 @@ class TacticalSituationDisplay(BaseDisplay):
                 self._energy   = tac.get("energy_state", self._energy)
                 self._mode     = sta.get("mode",     self._mode)
 
-                # Waypoints for map
-                self._waypoints = nav.get("waypoints", [])
+                # Waypoints: prefer MissionService tactical route over raw FMS nav
+                if self._mission is not None:
+                    try:
+                        route_nav = self._mission.get_nav_data()
+                        self._waypoints = route_nav.get("route", [])
+                    except Exception:
+                        self._waypoints = nav.get("waypoints", [])
+                else:
+                    self._waypoints = nav.get("waypoints", [])
 
                 if ts:
                     self._tac      = ts.get("tactical_systems",   self._tac)
@@ -184,6 +199,20 @@ class TacticalSituationDisplay(BaseDisplay):
                 # Pull real fused tracks; fall back to simulation
                 # if fusion not yet running.
                 self._threats = self._get_fused_threats()
+
+                # Merge OOB unit positions from MissionService into threat layer.
+                # Enemy units appear as hostile contacts; friendly as non-hostile.
+                if self._mission is not None:
+                    try:
+                        own_lat = nav.get("latitude",  35.4147)
+                        own_lon = nav.get("longitude", -97.3866)
+                        own_hdg = self._heading
+                        oob_contacts = self._oob_to_threat_vectors(
+                            self._mission.get_oob(), own_lat, own_lon, own_hdg)
+                        # Append OOB contacts; fused radar tracks take precedence
+                        self._threats = self._threats + oob_contacts
+                    except Exception as exc:
+                        logger.debug(f"[TSD] OOB merge error: {exc}")
 
                 # RWR contacts from DefensiveService
                 try:
@@ -227,6 +256,56 @@ class TacticalSituationDisplay(BaseDisplay):
              "range_nm": 32 + 4 * math.sin(t * 0.08),
              "type": "SAM", "hostile": True},
         ]
+
+    def _oob_to_threat_vectors(
+        self, oob_data: dict, own_lat: float, own_lon: float, own_hdg: float
+    ) -> List[Dict]:
+        """
+        Convert OOB unit positions into TSD threat-vector dicts.
+
+        Each returned dict contains:
+            bearing  — degrees true from own ship
+            range_nm — nautical miles from own ship
+            type     — unit type string (e.g. 'SAM_SITE', 'FIGHTER')
+            hostile  — True for ENEMY units
+            identity — 'FRIENDLY' | 'ENEMY' | 'NEUTRAL' | 'UNKNOWN'
+        """
+        import math as _math
+        contacts = []
+        NM_PER_DEG_LAT = 60.0
+
+        for affil_key in ("enemy", "friendly", "neutral"):
+            units = oob_data.get(affil_key, [])
+            hostile = affil_key == "enemy"
+            identity = affil_key.upper()
+
+            for unit in units:
+                pos = unit.get("position")
+                if not pos or len(pos) < 2:
+                    continue
+                u_lat, u_lon = float(pos[0]), float(pos[1])
+
+                dlat = (u_lat - own_lat) * NM_PER_DEG_LAT
+                dlon = (u_lon - own_lon) * NM_PER_DEG_LAT * _math.cos(_math.radians(own_lat))
+                range_nm = _math.sqrt(dlat ** 2 + dlon ** 2)
+
+                # Only show units within 120 nm
+                if range_nm > 120:
+                    continue
+
+                bearing_true = (_math.degrees(_math.atan2(dlon, dlat)) + 360) % 360
+                status = unit.get("status", "OPERATIONAL")
+
+                contacts.append({
+                    "bearing":  round(bearing_true, 1),
+                    "range_nm": round(range_nm, 1),
+                    "type":     unit.get("type", "UNIT"),
+                    "hostile":  hostile,
+                    "identity": identity,
+                    "status":   status,
+                    "name":     unit.get("id", ""),
+                })
+        return contacts
 
     # ───────────────────────────────────────────────── paint ───────────────
 

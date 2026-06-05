@@ -47,7 +47,8 @@ class MultiFunctionDisplay(BaseDisplay):
         super().__init__(DisplayType.MFD, parent=parent)
         self.current_page = DisplayPage.NAV
         self.pages = [DisplayPage.NAV, DisplayPage.RADAR, DisplayPage.SYSTEMS,
-                     DisplayPage.WEAPONS, DisplayPage.COMMS, DisplayPage.SETTINGS]
+                     DisplayPage.WEAPONS, DisplayPage.COMMS, DisplayPage.MISSION,
+                     DisplayPage.SETTINGS]
 
         # Menu configuration
         self.menu_width = 150.0
@@ -680,6 +681,8 @@ class MultiFunctionDisplay(BaseDisplay):
                 self.draw_weapons_page(painter, content_rect)
             elif self.current_page == DisplayPage.COMMS:
                 self.draw_comms_page(painter, content_rect)
+            elif self.current_page == DisplayPage.MISSION:
+                self.draw_mission_page(painter, content_rect)
             elif self.current_page == DisplayPage.SETTINGS:
                 self.draw_settings_page(painter, content_rect)
 
@@ -947,15 +950,16 @@ class MultiFunctionDisplay(BaseDisplay):
             connected = satcom.get("connection_status") == "connected"
             row("LINK",    satcom.get("connection_status", "---").upper(), connected)
             row("SAT ID",  str(satcom.get("satellite_id", "---")), connected)
-            row("RATE",    f"{satcom.get('data_rate', 0):.0f} kbps", connected)
+            row("RATE",    f"{satcom.get('data_rate_kbps', 0):.0f} kbps", connected)
             row("LATENCY", f"{satcom.get('latency_ms', 0):.0f} ms", connected)
             y += 4
 
             section("─── DATA LINK ───────")
             dl_active = datalink.get("link_status") == "active"
             row("STATUS", datalink.get("link_status", "---").upper(), dl_active)
-            row("TX MSG",  str(datalink.get("messages_sent", 0)), True)
-            row("RX MSG",  str(datalink.get("messages_received", 0)), True)
+            row("TX PKT",  str(datalink.get("packets_sent", 0)), True)
+            row("RX PKT",  str(datalink.get("packets_received", 0)), True)
+            row("ERR",     f"{datalink.get('error_rate', 0):.2f}%", datalink.get("error_rate", 0) < 1.0)
 
         except Exception as e:
             logger.error(f"Error drawing comms page: {str(e)}")
@@ -1089,14 +1093,21 @@ class MultiFunctionDisplay(BaseDisplay):
             row("ALT",  f"{pos.get('alt_ft', 0):.0f} ft")
             y += 4
 
-            waypoints  = mission.get("waypoints", [])
-            active_wp  = mission.get("active_waypoint", 0)
+            # route is a nav-data dict from RouteManager.get_nav_data()
+            route_data = mission.get("route", {})
+            waypoints  = route_data.get("route", [])   if isinstance(route_data, dict) else []
+            active_wp  = route_data.get("active_index", 0) if isinstance(route_data, dict) else 0
+            dist_nm    = route_data.get("distance_to_next_nm") if isinstance(route_data, dict) else None
+            bearing    = route_data.get("bearing_to_next_deg") if isinstance(route_data, dict) else None
             painter.setFont(f_hd)
             painter.setPen(QPen(dim))
             painter.drawText(QRectF(rect.left() + 6, y, rect.width() - 12, line_h),
                              Qt.AlignmentFlag.AlignVCenter,
                              f"─── WAYPOINTS ({len(waypoints)}) ──")
             y += line_h + 2
+
+            if dist_nm is not None and bearing is not None:
+                row("NEXT",   f"{dist_nm:.1f} nm  {bearing:.0f}°")
 
             for i, wp in enumerate(waypoints[:5]):
                 is_active = (i == active_wp)

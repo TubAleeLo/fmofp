@@ -18,7 +18,7 @@ class BaseMessageType(enum.Enum):
     DATA = 3
     EVENT = 4
     ERROR = 5
-    
+
     # Radar-specific message types
     RADAR_COMMAND = 10
     RADAR_STATUS = 11
@@ -26,7 +26,7 @@ class BaseMessageType(enum.Enum):
     RADAR_MODE_CHANGE = 13
     RADAR_TRACK = 14
     RADAR_SCAN = 15
-    
+
     # FMS-specific message types
     FMS_COMMAND = 20
     FMS_STATUS = 21
@@ -34,13 +34,13 @@ class BaseMessageType(enum.Enum):
     FMS_MODE_CHANGE = 23
     FMS_NAVIGATION = 24
     FMS_ATTITUDE = 25
-    
+
     # Display-specific message types
     DISPLAY_COMMAND = 30
     DISPLAY_STATUS = 31
     DISPLAY_DATA = 32
     DISPLAY_MODE_CHANGE = 33
-    
+
     @classmethod
     def from_string(cls, name: str) -> 'BaseMessageType':
         """Convert a string name to the corresponding enum value."""
@@ -49,7 +49,7 @@ class BaseMessageType(enum.Enum):
         except KeyError:
             # Default to UNKNOWN if the name is not recognized
             return cls.UNKNOWN
-    
+
     @classmethod
     def to_dict(cls) -> Dict[str, int]:
         """Convert the enum to a dictionary for serialization."""
@@ -136,15 +136,45 @@ COMMAND_TYPE_DATA_RESPONSE = 'data_response'
 COMMAND_TYPE_VIL_DATA = 'vil_data'
 COMMAND_TYPE_PRECIPITATION_DATA = 'precipitation_data'
 
+# Communications message types
+COMMS_STATUS_REQUEST          = 'comms_statusRequest'
+COMMS_STATUS_RESPONSE         = 'comms_statusResponse'
+COMMS_RADIO_FREQ_SET          = 'comms_radioFreqSet'
+COMMS_RADIO_MODE_SET          = 'comms_radioModeSet'
+COMMS_SATCOM_ACQUIRE          = 'comms_satcomAcquire'
+COMMS_DATALINK_MODE_SET       = 'comms_datalinkModeSet'
+COMMS_TRANSMIT_RADIO          = 'comms_transmitRadio'
+COMMS_SEND_SATCOM             = 'comms_sendSatcom'
+COMMS_SEND_DATALINK           = 'comms_sendDatalink'
+COMMS_DATA_UPDATE             = 'comms_dataUpdate'
+
+# Mission planning message types
+MISSION_STATUS_REQUEST        = 'mission_statusRequest'
+MISSION_STATUS_RESPONSE       = 'mission_statusResponse'
+MISSION_PHASE_SET             = 'mission_phaseSet'
+MISSION_PHASE_ADVANCE         = 'mission_phaseAdvance'
+MISSION_WAYPOINT_ADD          = 'mission_waypointAdd'
+MISSION_WAYPOINT_REMOVE       = 'mission_waypointRemove'
+MISSION_TARGET_DESIGNATE      = 'mission_targetDesignate'
+MISSION_TARGET_ENGAGE         = 'mission_targetEngage'
+MISSION_TARGET_BDA            = 'mission_targetBDA'
+MISSION_TARGET_UPDATE         = 'mission_targetUpdate'
+MISSION_UNIT_ADD              = 'mission_unitAdd'
+MISSION_UNIT_UPDATE           = 'mission_unitUpdate'
+MISSION_ROUTE_OPTIMISE        = 'mission_routeOptimise'
+MISSION_OBJECTIVES_SET        = 'mission_objectivesSet'
+MISSION_ROE_SET               = 'mission_roeSet'
+MISSION_INTEL_UPDATE          = 'mission_intelUpdate'
+MISSION_DATA_UPDATE           = 'mission_dataUpdate'
 
 # Helper functions
 def get_message_type(message):
     """
     Extract message type from various message formats.
-    
+
     Args:
         message: The message object, which could be a dict, object, or other format
-        
+
     Returns:
         str: The message type or None if not found
     """
@@ -152,98 +182,100 @@ def get_message_type(message):
         # Check direct message_type key
         if 'message_type' in message:
             return message['message_type']
-        
+
         # Check in metadata
         if 'metadata' in message and isinstance(message['metadata'], dict):
             msg_type = message['metadata'].get('message_type')
             if msg_type:
                 return msg_type
-        
+
         # Check in additional_info (legacy format)
         if 'additional_info' in message and isinstance(message['additional_info'], dict):
             return message['additional_info'].get('message_type')
-    
+
     # Handle object attributes
     elif hasattr(message, 'message_type'):
         return message.message_type
     elif hasattr(message, 'metadata') and hasattr(message.metadata, 'get'):
         return message.metadata.get('message_type')
-    
+
     return None
 
 
 def is_message_type(message, expected_type):
     """
     Check if message matches expected type, with case-insensitive comparison.
-    
+
     Args:
         message: The message to check
         expected_type: The expected message type
-        
+
     Returns:
         bool: True if the message type matches, False otherwise
     """
     msg_type = get_message_type(message)
     if not msg_type or not expected_type:
         return False
-    
+
     return msg_type.lower() == expected_type.lower()
 
 
 def is_vil_message(message):
     """
     Check if a message is a VIL data message.
-    
+
     Args:
         message: The message to check
-        
+
     Returns:
         bool: True if the message is a VIL data message, False otherwise
     """
     msg_type = get_message_type(message)
     if not msg_type:
         return False
-    
+
     msg_type_lower = msg_type.lower()
-    return (msg_type_lower == WEATHER_RADAR_VIL_REQUEST.lower() or 
-            msg_type_lower == WEATHER_RADAR_VIL_RESPONSE.lower() or 
+    return (msg_type_lower == WEATHER_RADAR_VIL_REQUEST.lower() or
+            msg_type_lower == WEATHER_RADAR_VIL_RESPONSE.lower() or
             'vil' in msg_type_lower)
 
 
 def is_precipitation_message(message):
     """
     Check if a message is a precipitation data message.
-    
+
     Args:
         message: The message to check
-        
+
     Returns:
         bool: True if the message is a precipitation data message, False otherwise
     """
     msg_type = get_message_type(message)
     if not msg_type:
         return False
-    
+
     msg_type_lower = msg_type.lower()
-    return (msg_type_lower == WEATHER_RADAR_PRECIPITATION_REQUEST.lower() or 
-            msg_type_lower == WEATHER_RADAR_PRECIPITATION_RESPONSE.lower() or 
+    return (msg_type_lower == WEATHER_RADAR_PRECIPITATION_REQUEST.lower() or
+            msg_type_lower == WEATHER_RADAR_PRECIPITATION_RESPONSE.lower() or
             'precipitation' in msg_type_lower)
 
 
 def is_mode_change_message(message):
     """
     Check if a message is a mode change message.
-    
+
     Args:
         message: The message to check
-        
+
     Returns:
         bool: True if the message is a mode change message, False otherwise
     """
     msg_type = get_message_type(message)
     if not msg_type:
         return False
-    
+
     msg_type_lower = msg_type.lower()
     return ('modechange' in msg_type_lower.replace('_', '') or
             'mode_change' in msg_type_lower)
+
+
