@@ -29,18 +29,18 @@ class PrecipitationDataHandler(BaseMessageHandler):
         super().__init__()
         # Initialize message types that this handler can process
         self.message_types = [WEATHER_RADAR_PRECIPITATION_REQUEST, WEATHER_RADAR_PRECIPITATION_RESPONSE]
-        
+
         if not self._initialized and radar_db is not None:
             if not radar_db:
                 raise ValueError("radar_db cannot be None")
-                
+
             logger.info("[PRECIP_DB] Initializing PrecipitationDataHandler")
             self.radar_db = radar_db
-            
+
             # Initialize database with retries
             max_retries = 3
             retry_delay = 1.0
-            
+
             for attempt in range(max_retries):
                 try:
                     if self._init_database_table():
@@ -57,7 +57,7 @@ class PrecipitationDataHandler(BaseMessageHandler):
                         time.sleep(retry_delay * (2 ** attempt))
                     else:
                         raise RuntimeError("Failed to initialize precipitation database") from e
-            
+
             if not self._initialized:
                 raise RuntimeError("Failed to initialize precipitation database after max retries")
 
@@ -71,7 +71,7 @@ class PrecipitationDataHandler(BaseMessageHandler):
             else:
                 logger.error("[PRECIP_DB] Precipitation data table does not exist")
             return exists
-            
+
         except Exception as e:
             logger.error(f"[PRECIP_DB] Error verifying table: {e}")
             traceback.print_exc()
@@ -81,7 +81,7 @@ class PrecipitationDataHandler(BaseMessageHandler):
         """Initialize precipitation data table with strict validation and error checking"""
         try:
             logger.info("[PRECIP_DB] Initializing precipitation data table")
-            
+
             # First check if table already exists
             table_exists = False
             try:
@@ -90,11 +90,11 @@ class PrecipitationDataHandler(BaseMessageHandler):
             except Exception as check_error:
                 logger.error(f"[PRECIP_DB] Error checking table existence: {check_error}")
                 # Continue with table creation attempt even if check fails
-            
+
             if table_exists:
                 logger.info("[PRECIP_DB] Precipitation data table already exists")
                 return True
-            
+
             # Create table with comprehensive schema
             try:
                 logger.info("[PRECIP_DB] Creating precipitation_data table")
@@ -113,7 +113,7 @@ class PrecipitationDataHandler(BaseMessageHandler):
                 logger.error(f"[PRECIP_DB] Error creating table: {create_error}")
                 logger.error(traceback.format_exc())
                 return False
-            
+
             # Create indices with error handling
             try:
                 logger.info("[PRECIP_DB] Creating indices")
@@ -123,7 +123,7 @@ class PrecipitationDataHandler(BaseMessageHandler):
                     ('precip_type_idx', 'type'),
                     ('precip_request_id_idx', 'request_id')
                 ]
-                
+
                 for idx_name, column in indices:
                     try:
                         query = f'CREATE INDEX IF NOT EXISTS "{idx_name}" ON "precipitation_data" ("{column}")'
@@ -134,7 +134,7 @@ class PrecipitationDataHandler(BaseMessageHandler):
             except Exception as idx_error:
                 logger.error(f"[PRECIP_DB] Error in index creation: {idx_error}")
                 # Continue since the table exists
-            
+
             # Verify table was created
             try:
                 table_exists = self.radar_db.table_exists('precipitation_data')
@@ -147,7 +147,7 @@ class PrecipitationDataHandler(BaseMessageHandler):
             except Exception as verify_error:
                 logger.error(f"[PRECIP_DB] Error verifying table creation: {verify_error}")
                 return False
-            
+
         except Exception as e:
             logger.error(f"[PRECIP_DB] Critical error initializing precipitation table: {e}")
             logger.error(traceback.format_exc())
@@ -156,17 +156,17 @@ class PrecipitationDataHandler(BaseMessageHandler):
     def store_precipitation_data(self, precipitation_data: PrecipitationData) -> bool:
         """
         Store precipitation data with robust error handling
-        
+
         Args:
             precipitation_data: PrecipitationData object to store
-            
+
         Returns:
             bool: True if storage successful, False otherwise
         """
         try:
             logger.info(f"[LOC_PRECIP_DATA_HDLR_PRECIP_FLOW] Starting storage of precipitation data with request_id: {getattr(precipitation_data, 'request_id', None)}")
             logger.info(f"[LOC_PRECIP_DATA_HDLR_PRECIP_FLOW] Input PrecipitationData object: {precipitation_data.__dict__}")
-            
+
             # Verify required fields are present and add defaults if missing
             required_fields = ['request_id', 'position', 'type', 'rate', 'intensity']
             for field in required_fields:
@@ -210,15 +210,15 @@ class PrecipitationDataHandler(BaseMessageHandler):
                     from FMOFP.local_messaging.command_word_map import register_command_word
                     # Use display_system and radar_display from address_utils for consistent addressing
                     system_id = 'displays'  # Use consistent system identifier
-                    subaddress_name = 'radar_display'  # Use consistent subaddress identifier 
+                    subaddress_name = 'radar_display'  # Use consistent subaddress identifier
                     command_word = register_command_word(system_id, 0, subaddress_name, 'data', 'precipitation')
                     additional_info['command_word'] = command_word
                     logger.info(f"[LOC_PRECIP_DATA_HDLR_PRECIP_FLOW] Generated command word: {command_word} for system={system_id}, subaddress={subaddress_name}")
-                
+
                 # Add mode information if available
                 if 'mode' not in additional_info:
                     additional_info['mode'] = 'SURVEILLANCE'  # Default mode for precipitation data
-                
+
                 # Add message type information from centralized constants
                 if 'message_type' not in additional_info:
                     # Use the centralized constant from message_types.py
@@ -240,9 +240,9 @@ class PrecipitationDataHandler(BaseMessageHandler):
                     'show_values': 1 if precipitation_data.show_values else 0,
                     'additional_info': json.dumps(additional_info)
                 }
-                
+
                 # Add critical debugging log for tracking
-                logger.error(f"[PRECIPITATION_FLOW_DEBUG] Storing precipitation data: position=({precipitation_data.position[0]}, {precipitation_data.position[1]}), type={precipitation_data.type}, rate={precipitation_data.rate}, intensity={precipitation_data.intensity}")
+                logger.debug(f"[PRECIPITATION_FLOW_DEBUG] Storing precipitation data: position=({precipitation_data.position[0]}, {precipitation_data.position[1]}), type={precipitation_data.type}, rate={precipitation_data.rate}, intensity={precipitation_data.intensity}")
 
                 # Log the data being stored
                 logger.info("[PRECIP_DATA_HNDLR_STORE] Storing data:")
@@ -265,26 +265,26 @@ class PrecipitationDataHandler(BaseMessageHandler):
                     if not self._init_database_table():
                         logger.error("[PRECIP_DATA_HNDLR_STORE] Failed to create precipitation data table")
                         return False
-                
+
                 # Check if record with same request_id already exists
                 check_query = 'SELECT COUNT(*) FROM "precipitation_data" WHERE "request_id" = ?'
                 check_result = self.radar_db.execute_query(check_query, (data['request_id'],), query_type='select')
-                
+
                 if check_result and check_result[0][0] > 0:
                     logger.warning(f"[PRECIP_DATA_HNDLR_STORE] Record with request_id {data['request_id']} already exists - updating")
-                    
+
                     # Build update query
                     update_parts = []
                     for key in data.keys():
                         if key != 'request_id':  # Don't update the primary key
                             update_parts.append(f'"{key}" = ?')
-                    
+
                     update_query = f'UPDATE "precipitation_data" SET {", ".join(update_parts)} WHERE "request_id" = ?'
-                    
+
                     # Prepare values (all fields except request_id, then request_id at the end)
                     update_values = [data[key] for key in data.keys() if key != 'request_id']
                     update_values.append(data['request_id'])
-                    
+
                     # Execute update
                     self.radar_db.execute_query(update_query, tuple(update_values), query_type='update', manage_transaction=True)
                 else:
@@ -299,14 +299,14 @@ class PrecipitationDataHandler(BaseMessageHandler):
                 # Verify data was stored
                 verify_query = 'SELECT COUNT(*) FROM "precipitation_data" WHERE "request_id" = ?'
                 result = self.radar_db.execute_query(verify_query, (data['request_id'],), query_type='select')
-                
+
                 if result and result[0][0] > 0:
                     logger.info("[PRECIP_DATA_HNDLR_STORE] Data stored and verified successfully")
                     return True
                 else:
                     logger.error("[PRECIP_DATA_HNDLR_STORE] Data storage verification failed")
                     return False
-                    
+
             except Exception as e:
                 logger.error(f"[PRECIP_DATA_HNDLR_STORE] Error during storage: {e}")
                 logger.error(traceback.format_exc())
@@ -320,10 +320,10 @@ class PrecipitationDataHandler(BaseMessageHandler):
     def _convert_to_precipitation_data(self, row_dict: Dict) -> PrecipitationData:
         """
         Convert a database row dictionary to a PrecipitationData object
-        
+
         Args:
             row_dict: Dictionary containing precipitation data from database
-            
+
         Returns:
             PrecipitationData object initialized with the row data
         """
@@ -331,19 +331,19 @@ class PrecipitationDataHandler(BaseMessageHandler):
             # Log input validation
             logger.info(f"[PRECIP_CONVERT] Input dict: {row_dict}")
             logger.info(f"[PRECIP_CONVERT] Dict keys: {row_dict.keys()}")
-            
+
             # Create position tuple from x,y coordinates
             logger.info(f"[PRECIP_CONVERT] Creating position from x={row_dict['position_x']}, y={row_dict['position_y']}")
             position = (float(row_dict['position_x']), float(row_dict['position_y']))
             logger.info(f"[PRECIP_CONVERT] Position tuple created: {position}")
-            
+
             # Parse additional_info
             try:
                 additional_info = json.loads(row_dict['additional_info']) if row_dict['additional_info'] else {}
             except json.JSONDecodeError:
                 additional_info = {}
             logger.info(f"[PRECIP_CONVERT] Parsed additional_info: {additional_info}")
-            
+
             # Create PrecipitationData object with only the required fields
             logger.info(f"[PRECIP_CONVERT] Creating PrecipitationData with position={position}")
             precipitation_data = PrecipitationData(
@@ -355,12 +355,12 @@ class PrecipitationDataHandler(BaseMessageHandler):
             )
             logger.info(f"[PRECIP_CONVERT] Created object: {precipitation_data}")
             logger.info(f"[PRECIP_CONVERT] Object type: {type(precipitation_data)}")
-            
+
             # Set the fields that have default factories after creation
             precipitation_data.request_id = str(row_dict['request_id'])
             precipitation_data.timestamp = float(row_dict['timestamp'])
             precipitation_data.additional_info = additional_info
-            
+
             # Verify object state
             logger.info(f"[PRECIP_CONVERT] Final object state:")
             logger.info(f"[PRECIP_CONVERT] - position: {precipitation_data.position}")
@@ -368,9 +368,9 @@ class PrecipitationDataHandler(BaseMessageHandler):
             logger.info(f"[PRECIP_CONVERT] - rate: {precipitation_data.rate}")
             logger.info(f"[PRECIP_CONVERT] - intensity: {precipitation_data.intensity}")
             logger.info(f"[PRECIP_CONVERT] - show_values: {precipitation_data.show_values}")
-            
+
             return precipitation_data
-            
+
         except Exception as e:
             logger.error(f"Error converting row to PrecipitationData: {e}")
             logger.error(f"Row data: {row_dict}")
@@ -386,14 +386,14 @@ class PrecipitationDataHandler(BaseMessageHandler):
     ) -> List[PrecipitationData]:
         """
         Retrieve precipitation data with filtering
-        
+
         Args:
             start_time: Optional start time filter
             end_time: Optional end time filter
             precip_type: Optional precipitation type filter
             min_rate: Optional minimum rate filter
             max_rate: Optional maximum rate filter
-            
+
         Returns:
             List of PrecipitationData objects matching the filters
         """
@@ -401,17 +401,17 @@ class PrecipitationDataHandler(BaseMessageHandler):
             # Log table verification
             table_exists = self._verify_table_exists()
             logger.info(f"[PRECIP_DB] Table exists check: {table_exists}")
-            
+
             # Log the query parameters
             logger.info("[PRECIP_DB] Query parameters:")
             logger.info(f"[PRECIP_DB] - Time range: {start_time} to {end_time}")
             logger.info(f"[PRECIP_DB] - Type: {precip_type}")
             logger.info(f"[PRECIP_DB] - Rate range: {min_rate} to {max_rate}")
-            
+
             # Build query based on filters
             query_parts = ['SELECT * FROM "precipitation_data"']
             params = []
-            
+
             where_conditions = []
             if start_time is not None and end_time is not None:
                 where_conditions.append('"timestamp" BETWEEN ? AND ?')
@@ -422,31 +422,31 @@ class PrecipitationDataHandler(BaseMessageHandler):
             if min_rate is not None and max_rate is not None:
                 where_conditions.append('"rate" BETWEEN ? AND ?')
                 params.extend([min_rate, max_rate])
-                
+
             if where_conditions:
                 query_parts.append('WHERE ' + ' AND '.join(where_conditions))
-            
+
             query_parts.append('ORDER BY "timestamp" DESC')
             query = ' '.join(query_parts)
-            
+
             # Execute query
             logger.info(f"[PRECIP_DB] Executing query: {query}")
             logger.info(f"[PRECIP_DB] With parameters: {params}")
-            
+
             results = self.radar_db.execute_query(query, tuple(params), query_type='select')
             if not results:
                 logger.info("[PRECIP_DB] No results found")
                 return []
-                
+
             logger.info(f"[PRECIP_DB] Found {len(results)} results")
-            
+
             # Get column names
             columns = []
             with self.radar_db.get_connection() as conn:
                 cursor = conn.cursor()
                 cursor.execute("PRAGMA table_info(precipitation_data)")
                 columns = [col[1] for col in cursor.fetchall()]
-            
+
             # Convert results to dictionaries
             raw_data = []
             for row in results:
@@ -458,28 +458,28 @@ class PrecipitationDataHandler(BaseMessageHandler):
                     logger.error(f"Error converting row to dictionary: {e}")
                     logger.error(f"Row data: {row}")
                     continue
-            
+
             # Convert to PrecipitationData objects
             precipitation_data_list = []
             for i, row_dict in enumerate(raw_data):
                 try:
                     logger.info(f"[PRECIP_GET] Converting row {i}: {row_dict}")
                     logger.info(f"[PRECIP_GET] Row type before conversion: {type(row_dict)}")
-                    
+
                     precipitation_data = self._convert_to_precipitation_data(row_dict)
                     logger.info(f"[PRECIP_GET] Converted object: {precipitation_data}")
                     logger.info(f"[PRECIP_GET] Converted type: {type(precipitation_data)}")
                     logger.info(f"[PRECIP_GET] Position attribute: {getattr(precipitation_data, 'position', None)}")
                     precipitation_data_list.append(precipitation_data)
-                    
+
                 except Exception as e:
                     logger.error(f"Error converting row to PrecipitationData: {e}")
                     logger.error(f"Row data: {row_dict}")
                     continue
-            
+
             logger.info(f"Successfully converted {len(precipitation_data_list)} records to PrecipitationData objects")
             return precipitation_data_list
-            
+
         except Exception as e:
             logger.error(f"Error retrieving precipitation data: {e}")
             traceback.print_exc()
@@ -488,37 +488,37 @@ class PrecipitationDataHandler(BaseMessageHandler):
     def clear_old_data(self, max_age_seconds: float = 3600) -> int:
         """
         Clear precipitation data older than specified age
-        
+
         Args:
             max_age_seconds: Maximum age of data to keep in seconds
-            
+
         Returns:
             Number of records deleted
         """
         try:
             current_time = time.time()
             cutoff_time = current_time - max_age_seconds
-            
+
             # Use SystemDatabase instance directly
             condition = {'timestamp': {'<': cutoff_time}}
             result = self.radar_db.delete_from_table('precipitation_data', condition)
-            
+
             logger.info(f"Cleared precipitation data older than {max_age_seconds} seconds")
             return result
-            
+
         except Exception as e:
             logger.error(f"Error clearing old precipitation data: {e}")
             traceback.print_exc()
             return 0
-            
-    def store_precipitation_data_raw(self, request_id: str, position_x: float, position_y: float, 
-                              precip_type: str, rate: float, intensity: float, 
-                              timestamp: float = None, show_values: bool = True, 
+
+    def store_precipitation_data_raw(self, request_id: str, position_x: float, position_y: float,
+                              precip_type: str, rate: float, intensity: float,
+                              timestamp: float = None, show_values: bool = True,
                               use_transaction: bool = True) -> bool:
         """
         Store raw precipitation data directly with provided field values
         This method is used by precipitation_response_service to store data decoded from binary format
-        
+
         Args:
             request_id: Unique ID for tracking
             position_x: X coordinate
@@ -528,7 +528,7 @@ class PrecipitationDataHandler(BaseMessageHandler):
             intensity: Intensity on 0-1 scale
             timestamp: Optional timestamp, defaults to current time
             show_values: Whether to show values in display
-            
+
         Returns:
             bool: True if storage successful, False otherwise
         """
@@ -539,11 +539,11 @@ class PrecipitationDataHandler(BaseMessageHandler):
             logger.info(f"[PRECIP_RAW_STORE] - position: ({position_x}, {position_y})")
             logger.info(f"[PRECIP_RAW_STORE] - type: {precip_type}")
             logger.info(f"[PRECIP_RAW_STORE] - rate: {rate}")
-            
+
             # Use current time if timestamp not provided
             if timestamp is None:
                 timestamp = time.time()
-                
+
             # Initialize additional_info with important metadata
             additional_info = {
                 'source': 'precipitation_response_service',
@@ -551,25 +551,25 @@ class PrecipitationDataHandler(BaseMessageHandler):
                 'mode': 'SURVEILLANCE',  # Default mode for precipitation data
                 'data_type': 'precipitation'
             }
-            
+
             # Add command word
             from FMOFP.local_messaging.command_word_map import register_command_word
             system_id = 'displays'
             subaddress_name = 'radar_display'
             command_word = register_command_word(system_id, 0, subaddress_name, 'data', 'precipitation')
             additional_info['command_word'] = command_word
-            
+
             # Add message type
             from FMOFP.local_messaging.message_types import WEATHER_RADAR_PRECIPITATION_RESPONSE
             additional_info['message_type'] = WEATHER_RADAR_PRECIPITATION_RESPONSE
-            
+
             # Ensure table exists
             if not self._verify_table_exists():
                 logger.warning("[PRECIP_RAW_STORE] Table doesn't exist, creating it")
                 if not self._init_database_table():
                     logger.error("[PRECIP_RAW_STORE] Failed to create table")
                     return False
-            
+
             # Prepare data for storage
             data = {
                 'request_id': request_id,
@@ -582,70 +582,70 @@ class PrecipitationDataHandler(BaseMessageHandler):
                 'show_values': 1 if show_values else 0,
                 'additional_info': json.dumps(additional_info)
             }
-            
+
             # Log for test verification
-            logger.error(f"[PRECIPITATION_FLOW_DEBUG] Storing raw precipitation data: position=({position_x}, {position_y}), type={precip_type}, rate={rate}, intensity={intensity}")
-            
+            logger.debug(f"[PRECIPITATION_FLOW_DEBUG] Storing raw precipitation data: position=({position_x}, {position_y}), type={precip_type}, rate={rate}, intensity={intensity}")
+
             # Check if record exists
             check_query = 'SELECT COUNT(*) FROM "precipitation_data" WHERE "request_id" = ?'
             check_result = self.radar_db.execute_query(check_query, (request_id,), query_type='select')
-            
+
             if check_result and check_result[0][0] > 0:
                 # Update existing record
                 logger.warning(f"[PRECIP_RAW_STORE] Record exists, updating: {request_id}")
-                
+
                 # Build update query
                 update_parts = []
                 for key in data.keys():
                     if key != 'request_id':
                         update_parts.append(f'"{key}" = ?')
-                
+
                 update_query = f'UPDATE "precipitation_data" SET {", ".join(update_parts)} WHERE "request_id" = ?'
-                
+
                 # Prepare values
                 update_values = [data[key] for key in data.keys() if key != 'request_id']
                 update_values.append(data['request_id'])
-                
+
                 # Execute update
                 self.radar_db.execute_query(update_query, tuple(update_values), query_type='update', manage_transaction=True)
             else:
                 # Insert new record
                 logger.info(f"[PRECIP_RAW_STORE] Inserting new record: {request_id}")
-                
+
                 # Build insert query
                 fields = ', '.join([f'"{k}"' for k in data.keys()])
                 placeholders = ', '.join(['?' for _ in data])
                 query = f'INSERT INTO "precipitation_data" ({fields}) VALUES ({placeholders})'
-                
+
                 # Execute insert
                 self.radar_db.execute_query(query, tuple(data.values()), query_type='insert', manage_transaction=True)
-            
+
             # Verify storage
             verify_query = 'SELECT COUNT(*) FROM "precipitation_data" WHERE "request_id" = ?'
             result = self.radar_db.execute_query(verify_query, (data['request_id'],), query_type='select')
-            
+
             if result and result[0][0] > 0:
                 logger.info(f"[PRECIP_RAW_STORE] Data stored successfully: {request_id}")
                 # Get the stored record and confirm details
                 detail_query = 'SELECT * FROM "precipitation_data" WHERE "request_id" = ?'
                 detail_result = self.radar_db.execute_query(detail_query, (data['request_id'],), query_type='select')
-                
+
                 if detail_result:
                     # Get column names
                     with self.radar_db.get_connection() as conn:
                         cursor = conn.cursor()
                         cursor.execute("PRAGMA table_info(precipitation_data)")
                         columns = [col[1] for col in cursor.fetchall()]
-                    
+
                     # Convert to dictionary
                     row_dict = dict(zip(columns, detail_result[0]))
                     logger.info(f"[PRECIP_RAW_STORE] Stored record details: position=({row_dict['position_x']}, {row_dict['position_y']}), type={row_dict['type']}")
-                
+
                 return True
             else:
                 logger.error(f"[PRECIP_RAW_STORE] Data storage verification failed: {request_id}")
                 return False
-                
+
         except Exception as e:
             logger.error(f"[PRECIP_RAW_STORE] Error storing raw precipitation data: {e}")
             logger.error(traceback.format_exc())
@@ -654,113 +654,113 @@ class PrecipitationDataHandler(BaseMessageHandler):
     def extract_and_store_binary_data(self, request_id: str, binary_data: List[int]) -> bool:
         """
         Directly extract and store precipitation data from binary format
-        
+
         Args:
             request_id: Request ID for tracking
             binary_data: List of integers containing encoded data
-            
+
         Returns:
             bool: True if extraction and storage successful
         """
         try:
             # Add detailed logging
-            logger.error(f"[PRECIPITATION_FLOW_DEBUG] Processing binary data for request_id={request_id}")
-            logger.error(f"[PRECIPITATION_FLOW_DEBUG] Binary data received: {binary_data}")
-            
+            logger.debug(f"[PRECIPITATION_FLOW_DEBUG] Processing binary data for request_id={request_id}")
+            logger.debug(f"[PRECIPITATION_FLOW_DEBUG] Binary data received: {binary_data}")
+
             # Validate the binary data
             if not binary_data or len(binary_data) < 1:
-                logger.error(f"[PRECIPITATION_FLOW_DEBUG] Invalid binary data: {binary_data}")
+                logger.debug(f"[PRECIPITATION_FLOW_DEBUG] Invalid binary data: {binary_data}")
                 return False
-            
+
             # Read first word as count of objects
             object_count = binary_data[0]
-            logger.error(f"[PRECIPITATION_FLOW_DEBUG] Object count from first word: {object_count}")
-            
+            logger.debug(f"[PRECIPITATION_FLOW_DEBUG] Object count from first word: {object_count}")
+
             # Validate array size against expected size: 1 (count) + (count * 2) words
             expected_size = 1 + (object_count * 2)
             if len(binary_data) < expected_size:
-                logger.error(f"[PRECIPITATION_FLOW_DEBUG] Binary data size mismatch: expected {expected_size}, got {len(binary_data)}")
+                logger.debug(f"[PRECIPITATION_FLOW_DEBUG] Binary data size mismatch: expected {expected_size}, got {len(binary_data)}")
                 return False
-            
+
             # Check if database table exists
             if not self._verify_table_exists():
-                logger.error(f"[PRECIPITATION_FLOW_DEBUG] Precipitation table doesn't exist - creating now")
+                logger.debug(f"[PRECIPITATION_FLOW_DEBUG] Precipitation table doesn't exist - creating now")
                 if not self._init_database_table():
-                    logger.error(f"[PRECIPITATION_FLOW_DEBUG] Failed to create precipitation table")
+                    logger.debug(f"[PRECIPITATION_FLOW_DEBUG] Failed to create precipitation table")
                     return False
-                logger.error(f"[PRECIPITATION_FLOW_DEBUG] Successfully created precipitation table")
-            
+                logger.debug(f"[PRECIPITATION_FLOW_DEBUG] Successfully created precipitation table")
+
             # Verify database connection
             if not hasattr(self, 'radar_db') or self.radar_db is None:
-                logger.error(f"[PRECIPITATION_FLOW_DEBUG] No database connection available")
+                logger.debug(f"[PRECIPITATION_FLOW_DEBUG] No database connection available")
                 from FMOFP.storage.DBM import DatabaseManager
                 db_manager = DatabaseManager('FMOFP/dbConfig.xml')
                 self.radar_db = db_manager.get_system_db('radar_management')
-                logger.error(f"[PRECIPITATION_FLOW_DEBUG] Re-established database connection")
-            
+                logger.debug(f"[PRECIPITATION_FLOW_DEBUG] Re-established database connection")
+
             # Process and store all precipitation data objects
             stored_objects = 0
             precipitation_objects = []
-            
+
             # Use a database transaction to ensure all data is stored atomically
             with self.radar_db.get_connection() as conn:
                 cursor = conn.cursor()
                 transaction_started = False
-                
+
                 try:
                     # Start transaction
                     cursor.execute('BEGIN TRANSACTION')
                     transaction_started = True
-                    
+
                     # Process each object (pair of words)
                     for i in range(object_count):
                         # Calculate indices for the position and attribute words
                         pos_index = 1 + (i * 2)          # Skip first word (count) and get position word
                         attr_index = pos_index + 1        # Get attribute word
-                        
+
                         if pos_index >= len(binary_data) or attr_index >= len(binary_data):
-                            logger.error(f"[PRECIPITATION_FLOW_DEBUG] Index out of range: pos_index={pos_index}, attr_index={attr_index}")
+                            logger.debug(f"[PRECIPITATION_FLOW_DEBUG] Index out of range: pos_index={pos_index}, attr_index={attr_index}")
                             continue
-                        
+
                         # Extract position and attributes data
                         pos_word = binary_data[pos_index]
                         attr_word = binary_data[attr_index]
-                        
+
                         # Log the binary representation for debugging
-                        logger.error(f"[PRECIPITATION_FLOW_DEBUG] Object {i+1}/{object_count}: ")
-                        logger.error(f"[PRECIPITATION_FLOW_DEBUG] - Position word: {pos_word} (0x{pos_word:04X}, {bin(pos_word)[2:].zfill(16)})")
-                        logger.error(f"[PRECIPITATION_FLOW_DEBUG] - Attribute word: {attr_word} (0x{attr_word:04X}, {bin(attr_word)[2:].zfill(16)})")
-                        
+                        logger.debug(f"[PRECIPITATION_FLOW_DEBUG] Object {i+1}/{object_count}: ")
+                        logger.debug(f"[PRECIPITATION_FLOW_DEBUG] - Position word: {pos_word} (0x{pos_word:04X}, {bin(pos_word)[2:].zfill(16)})")
+                        logger.debug(f"[PRECIPITATION_FLOW_DEBUG] - Attribute word: {attr_word} (0x{attr_word:04X}, {bin(attr_word)[2:].zfill(16)})")
+
                         # Decode position coordinates from position word
                         x_coordinate = (pos_word >> 8) & 0xFF  # Extract upper byte
                         y_coordinate = pos_word & 0xFF        # Extract lower byte
-                        
+
                         # Decode precipitation characteristics from attribute word
                         type_code = (attr_word >> 12) & 0xF     # Extract top 4 bits for type
                         rate_code = (attr_word >> 6) & 0x3F     # Extract middle 6 bits for rate
                         intensity_code = attr_word & 0x3F       # Extract bottom 6 bits for intensity
-                        
+
                         # Map type code to precipitation type
                         type_map = {0: 'rain', 1: 'snow', 2: 'sleet', 3: 'hail', 4: 'rain'}
                         precip_type = type_map.get(type_code, 'rain')
-                        
+
                         # Convert codes to actual values
                         x = float(x_coordinate)
                         y = float(y_coordinate)
                         rate = float(rate_code * 2)  # Scale back from 0-63 to mm/hr
                         intensity = float(intensity_code) / 63.0  # Scale back from 0-63 to 0.0-1.0
-                        
+
                         # Ensure intensity is never zero (for visibility)
                         if intensity < 0.1:
                             intensity = 0.1
-                        
+
                         # Create the unique object ID for this precipitation data point
                         object_id = f"{request_id}_{i+1}"
-                        
+
                         # Prepare data for storage
                         timestamp = time.time()
                         show_values_int = 1  # True
-                        
+
                         # Create JSON for additional info
                         import json
                         additional_info = json.dumps({
@@ -774,20 +774,20 @@ class PrecipitationDataHandler(BaseMessageHandler):
                             'original_attributes_word': attr_word,
                             'parent_request_id': request_id
                         })
-                        
+
                         # Log the decoded data details
-                        logger.error(f"[PRECIPITATION_FLOW_DEBUG] Decoded object {i+1}: x={x}, y={y}, type={precip_type}, rate={rate}, intensity={intensity}")
-                        
+                        logger.debug(f"[PRECIPITATION_FLOW_DEBUG] Decoded object {i+1}: x={x}, y={y}, type={precip_type}, rate={rate}, intensity={intensity}")
+
                         # Store this object in the database
                         cursor.execute(
                             '''INSERT INTO precipitation_data
-                               (request_id, timestamp, position_x, position_y, 
+                               (request_id, timestamp, position_x, position_y,
                                 type, rate, intensity, show_values, additional_info)
                                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)''',
-                            (object_id, timestamp, x, y, precip_type, rate, 
+                            (object_id, timestamp, x, y, precip_type, rate,
                              intensity, show_values_int, additional_info)
                         )
-                        
+
                         # Track this object for return
                         precipitation_objects.append({
                             'request_id': object_id,
@@ -796,45 +796,45 @@ class PrecipitationDataHandler(BaseMessageHandler):
                             'rate': rate,
                             'intensity': intensity
                         })
-                        
+
                         stored_objects += 1
-                    
+
                     # If we've made it here, commit the transaction
                     conn.commit()
                     transaction_started = False
-                    logger.error(f"[PRECIPITATION_FLOW_DEBUG] Successfully stored {stored_objects}/{object_count} precipitation objects")
-                
+                    logger.debug(f"[PRECIPITATION_FLOW_DEBUG] Successfully stored {stored_objects}/{object_count} precipitation objects")
+
                 except Exception as db_error:
                     # Roll back transaction if it's started but not committed
                     if transaction_started:
                         try:
                             conn.rollback()
                         except Exception as rollback_error:
-                            logger.error(f"[PRECIPITATION_FLOW_DEBUG] Error rolling back transaction: {rollback_error}")
-                    
-                    logger.error(f"[PRECIPITATION_FLOW_DEBUG] Database error: {db_error}")
+                            logger.debug(f"[PRECIPITATION_FLOW_DEBUG] Error rolling back transaction: {rollback_error}")
+
+                    logger.debug(f"[PRECIPITATION_FLOW_DEBUG] Database error: {db_error}")
                     logger.error(traceback.format_exc())
                     return False
-            
+
             # Verify that objects were stored correctly
             verification_success = False
             try:
                 # Query to count stored objects for this request
                 count_query = "SELECT COUNT(*) FROM precipitation_data WHERE request_id LIKE ?"
                 result = self.radar_db.execute_query(count_query, (f"{request_id}_%",), query_type='select')
-                
+
                 if result and result[0][0] > 0:
                     stored_count = result[0][0]
-                    logger.error(f"[PRECIPITATION_FLOW_DEBUG] Verification successful: {stored_count} objects found in database")
+                    logger.debug(f"[PRECIPITATION_FLOW_DEBUG] Verification successful: {stored_count} objects found in database")
                     verification_success = True
                 else:
-                    logger.error(f"[PRECIPITATION_FLOW_DEBUG] Verification failed: No objects found in database")
+                    logger.debug(f"[PRECIPITATION_FLOW_DEBUG] Verification failed: No objects found in database")
                     verification_success = False
             except Exception as verify_error:
-                logger.error(f"[PRECIPITATION_FLOW_DEBUG] Verification error: {verify_error}")
+                logger.debug(f"[PRECIPITATION_FLOW_DEBUG] Verification error: {verify_error}")
                 logger.error(traceback.format_exc())
                 verification_success = False
-            
+
             # Also create a link record in the main request table using the original request_id
             # This makes it possible to find all related objects by the original request ID
             try:
@@ -855,19 +855,19 @@ class PrecipitationDataHandler(BaseMessageHandler):
                         'object_ids': [p['request_id'] for p in precipitation_objects]
                     })
                 }
-                
+
                 # Check if link record exists first
                 check_query = "SELECT COUNT(*) FROM precipitation_data WHERE request_id = ?"
                 result = self.radar_db.execute_query(check_query, (request_id,), query_type='select')
                 if result and result[0][0] > 0:
                     # Update existing link record
-                    logger.error(f"[PRECIPITATION_FLOW_DEBUG] Updating existing link record: {request_id}")
-                    
+                    logger.debug(f"[PRECIPITATION_FLOW_DEBUG] Updating existing link record: {request_id}")
+
                     # Use direct database connection for update
                     with self.radar_db.get_connection() as conn:
                         cursor = conn.cursor()
                         cursor.execute(
-                            '''UPDATE precipitation_data SET 
+                            '''UPDATE precipitation_data SET
                                timestamp = ?, additional_info = ?
                                WHERE request_id = ?''',
                             (link_record['timestamp'], link_record['additional_info'], request_id)
@@ -876,31 +876,31 @@ class PrecipitationDataHandler(BaseMessageHandler):
                 else:
                     # Insert new link record
                     self.radar_db.insert_into_table('precipitation_data', link_record)
-                
-                logger.error(f"[PRECIPITATION_FLOW_DEBUG] Created link record with original request_id: {request_id}")
-                
+
+                logger.debug(f"[PRECIPITATION_FLOW_DEBUG] Created link record with original request_id: {request_id}")
+
             except Exception as link_error:
-                logger.error(f"[PRECIPITATION_FLOW_DEBUG] Error creating link record: {link_error}")
+                logger.debug(f"[PRECIPITATION_FLOW_DEBUG] Error creating link record: {link_error}")
                 # Don't fail the whole operation for this
-            
+
             return verification_success
-            
+
         except Exception as e:
-            logger.error(f"[PRECIPITATION_FLOW_DEBUG] Error extracting and storing binary data: {e}")
+            logger.debug(f"[PRECIPITATION_FLOW_DEBUG] Error extracting and storing binary data: {e}")
             logger.error(traceback.format_exc())
             return False
         except Exception as e:
             logger.error(f"[PRECIP_BINARY] Error extracting and storing binary data: {e}")
             logger.error(traceback.format_exc())
             return False
-            
+
     def handle_precipitation_completion(self, message: Dict) -> bool:
         """
         Handle precipitation completion messages that might contain binary data
-        
+
         Args:
             message: Completion message dictionary
-            
+
         Returns:
             bool: True if data was processed and stored successfully
         """
@@ -909,30 +909,30 @@ class PrecipitationDataHandler(BaseMessageHandler):
             if not request_id:
                 logger.error("[PRECIP_COMPLETION] Missing request_id in completion message")
                 return False
-                
+
             # Check for data array in the message
             data = message.get('data')
             if not data or not isinstance(data, list):
                 logger.error(f"[PRECIP_COMPLETION] No data array in completion message: {message.keys()}")
                 return False
-                
+
             # Check if this is a block transfer
             metadata = message.get('metadata', {})
             is_transfer_data = metadata.get('is_transfer_data', False)
             is_final = metadata.get('is_final', False)
-            
-            logger.error(f"[PRECIPITATION_FLOW_DEBUG] Processing completion message with data length: {len(data)}")
-            logger.error(f"[PRECIPITATION_FLOW_DEBUG] Transfer info: is_transfer_data={is_transfer_data}, is_final={is_final}")
-            
+
+            logger.debug(f"[PRECIPITATION_FLOW_DEBUG] Processing completion message with data length: {len(data)}")
+            logger.debug(f"[PRECIPITATION_FLOW_DEBUG] Transfer info: is_transfer_data={is_transfer_data}, is_final={is_final}")
+
             if is_transfer_data:
                 # This is part of a block transfer
                 from FMOFP.MIL_STD_1553B.block_transfer_manager import get_block_transfer_manager
                 transfer_manager = get_block_transfer_manager()
-                
+
                 # Get sequence information
                 sequence_number = metadata.get('sequence_number', 1)
                 total_sequences = metadata.get('total_sequences', 1)
-                
+
                 # Register this block
                 transfer_complete = transfer_manager.register_block(
                     request_id,
@@ -941,70 +941,70 @@ class PrecipitationDataHandler(BaseMessageHandler):
                     is_final,
                     data
                 )
-                
-                logger.error(f"[PRECIPITATION_FLOW_DEBUG] Registered block {sequence_number}/{total_sequences}, transfer complete: {transfer_complete}")
-                
+
+                logger.debug(f"[PRECIPITATION_FLOW_DEBUG] Registered block {sequence_number}/{total_sequences}, transfer complete: {transfer_complete}")
+
                 if transfer_complete:
                     # Get the assembled data
                     assembled_data = transfer_manager.get_assembled_data(request_id)
-                    
+
                     if assembled_data:
-                        logger.error(f"[PRECIPITATION_FLOW_DEBUG] Processing assembled data with {len(assembled_data)} words")
+                        logger.debug(f"[PRECIPITATION_FLOW_DEBUG] Processing assembled data with {len(assembled_data)} words")
                         return self.extract_and_store_binary_data(request_id, assembled_data)
                     else:
-                        logger.error("[PRECIPITATION_FLOW_DEBUG] Failed to get assembled data")
+                        logger.debug("[PRECIPITATION_FLOW_DEBUG] Failed to get assembled data")
                         return False
                 else:
                     # Transfer not complete yet, wait for more blocks
                     logger.info(f"[PRECIPITATION_FLOW_DEBUG] Block transfer not complete yet: {sequence_number}/{total_sequences}")
-                    
+
                     # Get status for logging
                     status = transfer_manager.get_transfer_status(request_id)
                     logger.info(f"[PRECIPITATION_FLOW_DEBUG] Transfer status: {status['received_blocks']}/{status['total_blocks']} blocks received ({status['percent_complete']:.1f}% complete)")
-                    
+
                     # Return true since we've handled this block
                     return True
             else:
                 # Not a block transfer, process the data directly
-                logger.error(f"[PRECIPITATION_FLOW_DEBUG] Processing direct data array with {len(data)} words")
+                logger.debug(f"[PRECIPITATION_FLOW_DEBUG] Processing direct data array with {len(data)} words")
                 return self.extract_and_store_binary_data(request_id, data)
-                
+
         except Exception as e:
             logger.error(f"[PRECIP_COMPLETION] Error handling completion message: {e}")
             logger.error(traceback.format_exc())
             return False
-    
+
     def handle_message(self, message):
         """
         Handle a precipitation data message.
         Implementation of the abstract method from BaseMessageHandler.
-        
+
         Args:
             message: The message to handle
-            
+
         Returns:
             bool: True if message was handled successfully, False otherwise
         """
         if not self.validate_message(message):
             logger.warning(f"Invalid precipitation message: {message}")
             return False
-            
+
         try:
             # Pre-process the message
             processed_message = self.pre_process_message(message)
-            
+
             # Check message type to determine action
             message_type = processed_message.get('message_type', '')
             command_type = processed_message.get('command_type', '')
-            
+
             # Log detailed message info for debugging
             logger.info(f"[PRECIP_HANDLER] Handling message: type={message_type}, command={command_type}")
-            
+
             # Check for precipitation completion message
             if message_type.lower() == 'radarprecipitationcompletion' or command_type.lower() in ['precipitation_completion', 'transfer_complete']:
                 logger.info("[PRECIP_HANDLER] Detected precipitation completion message")
                 return self.handle_precipitation_completion(processed_message)
-                
+
             elif message_type.lower() == WEATHER_RADAR_PRECIPITATION_REQUEST.lower():
                 # Handle data request
                 logger.info("Handling precipitation data request")
@@ -1014,7 +1014,7 @@ class PrecipitationDataHandler(BaseMessageHandler):
                 precip_type = processed_message.get('precipitation_type')
                 min_rate = processed_message.get('min_rate')
                 max_rate = processed_message.get('max_rate')
-                
+
                 # Get data
                 data = self.get_precipitation_data(
                     start_time=start_time,
@@ -1023,14 +1023,14 @@ class PrecipitationDataHandler(BaseMessageHandler):
                     min_rate=min_rate,
                     max_rate=max_rate
                 )
-                
+
                 logger.info(f"Retrieved {len(data)} precipitation data records")
                 return True
-                
+
             elif message_type.lower() == WEATHER_RADAR_PRECIPITATION_RESPONSE.lower():
                 # Handle data response
                 logger.info("Handling precipitation data response")
-                
+
                 # Check for binary data array
                 if 'data' in processed_message and isinstance(processed_message['data'], list) and len(processed_message['data']) > 0:
                     # This might be binary data - check if all elements are integers
@@ -1038,7 +1038,7 @@ class PrecipitationDataHandler(BaseMessageHandler):
                     if all(isinstance(item, int) for item in data_array):
                         logger.info(f"[PRECIP_HANDLER] Detected binary data array with {len(data_array)} elements")
                         return self.extract_and_store_binary_data(processed_message.get('request_id'), data_array)
-                
+
                 # Convert message to PrecipitationData if needed
                 if not isinstance(message, PrecipitationData):
                     # Create precipitation data object
@@ -1046,7 +1046,7 @@ class PrecipitationDataHandler(BaseMessageHandler):
                         position = message.get('position', (0.0, 0.0))
                         if isinstance(position, list):
                             position = tuple(position)
-                            
+
                         precip_data = PrecipitationData(
                             position=position,
                             type=message.get('type', 'rain'),
@@ -1054,12 +1054,12 @@ class PrecipitationDataHandler(BaseMessageHandler):
                             intensity=float(message.get('intensity', 0.0)),
                             show_values=bool(message.get('show_values', False))
                         )
-                        
+
                         # Set additional fields
                         precip_data.request_id = message.get('request_id', str(time.time()))
                         precip_data.timestamp = float(message.get('timestamp', time.time()))
                         precip_data.additional_info = message.get('additional_info', {})
-                        
+
                         # Store the data
                         result = self.store_precipitation_data(precip_data)
                         return result
@@ -1070,10 +1070,10 @@ class PrecipitationDataHandler(BaseMessageHandler):
                     # Message is already a PrecipitationData object
                     result = self.store_precipitation_data(message)
                     return result
-            
+
             logger.warning(f"Unsupported precipitation message type: {message_type}")
             return False
-            
+
         except Exception as e:
             logger.error(f"Error handling precipitation message: {e}")
             traceback.print_exc()

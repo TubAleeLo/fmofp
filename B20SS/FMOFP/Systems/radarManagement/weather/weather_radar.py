@@ -312,18 +312,41 @@ class weather_radar:
             logger.error(f"[WEATHER] Error updating radar state for {self.name}: {str(e)}")
 
     def _process_surveillance_data(self):
-        """Process weather surveillance data."""
+        """Process weather surveillance data — run storm cell tracker and push to display."""
         try:
-            # Simulate surveillance processing
-            pass
+            elevation_angles = self.config['vcp'].get(
+                'surveillance', {}).get('elevs', (0.5,))
+            reflectivity = self.reflectivity_simulator.generate_reflectivity(
+                'surveillance', elevation_angles)
+            self.storm_cell_tracker.process_radar_data(
+                reflectivity, elevation_angles=elevation_angles)
+            cells = self.storm_cell_tracker.get_active_cells()
+            if cells:
+                try:
+                    from FMOFP.local_messaging.routing.radar_to_display_bridge import push_cells_data
+                    push_cells_data(cells, str(uuid.uuid4()))
+                    logger.debug(f"[WEATHER] Surveillance: {len(cells)} storm cells pushed to display")
+                except Exception as _bridge_exc:
+                    logger.warning(f"[WEATHER] Surveillance cell bridge push failed: {_bridge_exc}")
         except Exception as e:
             logger.error(f"[WEATHER] Error processing surveillance data for {self.name}: {str(e)}")
 
     def _process_mapping_data(self):
-        """Process weather mapping data."""
+        """Process weather mapping data — run precipitation analyser and push to display."""
         try:
-            # Simulate mapping processing
-            pass
+            elevation_angles = self.config['vcp'].get(
+                'mapping', {}).get('elevs', (0.5,))
+            reflectivity = self.reflectivity_simulator.generate_reflectivity(
+                'mapping', elevation_angles)
+            self.precip_analyzer.process_radar_data(reflectivity, elevation_angles)
+            enriched = self.precip_analyzer.get_precipitation_data()
+            if enriched:
+                try:
+                    from FMOFP.local_messaging.routing.radar_to_display_bridge import push_precipitation_data
+                    push_precipitation_data(enriched, str(uuid.uuid4()))
+                    logger.debug(f"[WEATHER] Mapping: {len(enriched)} precip points pushed to display")
+                except Exception as _bridge_exc:
+                    logger.warning(f"[WEATHER] Mapping precip bridge push failed: {_bridge_exc}")
         except Exception as e:
             logger.error(f"[WEATHER] Error processing mapping data for {self.name}: {str(e)}")
 
@@ -340,6 +363,24 @@ class weather_radar:
                 logger.info(
                     f"[WEATHER] Turbulence: {len(cells)} cells, "
                     f"max category={self.turbulence_proc.max_category()}")
+                try:
+                    from FMOFP.local_messaging.routing.radar_to_display_bridge import push_cells_data
+                    cell_dicts = []
+                    for c in cells:
+                        pos_nm = getattr(c, 'position_nm', (0.0, 0.0))
+                        cell_dicts.append({
+                            'position':     (float(pos_nm[0]), float(pos_nm[1])),
+                            'intensity':    float(getattr(c, 'intensity', 0.0)),
+                            'reflectivity': float(getattr(c, 'spectrum_width', 0.0)),
+                            'size':         1.0,
+                            'velocity':     (0.0, 0.0),
+                            'cell_id':      int(getattr(c, 'cell_id', 0)),
+                            'category':     str(getattr(c, 'category', 'LIGHT')),
+                            'altitude':     float(getattr(c, 'altitude_ft', 0.0)),
+                        })
+                    push_cells_data(cell_dicts, str(uuid.uuid4()))
+                except Exception as _bridge_exc:
+                    logger.warning(f"[WEATHER] Turbulence bridge push failed: {_bridge_exc}")
         except Exception as exc:
             logger.error(f"[WEATHER] Turbulence processing error: {exc}")
 
@@ -354,6 +395,27 @@ class weather_radar:
                 reflectivity, elevation_angles)
             if self.windshear_proc.has_microburst():
                 logger.warning("[WEATHER] MICROBURST DETECTED")
+            if events:
+                try:
+                    from FMOFP.local_messaging.routing.radar_to_display_bridge import push_cells_data
+                    event_dicts = []
+                    for ev in events:
+                        pos_nm = getattr(ev, 'position_nm', (0.0, 0.0))
+                        event_dicts.append({
+                            'position':      (float(pos_nm[0]), float(pos_nm[1])),
+                            'intensity':     min(1.0, float(getattr(ev, 'shear_knots', 0.0)) / 60.0),
+                            'reflectivity':  float(getattr(ev, 'shear_knots', 0.0)),
+                            'size':          2.0,
+                            'velocity':      (0.0, 0.0),
+                            'cell_id':       int(getattr(ev, 'event_id', 0)),
+                            'category':      str(getattr(ev, 'severity', 'LOW')),
+                            'is_microburst': bool(getattr(ev, 'is_microburst', False)),
+                            'altitude':      float(getattr(ev, 'altitude_ft', 0.0)),
+                        })
+                    push_cells_data(event_dicts, str(uuid.uuid4()))
+                    logger.info(f"[WEATHER] Windshear: {len(events)} events pushed to display")
+                except Exception as _bridge_exc:
+                    logger.warning(f"[WEATHER] Windshear bridge push failed: {_bridge_exc}")
         except Exception as exc:
             logger.error(f"[WEATHER] Windshear processing error: {exc}")
 

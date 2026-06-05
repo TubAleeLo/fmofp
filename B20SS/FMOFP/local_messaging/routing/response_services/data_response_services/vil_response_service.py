@@ -221,7 +221,7 @@ class VILResponseService:
                     current_mode = await display_service.get_current_display_mode('radar_display')
                     logger.info(f"[VIL_FLOW] Current display mode: {current_mode}")
                 except Exception as e:
-                    logger.error(f"[VIL_FLOW] Error getting display mode: {e}")
+                    logger.debug(f"[VIL_FLOW] Error getting display mode: {e}")
 
             # Store VIL data regardless of the current display mode.
             # The radar can generate data in SURVEILLANCE, MAPPING, or any
@@ -234,7 +234,7 @@ class VILResponseService:
 
             # Verify database connection
             if not hasattr(self, 'data_handler') or self.data_handler is None:
-                logger.error("[VIL_FLOW] Missing data_handler - service not properly initialized")
+                logger.debug("[VIL_FLOW] Missing data_handler - service not properly initialized")
                 from FMOFP.storage.DBM import DatabaseManager
                 db_manager = DatabaseManager('FMOFP/dbConfig.xml')
                 radar_db = db_manager.get_system_db('radar_management')
@@ -288,7 +288,7 @@ class VILResponseService:
                         data = WeatherRadarVILData.from_data_words(response)
                         logger.info(f"[VIL_FLOW] Parsed VIL data from words: {data.__dict__}")
                     except (ValueError, IndexError) as e:
-                        logger.error(f"[VIL_FLOW] Error parsing data words: {e}")
+                        logger.debug(f"[VIL_FLOW] Error parsing data words: {e}")
                         # Don't return yet, try other approaches
                 elif len(response) > 0 and hasattr(response[0], 'position'):
                     # List of VIL data objects
@@ -336,9 +336,9 @@ class VILResponseService:
                                         logger.info(f"[VIL_FLOW] Retrieved binary-stored VIL data for further processing")
                                         break
                         except Exception as e:
-                            logger.error(f"[VIL_FLOW] Error retrieving stored binary data: {e}")
+                            logger.debug(f"[VIL_FLOW] Error retrieving stored binary data: {e}")
                 except Exception as e:
-                    logger.error(f"[VIL_FLOW] Error processing binary data: {e}")
+                    logger.debug(f"[VIL_FLOW] Error processing binary data: {e}")
 
             # Approach 5: Check if response is a string (could be encoded binary)
             if not data and isinstance(response, str) and len(response) > 0:
@@ -390,12 +390,12 @@ class VILResponseService:
                                             logger.info(f"[VIL_FLOW] Retrieved string-binary-stored VIL data")
                                             break
                             except Exception as e:
-                                logger.error(f"[VIL_FLOW] Error retrieving string-binary data: {e}")
+                                logger.debug(f"[VIL_FLOW] Error retrieving string-binary data: {e}")
                 except Exception as e:
-                    logger.error(f"[VIL_FLOW] Error processing string as binary data: {e}")
+                    logger.debug(f"[VIL_FLOW] Error processing string as binary data: {e}")
 
             if not data or not isinstance(data, WeatherRadarVILData):
-                logger.error(f"[VIL_FLOW] Invalid data format or type")
+                logger.debug(f"[VIL_FLOW] Invalid data format or type")
                 await self._send_acknowledgment(request_id, False, "Invalid data type")
                 return
 
@@ -475,7 +475,7 @@ class VILResponseService:
                     await routing_service.route_vil_data(vil_message)
                     logger.info(f"[VIL_FLOW] Routed VIL data to display system with request ID: {original_request_id}")
                 except Exception as e:
-                    logger.error(f"[VIL_FLOW] Error routing VIL data to display: {e}")
+                    logger.debug(f"[VIL_FLOW] Error routing VIL data to display: {e}")
                     logger.error(traceback.format_exc())
                     # Continue with acknowledgment even if routing fails
 
@@ -506,12 +506,12 @@ class VILResponseService:
                     # Start service with current loop
                     success = await self.start(event_loop=loop)
                     if not success:
-                        logger.error("[VIL_STORE] Failed to start service")
+                        logger.debug("[VIL_STORE] Failed to start service")
                         return False
 
                     logger.info("[VIL_STORE] Service started successfully")
                 except Exception as e:
-                    logger.error(f"[VIL_STORE] Failed to start service: {e}")
+                    logger.debug(f"[VIL_STORE] Failed to start service: {e}")
                     logger.error(traceback.format_exc())
                     return False
 
@@ -547,7 +547,7 @@ class VILResponseService:
             # Store data directly
             direct_store = self.data_handler.store_vil_data(vil_data)
             if not direct_store:
-                logger.error("[VIL_STORE] Direct storage failed")
+                logger.debug("[VIL_STORE] Direct storage failed")
                 return False
 
             logger.info(f"[VIL_FLOW] VIL data stored successfully: {vil_data.request_id}")
@@ -614,7 +614,7 @@ class VILResponseService:
                     await display_handler.handle_vil_data(display_message)
                     logger.info(f"[VIL_FLOW] Sent VIL data directly to display system with request ID: {vil_data.request_id}")
                 else:
-                    logger.error("[VIL_FLOW] Could not get display message handler")
+                    logger.debug("[VIL_FLOW] Could not get display message handler")
 
                     # Fallback to display service if handler not available
                     from FMOFP.local_messaging.routing.response_services.system_response_services.DisplayResponseService import get_display_response_service
@@ -660,7 +660,7 @@ class VILResponseService:
                     else:
                         logger.warning("[VIL_FLOW] Display service not available for direct routing")
             except Exception as e:
-                logger.error(f"[VIL_FLOW] Error in direct display routing: {e}")
+                logger.debug(f"[VIL_FLOW] Error in direct display routing: {e}")
                 logger.error(traceback.format_exc())
                 # Continue with queue processing even if direct routing fails
 
@@ -694,7 +694,7 @@ class VILResponseService:
                 return True
 
             except Exception as e:
-                logger.error(f"[VIL_STORE] Error adding to queue: {e}")
+                logger.debug(f"[VIL_STORE] Error adding to queue: {e}")
                 logger.error(traceback.format_exc())
                 # Return true since direct storage succeeded
                 return True
