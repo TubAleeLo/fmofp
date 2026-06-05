@@ -16,6 +16,7 @@ The Flight Management System (FMS) serves as the central integration hub for all
 - **Display Systems** - Primary Flight Display and Multi-Function Display data feeds
 - **Mission Planning** - Waypoint management and tactical coordination
 - **Radar Systems** - Tactical data integration and threat assessment
+- **Cross-Radar Data Fusion** - `RadarDataFusion` correlates Targeting and AEWC tracks across a 500 m gate; fused contacts feed the TSD display (cross-radar data fusion layer active)
 
 ### Architecture Overview
 
@@ -32,7 +33,7 @@ The Flight Management System (FMS) serves as the central integration hub for all
     │             │             │
 ┌───▼───┐    ┌────▼────┐    ┌───▼────┐
 │  FCS  │    │   NAV   │    │ MISSION│
-│ ✅ OP │    │⚠️ BASIC│    │⚠️ BASIC│
+│ ✅ OP │    │ ✅ OP  │    │⚠️ BASIC│
 └───────┘    └─────────┘    └────────┘
 ```
 
@@ -220,10 +221,9 @@ class GPSSystem:
         # Fallback to last known position if insufficient satellites
 ```
 
-**Current Limitations:**
-- Threading started in main execution instead of system manager
-- Limited to simulated satellite data
-- No real GPS hardware integration
+**Current Constraints:**
+- Simulated satellite data only (no real GPS hardware)
+- Constellation geometry is fixed (not propagated over time)
 
 ### 10.3.2 Waypoint Management ✅ **OPERATIONAL**
 

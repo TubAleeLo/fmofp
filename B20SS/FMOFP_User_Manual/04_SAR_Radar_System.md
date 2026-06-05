@@ -8,7 +8,7 @@
 
 ### System Status ⚠️ **BASIC SIMULATION** (Pattern Generation) | ✅ **OPERATIONAL** (Display Integration + Change Detection)
 
-The Synthetic Aperture Radar (SAR) System provides basic simulated imaging capabilities for development and testing purposes. The system can generate simple pattern-based imagery but does not perform actual SAR processing. Display integration is not implemented.
+The Synthetic Aperture Radar (SAR) System provides basic simulated imaging capabilities for development and testing purposes. The system generates simple pattern-based imagery and routes it to the display coordinator via `push_sar_data()`. CFAR log-ratio change detection (`sar_processor.py`) identifies differences between successive imagery frames.
 
 **Current Implementation Status:**
 - **Mode Switching:** ✅ **OPERATIONAL** - Can switch between SAR modes
@@ -356,7 +356,7 @@ SAR Image Data Structure:
 - **No Focusing Algorithms:** No SAR image focusing
 
 **Operational Limitations:**
-- **No Display Integration:** Generated patterns not shown anywhere
+- **Display Integration:** ✅ Imagery routed via `push_sar_data()` to display coordinator
 - **No Real-Time Operation:** Patterns generated on-demand only
 - **No Terrain Interaction:** Patterns don't reflect actual terrain
 - **No Mission Planning:** No integration with flight planning systems
@@ -422,7 +422,7 @@ SAR Image Data Structure:
 - Data seems to disappear after generation
 
 **Root Cause:**
-- Display integration not implemented
+- Display integration: ✅ operational via bridge
 - This is expected behavior, not a bug
 
 **Current Workaround:**

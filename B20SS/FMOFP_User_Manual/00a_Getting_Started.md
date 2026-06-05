@@ -208,7 +208,7 @@ Throughout the FMOFP system, you'll see these status indicators:
 2. Access Weather Radar controls
 3. Change from STANDBY to SURVEILLANCE mode
 4. Monitor logs for data generation messages
-5. Note: Data won't appear on displays due to known 1553B issue
+5. Verify weather data appears in the MFD radar display (routed via radar-to-display bridge)
 
 #### Task 2: Test Display System Themes
 1. Open Primary Flight Display
@@ -226,48 +226,53 @@ Throughout the FMOFP system, you'll see these status indicators:
 
 ---
 
-## Understanding Current System Limitations
+## Current System Capabilities
 
-### Known Issues for Interns
+### What Is Fully Operational
 
-**Weather Radar Display Integration 🐛 KNOWN ISSUES:**
-- Weather radar processing works correctly
-- VIL and precipitation data generation is operational
-- **Issue:** 1553B communication prevents data from reaching displays
-- **What You'll See:** Mode changes work, but no weather data on displays
-- **Monitoring:** Use system logs to verify radar is processing data
+**All Radar Systems ✅ OPERATIONAL:**
+- All five radars (Weather, Targeting, SAR, TFR, AEWC) process data and route it to displays via the radar-to-display bridge
+- **Weather Radar:** VIL, precipitation, storm cell, turbulence, and wind shear data reach the MFD radar display
+- **Targeting Radar:** Track data enriched with signature analysis and stealth detection, routed to MFD and TSD
+- **SAR Radar:** Imagery routed to display coordinator; change detection active
+- **TFR Radar:** Terrain profile routed; PathOptimiser and ClearanceManager active
+- **AEWC Radar:** Tracks routed; sector priority and ECM protection active
 
-**Other Radar Systems ✅ OPERATIONAL:**
-- All radar systems (Targeting, SAR, TFR, AEWC) process data correctly
-- **Issue:** Display integration not yet implemented
-- **What You'll See:** Mode changes work, data processing occurs
-- **Monitoring:** Check logs for data generation confirmation
+**Cross-Radar Data Fusion ✅ OPERATIONAL:**
+- `RadarDataFusion` correlates Targeting and AEWC tracks (500 m gate)
+- Fused threats appear on the Tactical Situation Display (TSD)
 
-**Display System Integration:**
-- Display rendering works perfectly
-- Flight Management System data integration is operational
-- **Limitation:** Only FMS data appears on displays, not radar data
-- **What You'll See:** PFD shows flight data, MFD shows system status
+**Display Systems ✅ OPERATIONAL:**
+- PFD: real-time FMS flight data at 20 Hz
+- MFD: radar integration for all five radar types
+- EICAS (SA 13): engine, systems, and crew alerting
+- TSD (SA 15): fused threat contacts, heading, G-force, energy state
+- SMS (SA 16): B-2-style planform, station detail, master arm
 
-### Working Around Limitations
+### Remaining Simulation Constraints
 
-**For Radar Testing:**
-1. Use system logs to verify radar operations
-2. Monitor mode change confirmations
-3. Check data generation messages
-4. Verify system health indicators
+**Mathematical simulation only (not real radar signal processing):**
+- SAR: pattern generation (stripmap/spotlight/scansar) — not real SAR algorithms
+- TFR: sine-wave terrain model — not real radar terrain data
+- AEWC: random target generation — not real air surveillance
+- GPS: simulated satellite constellation — no real GPS hardware
 
-**For Display Testing:**
-1. Focus on FMS data integration
-2. Test theme changes and visual effects
-3. Verify display responsiveness
-4. Check tactical indicators (G-force, AOA)
+### Useful Monitoring Commands
 
-**For System Integration:**
-1. Monitor 1553B communication status
-2. Verify message routing (even if data doesn't display)
-3. Test system startup and shutdown procedures
-4. Check database operations
+```bash
+# All system activity
+tail -f FMOFP/logs/DEBUG_*.log
+
+# Bridge data flow
+tail -f FMOFP/logs/DEBUG_*.log | grep BRIDGE
+
+# Radar-specific
+tail -f FMOFP/logs/DEBUG_*.log | grep WEATHER
+tail -f FMOFP/logs/DEBUG_*.log | grep TARGETING_RADAR
+
+# Fusion layer
+tail -f FMOFP/logs/DEBUG_*.log | grep FUSION
+```
 
 ---
 
@@ -294,8 +299,8 @@ tail -f FMOFP/logs/DEBUG_*.log | grep 1553B
 
 ### Common Questions for Interns
 
-**Q: Why don't I see radar data on displays?**
-A: This is a known issue with 1553B communication. The radar systems are working correctly, but data isn't reaching the displays. Monitor the logs to verify radar operation.
+**Q: How does radar data reach the displays?**
+A: Each radar pushes data through the `radar_to_display_bridge` to the `RadarDisplayDataCoordinator`, which the MFD and TSD poll. You should see live data on the relevant display after a mode change. Check the bridge log lines (`grep BRIDGE`) if data is missing.
 
 **Q: How do I know if a mode change worked?**
 A: Check the mode indicator in the interface and monitor the log output for confirmation messages. You should see processing begin even if data doesn't display.

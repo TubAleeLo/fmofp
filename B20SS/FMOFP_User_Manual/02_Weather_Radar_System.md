@@ -531,34 +531,32 @@ The turbulence detection system is currently under development with basic algori
 
 ## 2.7 Wind Shear Detection ✅ **OPERATIONAL**
 
-### Planned Implementation
+### Implementation
 
-Wind shear detection capabilities are planned but not yet implemented in the current system version.
+Wind shear detection is fully operational via `WindShearProcessor` (`weather_processor.py`), called from `weather_radar._process_windshear_data()` whenever the radar is in WINDSHEAR mode.
 
-**Planned Capabilities:**
-- Radial velocity gradient analysis
-- Azimuthal shear detection
-- Microburst identification
-- Low-level wind shear alerting
+**Operational Capabilities:**
+- Radial velocity gradient analysis (azimuthal dBZ gradient as Doppler proxy)
+- Microburst identification via outflow divergence detection
+- FAA 15-knot/nm advisory threshold for shear events
+- Three severity levels: LOW / MODERATE / SEVERE
 
-**Detection Algorithms (Planned):**
-- **Radial Shear:** Velocity gradient along radar beam
-- **Azimuthal Shear:** Velocity gradient perpendicular to beam
-- **Combined Shear:** Vector combination of radial and azimuthal components
-- **Threshold Analysis:** Configurable shear magnitude thresholds
+**Detection Algorithm:**
+- **Radial Shear:** Azimuthal reflectivity gradient scaled to knots/nm
+- **Divergence:** Radial reflectivity gradient identifies outflow
+- **Microburst flag:** divergence > 0.08 (normalised) triggers MICROBURST
+- **Clustering:** Adjacent flagged cells grouped to avoid duplicate reports
 
-**Safety Applications (Planned):**
+**Safety Applications:**
 - Approach and departure wind shear warnings
-- Runway wind shear detection
-- Terminal area safety monitoring
-- Flight path optimization
+- Microburst divergence alerting (logged as WARNING level)
+- Real-time severity classification per FAA advisory thresholds
 
-### Development Timeline
+### Integration Status
 
-**Target Implementation:** Future development phase
-**Priority:** High (safety-critical feature)
-**Dependencies:** Completion of turbulence detection system
-**Integration:** Flight management system coordination required
+**Implementation:** `WindShearProcessor` in `weather_processor.py`
+**Called from:** `weather_radar._process_windshear_data()`
+**Output:** `List[WindShearEvent]` with position, shear magnitude, severity, microburst flag
 
 ## 2.8 Weather Radar Troubleshooting
 

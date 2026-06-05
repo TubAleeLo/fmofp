@@ -446,13 +446,13 @@ python FMOFP/Tests/test_install_script.py
 - `initialise_databases` creates database files and tables from `schema.xml`
 - `MIN_PYTHON` and `REQUIRED_PACKAGES` constants verified
 
-## 13.5 Performance Monitoring
+## 13.6 Performance Monitoring
 
 ### System Status: ✅ **OPERATIONAL**
 
 Comprehensive performance monitoring with runtime tracking, resource utilization, and optimization tools.
 
-### 13.5.1 Runtime Metrics ✅ **OPERATIONAL**
+### 13.6.1 Runtime Metrics ✅ **OPERATIONAL**
 
 **Verified Implementation:**
 ```python
@@ -478,7 +478,7 @@ class ManagedThread:
 - ✅ Performance trend analysis
 - ✅ Resource utilization tracking
 
-### 13.5.2 System Health Metrics ✅ **OPERATIONAL**
+### 13.6.2 System Health Metrics ✅ **OPERATIONAL**
 
 **Verified Implementation:**
 ```python
@@ -503,7 +503,7 @@ def get_all_thread_states(self) -> Dict[str, Dict[str, Any]]:
 - ✅ Performance bottleneck identification
 - ✅ Resource consumption analysis
 
-### 13.5.3 Operation Tracking ✅ **OPERATIONAL**
+### 13.6.3 Operation Tracking ✅ **OPERATIONAL**
 
 **Verified Implementation:**
 ```python

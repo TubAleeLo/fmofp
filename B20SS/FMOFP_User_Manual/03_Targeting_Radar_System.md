@@ -242,7 +242,7 @@ The Targeting Radar System provides comprehensive target detection, tracking, an
 - Multiple target tracking capability
 - Continuous volume scanning
 - **Aliases:** Both TARGET_SEARCH and SEARCH refer to mode 40
-- **Current Status:** Operational in radar only, not displayed
+- **Current Status:** ✅ Fully operational — tracks routed to display via bridge
 
 ```
 Procedure: Switching to Search Mode
@@ -259,14 +259,14 @@ Procedure: Switching to Search Mode
 - Target prediction algorithms
 - Lock-on preparation
 - **Aliases:** Both TARGET_TRACK and TRACK refer to mode 41
-- **Current Status:** Operational in radar only, not displayed
+- **Current Status:** ✅ Fully operational — tracks routed to display via bridge
 
 **LOCK (Mode 42)** ✅ **OPERATIONAL**
 - Precision target lock-on mode
 - High-accuracy tracking
 - Engagement-ready status
 - Jamming resistance
-- **Current Status:** Operational in radar only, not displayed
+- **Current Status:** ✅ Fully operational — locked target routed to display via bridge
 
 **TERRAIN_AVOIDANCE (Mode 43)** ⚠️ **IN DEVELOPMENT**
 - Ground clutter rejection
@@ -585,21 +585,17 @@ The target classification system analyzes target characteristics to determine ta
 - No targeting data appears on displays
 - Target generation and tracking completes normally
 
-**Root Cause:**
-- Display integration not yet implemented
-- Data routing to display systems under development
-- Message formatting for display consumption pending
+**Resolution:**
+- `push_targeting_data()` in `radar_to_display_bridge.py` routes track data directly to the `RadarDisplayDataCoordinator`
+- `TargetProcessor` enriches each track with `SignatureAnalyzer` classification and `StealthDetector` P(stealth) before display
+- Fused tracks from all sensors also appear on the TSD via `RadarDataFusion`
 
-**Current Workaround:**
-1. Monitor targeting radar processing in system logs:
-   ```
-   tail -f FMOFP/logs/DEBUG_*.log | grep TARGETING_RADAR
-   ```
-2. Verify mode changes in radar status
-3. Check target generation and tracking in logs
-4. Use system health monitoring for radar status
+**Verification:**
+```
+tail -f FMOFP/logs/DEBUG_*.log | grep "BRIDGE\|push_targeting"
+```
 
-**Resolution Status:** Planned for next development phase
+**Resolution Status:** ✅ Resolved — display integration operational
 
 #### Issue 2: Target Lock Failures
 

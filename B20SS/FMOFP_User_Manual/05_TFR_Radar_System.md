@@ -8,7 +8,7 @@
 
 ### System Status ⚠️ **BASIC SIMULATION** (Terrain Simulation) | ✅ **OPERATIONAL** (Display Integration + PathOptimiser + ClearanceManager)
 
-The Terrain Following Radar (TFR) System provides basic simulated terrain profiling capabilities for development and testing purposes. The system can generate mathematical terrain simulations and basic warning algorithms but does not perform actual terrain following radar processing. Display integration is not implemented.
+The Terrain Following Radar (TFR) System provides basic simulated terrain profiling capabilities for development and testing purposes. The system generates mathematical terrain simulations and routes them to the display coordinator via `push_tfr_data()`. `PathOptimiser` computes safe altitude command sequences and `ClearanceManager` provides CLEAR / LOW / CAUTION / PULL_UP terrain clearance warnings.
 
 **Current Implementation Status:**
 - **Mode Switching:** ✅ **OPERATIONAL** - Can switch between TFR modes
@@ -368,7 +368,7 @@ TFR Terrain Data Structure:
 - **No Ground Truth:** Simulated terrain doesn't match real world
 
 **Operational Limitations:**
-- **No Display Integration:** Generated terrain not shown anywhere
+- **Display Integration:** ✅ Terrain data routed via `push_tfr_data()` to display coordinator
 - **No Real-Time Operation:** Terrain generated on mode change only
 - **No Aircraft Integration:** No connection to flight control systems
 - **No Mission Planning:** No integration with navigation systems
@@ -436,7 +436,7 @@ TFR Terrain Data Structure:
 - Data seems to disappear after generation
 
 **Root Cause:**
-- Display integration not implemented
+- Display integration: ✅ operational via bridge
 - This is expected behavior, not a bug
 
 **Current Workaround:**
