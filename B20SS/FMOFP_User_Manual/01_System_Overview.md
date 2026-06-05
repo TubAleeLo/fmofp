@@ -13,8 +13,8 @@ The Flight Management Operating Flight Program (FMOFP) is a comprehensive avioni
 **IMPORTANT:** The FMOFP system is currently in active development (Version B20SS). While core functionality is operational, several features have known limitations:
 
 - **Weather Radar:** ✅ **OPERATIONAL** radar processing, 🐛 **KNOWN ISSUES** with 1553B communication to displays
-- **Other Radars:** ✅ **OPERATIONAL** radar processing, ⚠️ **IN DEVELOPMENT** display integration
-- **Display Systems:** ✅ **OPERATIONAL** display rendering, ⚠️ **IN DEVELOPMENT** live data integration
+- **Other Radars:** ✅ **OPERATIONAL** radar processing, ✅ **OPERATIONAL** display integration (bridge connected)
+- **Display Systems:** ✅ **OPERATIONAL** display rendering, ✅ **OPERATIONAL** live data integration
 - **Flight Management:** ✅ **OPERATIONAL** core functionality
 
 ### Key System Capabilities
@@ -83,18 +83,18 @@ The FMOFP system follows a modular, service-oriented architecture with clear sep
 
 #### Radar Management System ✅ **OPERATIONAL**
 **Radar Processing:** All radar types are fully operational for data processing
-**Display Integration:** ⚠️ **IN DEVELOPMENT** - Data routing to displays
+**Display Integration:** ✅ **OPERATIONAL** - All radars connected via radar-to-display bridge
 
 **Operational Radar Systems:**
 - Weather Radar (RT Address 9, Subaddress 1)
-- TFR Radar (RT Address 9, Subaddress 2) 
+- TFR Radar (RT Address 9, Subaddress 2)
 - SAR Radar (RT Address 9, Subaddress 3)
 - Targeting Radar (RT Address 9, Subaddress 4)
 - AEWC Radar (RT Address 9, Subaddress 5)
 
 #### Display Management System ✅ **OPERATIONAL**
 **Display Rendering:** All display types are fully operational
-**Live Data Integration:** ⚠️ **IN DEVELOPMENT** - Limited to weather radar data
+**Live Data Integration:** ✅ **OPERATIONAL** - All five radar systems push live data to the display coordinator
 
 **Operational Display Systems:**
 - Primary Flight Display (RT Address 11, Subaddress 11)
@@ -192,10 +192,10 @@ The system uses a standardized addressing scheme based on `rtAddressConfig.xml`:
 **Display Subaddresses (RT 11):**
 - **Subaddress 11:** Primary Flight Display ✅ **OPERATIONAL**
 - **Subaddress 12:** Multi-Function Display ✅ **OPERATIONAL**
-- **Subaddress 13:** EICAS (Engine Indicating) ⚠️ **IN DEVELOPMENT**
+- **Subaddress 13:** EICAS (Engine Indicating) ✅ **OPERATIONAL**
 - **Subaddress 14:** Radar Display ✅ **OPERATIONAL**
-- **Subaddress 15:** Tactical Situation Display ⚠️ **IN DEVELOPMENT**
-- **Subaddress 16:** Stores Management System ❌ **NOT IMPLEMENTED**
+- **Subaddress 15:** Tactical Situation Display ✅ **OPERATIONAL**
+- **Subaddress 16:** Stores Management System ✅ **OPERATIONAL**
 
 ### Communication Flow ✅ **OPERATIONAL**
 
@@ -211,7 +211,7 @@ The system uses a standardized addressing scheme based on `rtAddressConfig.xml`:
 - **BC ↔ Display Systems:** ✅ **OPERATIONAL**
 - **BC ↔ Flight Management:** ✅ **OPERATIONAL**
 - **Radar → Display Data Flow:** 🐛 **KNOWN ISSUES** (Weather radar only)
-- **Cross-System Integration:** ⚠️ **IN DEVELOPMENT**
+- **Cross-System Integration:** ✅ **OPERATIONAL** (cross-radar data fusion layer active)
 
 ## 1.4 System Requirements and Installation
 
@@ -245,40 +245,31 @@ The system uses a standardized addressing scheme based on `rtAddressConfig.xml`:
 - **NumPy** for numerical computations ✅ **OPERATIONAL**
 - **SQLite** for database management ✅ **OPERATIONAL**
 
-### Installation Procedure ⚠️ **IN DEVELOPMENT**
+### Installation Procedure ✅ **OPERATIONAL**
 
-**CAUTION:** Installation automation is currently being developed. Manual installation required.
+A fully automated installer is provided. Run it once from the `B20SS/` directory:
 
-**Manual Installation Steps:**
+```
+python install.py
+```
 
-1. **Extract System Files**
-   ```
-   Extract FMOFP system files to target directory
-   Verify all subdirectories are preserved:
-   - FMOFP/
-   - FMOFP/Systems/
-   - FMOFP/Interfaces/
-   - FMOFP/MIL_STD_1553B/
-   - FMOFP/storage/
-   ```
+The installer performs all six steps automatically:
 
-2. **Install Python Dependencies**
-   ```
-   pip install PyQt6
-   pip install numpy
-   pip install sqlite3
-   ```
+1. **Python version check** — requires Python 3.9+
+2. **Directory structure verification** — confirms all required subdirectories are present
+3. **Dependency installation** — installs PyQt6, NumPy, and qasync from bundled wheels or PyPI
+4. **Configuration file validation** — parses and validates all four XML config files
+5. **Database initialisation** — creates all SQLite databases from `schema.xml`
+6. **Startup verification** — dry-runs the system to confirm all subsystems reach STANDBY
 
-3. **Configure System Settings**
-   - **Database Configuration:** Edit `FMOFP/dbConfig.xml`
-   - **Address Configuration:** Edit `FMOFP/rtAddressConfig.xml`
-   - **Message Timing:** Edit `FMOFP/messageRateConfig.xml`
-   - **System Startup:** Edit `FMOFP/startupConfiguration.xml`
+**Optional flags:**
+```
+python install.py --offline         # use only bundled wheels, no internet
+python install.py --no-verify       # skip startup verification step
+python install.py --force-reinstall # reinstall dependencies even if present
+```
 
-4. **Initialize System Database** ✅ **OPERATIONAL**
-   ```
-   python FMOFP/storage/DBM.py --initialize
-   ```
+**Exit codes:** 0 = success, 1 = failure (reason printed to console).
    - Verify database tables are created correctly
    - Load initial configuration data
    - Confirm all system databases are accessible
@@ -521,6 +512,6 @@ python Main.py
 
 ---
 
-*File: 01_System_Overview.md*  
-*Last Updated: December 2024*  
+*File: 01_System_Overview.md*
+*Last Updated: December 2024*
 *Next Review: March 2025*

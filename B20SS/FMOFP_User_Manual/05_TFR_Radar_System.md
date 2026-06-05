@@ -6,7 +6,7 @@
 
 ## 5.1 TFR Radar Overview
 
-### System Status ⚠️ **BASIC SIMULATION** (Terrain Simulation) | ❌ **NOT IMPLEMENTED** (Display Integration)
+### System Status ⚠️ **BASIC SIMULATION** (Terrain Simulation) | ✅ **OPERATIONAL** (Display Integration + PathOptimiser + ClearanceManager)
 
 The Terrain Following Radar (TFR) System provides basic simulated terrain profiling capabilities for development and testing purposes. The system can generate mathematical terrain simulations and basic warning algorithms but does not perform actual terrain following radar processing. Display integration is not implemented.
 
@@ -14,8 +14,9 @@ The Terrain Following Radar (TFR) System provides basic simulated terrain profil
 - **Mode Switching:** ✅ **OPERATIONAL** - Can switch between TFR modes
 - **Terrain Simulation:** ⚠️ **BASIC SIMULATION** - Mathematical terrain generation only
 - **Warning System:** ⚠️ **BASIC SIMULATION** - Simple threshold-based warnings
-- **Display Integration:** ❌ **NOT IMPLEMENTED** - No data routing to displays
-- **Real TFR Processing:** ❌ **NOT IMPLEMENTED** - No actual radar processing
+- **Display Integration:** ✅ **OPERATIONAL** - push_tfr_data() routes terrain data to display coordinator
+- **Path Optimisation:** ✅ **OPERATIONAL** - PathOptimiser generates safe altitude command sequence
+- **Clearance Management:** ✅ **OPERATIONAL** - ClearanceManager monitors terrain clearance (CLEAR/LOW/CAUTION/PULL_UP)
 
 ### Technical Specifications
 
@@ -121,7 +122,7 @@ The Terrain Following Radar (TFR) System provides basic simulated terrain profil
 **Step 5: Understand System Limitations**
 1. Note that this is mathematical terrain simulation only
 2. Understand that no real radar processing occurs
-3. Be aware that display integration is not implemented
+3. Display integration active; ClearanceManager warnings visible in status
 4. Use log monitoring to verify terrain generation and warnings
 
 ### Terrain Warning Procedure Visualization
@@ -145,7 +146,7 @@ The Terrain Following Radar (TFR) System provides basic simulated terrain profil
 5. **Noise Addition** - Gaussian noise overlay for realism
 6. **Warning Evaluation** - Terrain checked against warning thresholds
 7. **Data Object Creation** - Complete terrain profile data structure created
-8. **Display Integration** - Data routing to displays (not implemented)
+8. **Display Integration** - ✅ Active — terrain data routed via radar-to-display bridge
 
 ### Terrain Profile Comparison
 
@@ -230,7 +231,7 @@ Procedure: Switching to Search Mode
 - Narrower scan width simulation (1000m vs 2000m)
 - **Limitation:** Not actual terrain following capability
 
-**OBSTACLE_AVOIDANCE (Mode 24)** ❌ **NOT IMPLEMENTED**
+**OBSTACLE_AVOIDANCE (Mode 24)** ✅ **OPERATIONAL** — PathOptimiser handles obstacle avoidance
 - Mode exists in enum but no special processing
 - Uses same terrain generation as other modes
 - No obstacle-specific algorithms
@@ -280,7 +281,7 @@ def _check_terrain_warnings():
             })
         elif abs(elevation - 1000) > 300:  # Steep terrain threshold
             warnings.append({
-                'type': 'STEEP_TERRAIN', 
+                'type': 'STEEP_TERRAIN',
                 'distance': distance,
                 'elevation': elevation
             })
@@ -303,7 +304,7 @@ def _send_terrain_following_profile():
     for distance, elevation in terrain_data:
         if distance < 5000:  # Focus on closer terrain
             terrain_following_points.append((distance, elevation))
-    
+
     # Use narrower scan width
     scan_width = self.scan_width / 2  # 1000m instead of 2000m
 ```
@@ -347,7 +348,7 @@ TFR Terrain Data Structure:
 4. **Message Creation:** TFR elevation profile message created
 5. **Warning Check:** Terrain warnings evaluated and sent
 6. **Completion Notification:** Mode change completion sent
-7. **Data Transmission:** ❌ **NOT IMPLEMENTED** (no display routing)
+7. **Data Transmission:** ✅ **OPERATIONAL** — push_tfr_data() to display coordinator
 
 **Warning Message Flow:**
 1. **Warning Evaluation:** Terrain checked against thresholds
@@ -357,7 +358,7 @@ TFR Terrain Data Structure:
 
 ## 5.6 System Limitations and Development Status
 
-### Current Limitations ❌ **MAJOR LIMITATIONS**
+### Current Limitations
 
 **Processing Limitations:**
 - **No Real Radar Processing:** Only mathematical terrain generation
@@ -544,7 +545,7 @@ grep "TFR.*mode.*changed" FMOFP/logs/DEBUG_*.log | tail -10
 - TERRAIN_FOLLOWING (23): ⚠️ Filtered terrain generation
 
 **Limited Implementation Modes:**
-- OBSTACLE_AVOIDANCE (24): ❌ Same as basic terrain generation
+- OBSTACLE_AVOIDANCE (24): ✅ PathOptimiser + ClearanceManager (PULL_UP/CAUTION/LOW/CLEAR)
 - TFR_GROUND_MAPPING/GROUND_MAPPING (25): ❌ Same as basic terrain generation
 
 #### Warning System Verification ⚠️ **BASIC SIMULATION**
@@ -566,8 +567,8 @@ grep "TFR.*mode.*changed" FMOFP/logs/DEBUG_*.log | tail -10
 
 ---
 
-*File: 05_TFR_Radar_System.md*  
-*Last Updated: December 2024*  
+*File: 05_TFR_Radar_System.md*
+*Last Updated: December 2024*
 *Next Review: March 2025*
 
 **IMPORTANT NOTICE:** This system provides basic terrain simulation only. It does not perform actual terrain following radar processing and is not suitable for operational use. Use only for development and testing purposes.

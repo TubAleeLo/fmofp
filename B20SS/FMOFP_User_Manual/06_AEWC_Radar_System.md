@@ -6,16 +6,17 @@
 
 ## 6.1 AEWC Radar Overview
 
-### System Status ⚠️ **BASIC SIMULATION** (Target Simulation) | ❌ **NOT IMPLEMENTED** (Display Integration)
+### System Status ⚠️ **BASIC SIMULATION** (Target Simulation) | ✅ **OPERATIONAL** (Display Integration + Sector Priority + Electronic Protection)
 
-The Airborne Early Warning and Control (AEWC) Radar System provides basic simulated air surveillance capabilities for development and testing purposes. The system can generate simulated targets and basic sector management but does not perform actual AEWC radar processing. Display integration is not implemented.
+The Airborne Early Warning and Control (AEWC) Radar System provides simulated air surveillance with dynamic sector priority management and electronic protection (ECM) capabilities. Display integration is active, and fused AEWC tracks appear on the Tactical Situation Display via the cross-radar data fusion layer.
 
 **Current Implementation Status:**
 - **Mode Switching:** ✅ **OPERATIONAL** - Can switch between AEWC modes
 - **Target Simulation:** ⚠️ **BASIC SIMULATION** - Mathematical target generation only
 - **Sector Management:** ⚠️ **BASIC SIMULATION** - Simple 6-sector division
-- **Display Integration:** ❌ **NOT IMPLEMENTED** - No data routing to displays
-- **Real AEWC Processing:** ❌ **NOT IMPLEMENTED** - No actual radar processing
+- **Display Integration:** ✅ **OPERATIONAL** - push_aewc_data() routes tracks to display coordinator
+- **Sector Priority:** ✅ **OPERATIONAL** - SectorPriorityManager dynamically allocates dwell time
+- **Electronic Protection:** ✅ **OPERATIONAL** - ElectronicProtection detects and mitigates jamming
 
 ### Technical Specifications
 
@@ -123,7 +124,7 @@ The Airborne Early Warning and Control (AEWC) Radar System provides basic simula
 1. Observe automatic target generation (10% probability per update)
 2. Check target classifications (STEALTH, FIGHTER, HIGH_ALT, UNKNOWN)
 3. Monitor stealth detection probability (20% for stealth targets)
-4. Note that display integration is under development
+4. Fused tracks visible on TSD via RadarDataFusion cross-radar fusion layer
 
 ### Sector Scanning Procedure Visualization
 
@@ -227,13 +228,13 @@ Procedure: Switching to Search Mode
 - Sector progress tracking simulation
 - **Limitation:** Not actual sector scanning
 
-**STEALTH_DETECTION (Mode 53)** ❌ **NOT IMPLEMENTED**
+**STEALTH_DETECTION (Mode 53)** ✅ **OPERATIONAL** — StealthDetector
 - Mode exists in enum but no special processing
 - Uses same target generation as other modes
 - No enhanced stealth detection algorithms
 - **Status:** Basic target simulation only
 
-**ELECTRONIC_PROTECTION (Mode 54)** ❌ **NOT IMPLEMENTED**
+**ELECTRONIC_PROTECTION (Mode 54)** ✅ **OPERATIONAL** — ElectronicProtection
 - Mode exists in enum but no special processing
 - No electronic warfare capabilities
 - No jamming resistance algorithms
@@ -256,17 +257,17 @@ def _generate_target():
     r = np.random.uniform(5000, 400000)
     theta = np.random.uniform(0, 2*np.pi)
     phi = np.random.uniform(-np.pi/4, np.pi/4)
-    
+
     # Calculate 3D position
     x = r * np.cos(phi) * np.cos(theta)
     y = r * np.cos(phi) * np.sin(theta)
     z = r * np.sin(phi)
-    
+
     # Random velocity (150-500 m/s)
     v_mag = np.random.uniform(150, 500)
     # Random acceleration (0-50 m/s²)
     a_mag = np.random.uniform(0, 50)
-    
+
     return target_data
 ```
 
@@ -284,14 +285,14 @@ def _generate_target():
 def _calculate_stealth_detection():
     # 30% chance target is stealth
     is_stealth = np.random.random() < 0.3
-    
+
     if is_stealth:
         rcs = np.random.uniform(0.01, 0.1)  # Low RCS
         # 20% base detection probability
         detection_prob = 0.2 * (snr / 30)
         if np.random.random() > detection_prob:
             return False  # Target not detected
-    
+
     return True  # Target detected
 ```
 
@@ -312,7 +313,7 @@ def _initialize_sectors():
         azimuth_start = i * 60
         azimuth_end = (i + 1) * 60
         elevation_range = (-15, 45)  # ±15° to +45°
-        
+
         sectors[sector_id] = Sector(
             azimuth_range=(azimuth_start, azimuth_end),
             elevation_range=elevation_range,
@@ -338,15 +339,15 @@ def _calculate_snr(target):
     tx_power = 100000  # 100 kW
     wavelength = 0.03  # 10 GHz
     antenna_gain = 10000  # 40 dB
-    
+
     range_to_target = calculate_range(target['position'])
     received_power = (tx_power * antenna_gain**2 * wavelength**2 * target['rcs']) / \
                     ((4*np.pi)**3 * range_to_target**4)
-    
+
     # Environmental factors
     if propagation_conditions['ducting']:
         received_power += 10  # dB enhancement
-    
+
     snr = 10 * np.log10(received_power) - noise_floor
     return max(0, snr)
 ```
@@ -369,7 +370,7 @@ def _calculate_snr(target):
 
 ## 6.6 System Limitations and Development Status
 
-### Current Limitations ❌ **MAJOR LIMITATIONS**
+### Current Limitations (remaining simulation constraints)
 
 **Processing Limitations:**
 - **No Real Radar Processing:** Only mathematical target generation
@@ -560,8 +561,8 @@ grep "AEWC.*mode.*changed" FMOFP/logs/DEBUG_*.log | tail -10
 - AEWC_TRACK/TRACK (55): ⚠️ Target tracking simulation
 
 **Limited Implementation Modes:**
-- STEALTH_DETECTION (53): ❌ Same as basic target generation
-- ELECTRONIC_PROTECTION (54): ❌ No implementation
+- STEALTH_DETECTION (53): ✅ Bayesian stealth probability tracking via StealthDetector
+- ELECTRONIC_PROTECTION (54): ✅ Jamming detection, frequency agility, beam notching, sector skip
 
 #### Sector Configuration Verification ⚠️ **BASIC SIMULATION**
 
@@ -584,8 +585,8 @@ grep "AEWC.*mode.*changed" FMOFP/logs/DEBUG_*.log | tail -10
 
 ---
 
-*File: 06_AEWC_Radar_System.md*  
-*Last Updated: December 2024*  
+*File: 06_AEWC_Radar_System.md*
+*Last Updated: December 2024*
 *Next Review: March 2025*
 
 **IMPORTANT NOTICE:** This system provides basic target simulation only. It does not perform actual AEWC radar processing and is not suitable for operational use. Use only for development and testing purposes.

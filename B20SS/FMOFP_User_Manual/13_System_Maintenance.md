@@ -64,11 +64,11 @@ class SysLogger(metaclass=Singleton):
         # Configure root logger first
         self.root_logger = logging.getLogger()
         self.root_logger.setLevel(logging.DEBUG)
-        
+
         # Create system and command loggers
         self.logger = logging.getLogger('system')
         self.command_logger = logging.getLogger('command')
-        
+
         # Load configuration and set up logging
         self.load_config()
         self.setup_logging()
@@ -91,7 +91,7 @@ def load_config(self):
     tree = ET.parse(config_path)
     root = tree.getroot()
     logging_config = root.find('logging')
-    
+
     self.logging_enabled = logging_enabled_elem.text.lower() == 'true'
     self.debugging = debugging_elem.text.lower() == 'true'
     self.level = level_elem.text.lower() if level_elem else 'info'
@@ -123,7 +123,7 @@ def cleanup_old_logs(self):
 def setup_logging(self):
     # Clean up all old log files before creating new one
     self.cleanup_old_logs()
-    
+
     # Create timestamped log file
     timestamp = datetime.now().strftime('%Y%m%d_%H%M%S')
     log_file = os.path.join(logs_dir, f'{self.level.upper()}_{timestamp}.log')
@@ -314,7 +314,7 @@ async def combined_precipitation_vil_flow_test(self):
     try:
         test_module = importlib.import_module('FMOFP.Tests.combined_precipitation_vil_flow_test')
         test_class = getattr(test_module, 'TestCombinedPrecipitationVILFlow')
-        
+
         test_suite = test_class()
         logger.info("Starting Combined Precipitation and VIL Display Flow Test...")
         await test_suite.run_tests()
@@ -343,7 +343,7 @@ def _process_command(self, command):
     if not command:
         return
     logger.info(f"Processing command '{command}'")
-    
+
     try:
         if command.startswith("help"):
             self._print_help()
@@ -369,8 +369,8 @@ def _process_command(self, command):
 **Verified Implementation:**
 ```python
 def check_health(self) -> bool:
-    return (self._initialized and 
-            self.cli_enabled and 
+    return (self._initialized and
+            self.cli_enabled and
             all(thread.is_alive() for thread in self.cli_threads))
 
 def _handle_test_results(self, results):
@@ -379,7 +379,7 @@ def _handle_test_results(self, results):
         status_symbol = "✓" if result['status'] == 'PASS' else "✗"
         msg = f"{status_symbol} {result['name']}"
         logger.info(msg)
-        
+
     pass_count = sum(1 for r in results if r['status'] == 'PASS')
     total_count = len(results)
     summary = f"Summary: {pass_count}/{total_count} tests passed"
@@ -393,6 +393,58 @@ def _handle_test_results(self, results):
 - ✅ Performance metrics
 
 ---
+
+## 13.5 Automated Test Suite ✅ **OPERATIONAL**
+
+Three standalone test suites verify the new display and communication components introduced in the Summer 2026 development session. Run each from the `B20SS/` directory with no test framework required.
+
+### 13.5.1 Bridge + Coordinator Tests
+
+**File:** `FMOFP/Tests/test_bridge_and_coordinator.py`
+
+```
+python FMOFP/Tests/test_bridge_and_coordinator.py
+```
+
+**Coverage (27 checks):**
+- Coordinator `store_data` / `get_data` for built-in and dynamic data types
+- Empty-store return behaviour (no backup crash)
+- `reset_data` clears current store
+- Invalid `request_id` and empty item list raise `ValueError`
+- All seven bridge push functions: `push_vil_data`, `push_precipitation_data`, `push_targeting_data`, `push_sar_data`, `push_tfr_data`, `push_aewc_data`, `push_cells_data`
+- Empty-list and missing-request-id guard behaviour
+
+### 13.5.2 Display Headless Smoke Tests
+
+**File:** `FMOFP/Tests/test_displays_headless.py`
+
+```
+# Windows:
+set QT_QPA_PLATFORM=offscreen
+python FMOFP/Tests/test_displays_headless.py
+```
+
+**Coverage (33 checks):**
+- `EICASDisplay` — instantiation, paint in normal and warning states, alert logic
+- `TacticalSituationDisplay` — instantiation, paint with threats, fusion fallback, COMBAT mode
+- `StoresManagementDisplay` — instantiation, paint SAFE/ARMED, weight and armed-count calculations, stealth mode paint
+
+All tests render via a real `QPainter` on a `QPixmap` in offscreen mode — no display server required.
+
+### 13.5.3 Install Script Tests
+
+**File:** `FMOFP/Tests/test_install_script.py`
+
+```
+python FMOFP/Tests/test_install_script.py
+```
+
+**Coverage (13 checks):**
+- `check_python` passes on current interpreter, rejects old versions
+- `check_directories` passes when all dirs present, fails when missing
+- `check_configs` passes for valid XML, fails for missing or malformed files
+- `initialise_databases` creates database files and tables from `schema.xml`
+- `MIN_PYTHON` and `REQUIRED_PACKAGES` constants verified
 
 ## 13.5 Performance Monitoring
 
@@ -463,12 +515,12 @@ def add_thread(self, name: str, target: Any, args: tuple = None):
         if is_operation_completed('thread_creation', name):
             logger.debug(f"Thread '{name}' already registered")
             return
-            
+
         # Create and register thread
         thread = threading.Thread(name=name, target=self._wrap_target(name, target))
         managed_thread = ManagedThread(name, thread, target)
         self.threads[name] = managed_thread
-        
+
         # Mark operation as completed
         mark_operation_completed('thread_creation', name)
 ```
@@ -500,14 +552,14 @@ def analyze_daily_logs():
             # Analyze error patterns and frequency
             error_count = count_log_errors(log_file)
             warning_count = count_log_warnings(log_file)
-            
+
 # Thread health verification
 def verify_thread_health():
     active_threads = thread_manager.get_active_threads()
     thread_states = thread_manager.get_all_thread_states()
-    
+
     # Check for threads in ERROR state
-    error_threads = [name for name, state in thread_states.items() 
+    error_threads = [name for name, state in thread_states.items()
                     if state['state'] == ThreadState.ERROR]
 ```
 
@@ -526,7 +578,7 @@ def verify_thread_health():
 def analyze_performance_trends():
     thread_states = thread_manager.get_all_thread_states()
     performance_metrics = {}
-    
+
     for name, state in thread_states.items():
         if state['runtime']:
             performance_metrics[name] = {
@@ -538,12 +590,12 @@ def analyze_performance_trends():
 # System integration testing
 async def run_integration_tests():
     test_results = []
-    
+
     # Run comprehensive test suite
     test_results.append(await run_precipitation_vil_test())
     test_results.append(await run_radar_system_tests())
     test_results.append(await run_fms_integration_test())
-    
+
     return analyze_test_results(test_results)
 ```
 
@@ -562,29 +614,29 @@ async def run_integration_tests():
 def perform_system_optimization():
     # Analyze thread performance
     thread_performance = analyze_thread_performance()
-    
+
     # Optimize thread pool sizes
     optimize_thread_pools(thread_performance)
-    
+
     # Update configuration parameters
     update_performance_parameters()
-    
+
     # Clean up old log files and temporary data
     cleanup_system_files()
 
 # Comprehensive system validation
 async def comprehensive_system_validation():
     validation_results = {}
-    
+
     # Test all radar systems
     validation_results['radar_systems'] = await test_all_radar_systems()
-    
+
     # Test display systems
     validation_results['display_systems'] = await test_display_systems()
-    
+
     # Test communication systems
     validation_results['communication'] = await test_communication_systems()
-    
+
     return validation_results
 ```
 
@@ -616,7 +668,7 @@ async def comprehensive_system_validation():
    logger = get_logger()
    if not logger.logging_enabled:
        logger.error("Logging is disabled in configuration")
-   
+
    # Check log directory permissions
    logs_dir = os.path.join(fetch_fmofp_path(), 'logs')
    if not os.access(logs_dir, os.W_OK):
@@ -629,7 +681,7 @@ async def comprehensive_system_validation():
    root_logger = logging.getLogger()
    if not root_logger.handlers:
        logger.error("No log handlers configured")
-   
+
    # Verify file handler
    for handler in root_logger.handlers:
        if isinstance(handler, logging.FileHandler):
@@ -691,7 +743,7 @@ async def comprehensive_system_validation():
    if not system_manager.is_system_ready():
        logger.error("System not ready for testing")
        return False
-   
+
    # Check for running tests
    if UserCLI._test_running:
        logger.warning("Another test is already running")
@@ -711,7 +763,7 @@ async def comprehensive_system_validation():
    ```python
    # Reset test flags and environment
    UserCLI._test_running = False
-   
+
    # Clear test queues
    while not cli.output_queue.empty():
        cli.output_queue.get()
@@ -739,7 +791,7 @@ def optimize_system_performance(metrics):
     if metrics['thread_count'] > 50:
         logger.warning("High thread count detected")
         optimize_thread_usage()
-    
+
     if metrics['memory_usage'] > 80:
         logger.warning("High memory usage detected")
         trigger_garbage_collection()
@@ -764,13 +816,13 @@ class MaintenanceScheduler:
             self.verify_thread_health,
             self.run_basic_tests
         ]
-        
+
         self.weekly_tasks = [
             self.analyze_performance_trends,
             self.run_integration_tests,
             self.optimize_configuration
         ]
-    
+
     async def run_daily_maintenance(self):
         for task in self.daily_tasks:
             try:
@@ -862,6 +914,6 @@ thread_manager.register_startup_thread("AsyncMessageHandler")
 
 ---
 
-*File: 13_System_Maintenance.md*  
-*Last Updated: December 2024*  
+*File: 13_System_Maintenance.md*
+*Last Updated: December 2024*
 *Next Review: As system implementations are updated*

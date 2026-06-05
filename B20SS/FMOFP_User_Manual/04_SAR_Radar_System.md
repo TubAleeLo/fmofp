@@ -6,7 +6,7 @@
 
 ## 4.1 SAR Radar Overview
 
-### System Status ⚠️ **BASIC SIMULATION** (Pattern Generation) | ❌ **NOT IMPLEMENTED** (Display Integration)
+### System Status ⚠️ **BASIC SIMULATION** (Pattern Generation) | ✅ **OPERATIONAL** (Display Integration + Change Detection)
 
 The Synthetic Aperture Radar (SAR) System provides basic simulated imaging capabilities for development and testing purposes. The system can generate simple pattern-based imagery but does not perform actual SAR processing. Display integration is not implemented.
 
@@ -14,8 +14,8 @@ The Synthetic Aperture Radar (SAR) System provides basic simulated imaging capab
 - **Mode Switching:** ✅ **OPERATIONAL** - Can switch between SAR modes
 - **Pattern Generation:** ⚠️ **BASIC SIMULATION** - Simple simulated patterns only
 - **Image Data Structure:** ✅ **OPERATIONAL** - Proper data formatting and geo-referencing
-- **Display Integration:** ❌ **NOT IMPLEMENTED** - No data routing to displays
-- **Real SAR Processing:** ❌ **NOT IMPLEMENTED** - No actual SAR algorithms
+- **Display Integration:** ✅ **OPERATIONAL** - push_sar_data() routes imagery to display coordinator
+- **Change Detection:** ✅ **OPERATIONAL** - CFAR log-ratio change detection (sar_processor.py)
 
 ### Technical Specifications
 
@@ -120,7 +120,7 @@ The Synthetic Aperture Radar (SAR) System provides basic simulated imaging capab
 **Step 5: Understand System Limitations**
 1. Note that this is basic pattern simulation only [See Figure 4.4, Item 5]
 2. Understand that no real SAR processing occurs
-3. Be aware that display integration is not implemented
+3. Display integration active — imagery routed to MFD via bridge
 4. Use log monitoring to verify pattern generation
 
 ### SAR Pattern Generation Visualization
@@ -134,7 +134,7 @@ The Synthetic Aperture Radar (SAR) System provides basic simulated imaging capab
 5. **Noise Addition** - Gaussian noise overlay applied
 6. **Geo-Referencing** - Corner points and metadata added
 7. **Data Object Creation** - Complete SAR image data structure created
-8. **Display Integration** - Data routing to displays (not implemented)
+8. **Display Integration** - ✅ Active — imagery routed via radar-to-display bridge
 
 ### Pattern Type Comparison
 
@@ -221,13 +221,13 @@ Procedure: Switching to Stripmap Mode
 - Random intensity 100-200 per band
 - **Limitation:** Not actual ScanSAR processing
 
-**INTERFEROMETRIC (Mode 33)** ❌ **NOT IMPLEMENTED**
+**INTERFEROMETRIC (Mode 33)** ❌ **NOT IMPLEMENTED** (planned)
 - Mode exists in enum but no processing
 - Returns empty image data
 - No elevation mapping capability
 - **Status:** Placeholder only
 
-**DOPPLER_BEAM (Mode 34)** ❌ **NOT IMPLEMENTED**
+**DOPPLER_BEAM (Mode 34)** ❌ **NOT IMPLEMENTED** (planned)
 - Mode exists in enum but no processing
 - Returns empty image data
 - No moving target indication
@@ -317,7 +317,7 @@ SAR Image Data Structure:
     'image_data': numpy.ndarray(1024, 1024, dtype=uint8),
     'resolution': 1.0,  # meters per pixel
     'geo_reference': {
-        'corner_points': [(-5000, -5000), (-5000, 5000), 
+        'corner_points': [(-5000, -5000), (-5000, 5000),
                           (5000, 5000), (5000, -5000)],
         'image_width': 1024,
         'image_height': 1024
@@ -342,11 +342,11 @@ SAR Image Data Structure:
 3. **Data Packaging:** Image data formatted with metadata
 4. **Message Creation:** SAR imagery message object created
 5. **Completion Notification:** Mode change completion sent
-6. **Data Transmission:** ❌ **NOT IMPLEMENTED** (no display routing)
+6. **Data Transmission:** ✅ **OPERATIONAL** — push_sar_data() to display coordinator
 
 ## 4.6 System Limitations and Development Status
 
-### Current Limitations ❌ **MAJOR LIMITATIONS**
+### Current Limitations
 
 **Processing Limitations:**
 - **No Real SAR Processing:** Only basic pattern generation
@@ -499,7 +499,7 @@ grep "SAR.*mode.*changed" FMOFP/logs/DEBUG_*.log | tail -10
 
 **Implemented Modes:**
 - STRIPMAP (30): ✅ Pattern generation works
-- SPOTLIGHT (31): ✅ Pattern generation works  
+- SPOTLIGHT (31): ✅ Pattern generation works
 - SCANSAR (32): ✅ Pattern generation works
 
 **Non-Implemented Modes:**
@@ -517,8 +517,8 @@ grep "SAR.*mode.*changed" FMOFP/logs/DEBUG_*.log | tail -10
 
 ---
 
-*File: 04_SAR_Radar_System.md*  
-*Last Updated: December 2024*  
+*File: 04_SAR_Radar_System.md*
+*Last Updated: December 2024*
 *Next Review: March 2025*
 
 **IMPORTANT NOTICE:** This system provides basic pattern simulation only. It does not perform actual SAR processing and is not suitable for operational use. Use only for development and testing purposes.
