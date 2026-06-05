@@ -28,8 +28,8 @@ from FMOFP.Systems.radarManagement.radar_messaging.message_definitions.weather_d
     WeatherRadarPrecipitationResponse
 )
 from FMOFP.Systems.radarManagement.radar_messaging.address_utils import (
-    get_rt_address, 
-    get_subaddress, 
+    get_rt_address,
+    get_subaddress,
     get_rt_subaddress_pair_for_radar,
     is_radar_subsystem,
     get_system_id_for_addressing
@@ -54,18 +54,18 @@ class PrecipitationDataHandler(BaseMessageHandler):
         super().__init__()
         # Initialize message types that this handler can process
         self.message_types = [WEATHER_RADAR_PRECIPITATION_REQUEST, WEATHER_RADAR_PRECIPITATION_RESPONSE]
-        
+
         if not self._initialized and radar_db is not None:
             if not radar_db:
                 raise ValueError("radar_db cannot be None")
-                
+
             logger.info("[PRECIP_DB] Initializing PrecipitationDataHandler")
             self.radar_db = radar_db
-            
+
             # Initialize database with retries
             max_retries = 3
             retry_delay = 1.0
-            
+
             for attempt in range(max_retries):
                 try:
                     if self._init_database_table():
@@ -82,7 +82,7 @@ class PrecipitationDataHandler(BaseMessageHandler):
                         time.sleep(retry_delay * (2 ** attempt))
                     else:
                         raise RuntimeError("Failed to initialize precipitation database") from e
-            
+
             if not self._initialized:
                 raise RuntimeError("Failed to initialize precipitation database after max retries")
 
@@ -96,7 +96,7 @@ class PrecipitationDataHandler(BaseMessageHandler):
             else:
                 logger.error("[PRECIP_DB] Precipitation data table does not exist")
             return exists
-            
+
         except Exception as e:
             logger.error(f"[PRECIP_DB] Error verifying table: {e}")
             traceback.print_exc()
@@ -106,14 +106,14 @@ class PrecipitationDataHandler(BaseMessageHandler):
         """Initialize precipitation data table using DatabaseManager"""
         try:
             logger.info("[PRECIP_DB] Checking precipitation data table")
-            
+
             # First check if table already exists
             if self.radar_db.table_exists('precipitation_data'):
                 logger.info("[PRECIP_DB] Precipitation data table already exists")
                 return True
-                
+
             logger.info("[PRECIP_DB] Initializing precipitation data table")
-            
+
             # Create table using DBM's transaction management
             self.radar_db.create_table('precipitation_data', {
                 'request_id': 'TEXT NOT NULL',    # Required for message tracking
@@ -126,7 +126,7 @@ class PrecipitationDataHandler(BaseMessageHandler):
                 'show_values': 'INTEGER NOT NULL DEFAULT 0',  # Boolean as integer
                 'additional_info': 'TEXT'         # JSON string for extra data
             })
-            
+
             # Create indices for commonly queried fields
             logger.info("[PRECIP_DB] Creating indices")
             indices = [
@@ -135,14 +135,14 @@ class PrecipitationDataHandler(BaseMessageHandler):
                 ('precip_type_idx', 'type'),
                 ('precip_request_id_idx', 'request_id')
             ]
-            
+
             for idx_name, column in indices:
                 query = f'CREATE INDEX IF NOT EXISTS "{idx_name}" ON "precipitation_data" ("{column}")'
                 self.radar_db.execute_query(query, query_type='create')
-            
+
             logger.info("[PRECIP_DB] Precipitation data table and indices initialized successfully")
             return True
-            
+
         except Exception as e:
             logger.error(f"[PRECIP_DB] Critical error initializing precipitation table: {e}")
             logger.error(traceback.format_exc())
@@ -151,46 +151,46 @@ class PrecipitationDataHandler(BaseMessageHandler):
     def _get_rt_subaddress_for_precipitation(self, system_name=None):
         """
         Get the RT address and subaddress for precipitation data messages.
-        
+
         Args:
             system_name: Optional system name, defaults to 'weather_radar'
-            
+
         Returns:
             tuple: (rt_address, subaddress)
         """
         radar_system = system_name or 'weather_radar'
-        
+
         # Use enhanced utility for proper subsystem handling
         rt_address, subaddress = get_rt_subaddress_pair_for_radar(radar_system, 'weather_radar')
         logger.debug(f"Using RT address {rt_address} and subaddress {subaddress} for precipitation data")
-        
+
         return rt_address, subaddress
 
     def _get_command_word(self, target_system='displays'):
         """
         Generate command word for precipitation data using standard address utilities.
-        
+
         Args:
             target_system: The target system ID, defaults to 'displays'
-            
+
         Returns:
             str: The command word
         """
         from FMOFP.local_messaging.command_word_map import register_command_word
-        
+
         # Use address utility functions instead of hardcoded values
         displays_rt = get_rt_address(target_system)
         radar_display_sa = get_subaddress('radar_display')
-        
+
         return register_command_word(target_system, 0, 'radar_display', 'data', 'precipitation')
-    
+
     def store_precipitation_data(self, precip_data: Union[PrecipitationData, Dict]) -> bool:
         """
         Store precipitation data with robust error handling
-        
+
         Args:
             precip_data: PrecipitationData object or dictionary to store
-            
+
         Returns:
             bool: True if storage successful, False otherwise
         """
@@ -211,13 +211,13 @@ class PrecipitationDataHandler(BaseMessageHandler):
                     request_id=precip_data.request_id,
                     response_uuid=precip_data.response_uuid
                 )
-                
+
             logger.info(f"[PRECIP_FLOW] Starting storage of precipitation data with request_id: {precip_data.request_id}")
-            
+
             # Ensure additional_info is a dictionary
             if not isinstance(precip_data.additional_info, dict):
                 precip_data.additional_info = {}
-            
+
             additional_info = precip_data.additional_info.copy()
 
             # Extract command word and add to additional_info
@@ -227,11 +227,11 @@ class PrecipitationDataHandler(BaseMessageHandler):
                 command_word = self._get_command_word('displays')
                 additional_info['command_word'] = command_word
                 logger.info(f"[PRECIP_FLOW] Generated command word: {command_word}")
-                
+
             # Add mode information if available
             if 'mode' not in additional_info:
                 additional_info['mode'] = 'SURVEILLANCE'  # Default mode for precipitation data
-                
+
             # Add message type information from centralized constants
             if 'message_type' not in additional_info:
                 additional_info['message_type'] = WEATHER_RADAR_PRECIPITATION_RESPONSE
@@ -259,12 +259,12 @@ class PrecipitationDataHandler(BaseMessageHandler):
                     logger.info(f"[PRECIP_STORE] Available dict keys: {precip_data.keys()}")
                 else:
                     logger.info(f"[PRECIP_STORE] Available attributes: {dir(precip_data)}")
-                
+
                 # Extract data using flexible approach
                 position = getattr(precip_data, 'position', (0, 0))
                 if isinstance(position, dict) and 'x' in position and 'y' in position:
                     position = (position['x'], position['y'])
-                
+
                 data = {
                     'request_id': getattr(precip_data, 'request_id', str(time.time())),
                     'timestamp': getattr(precip_data, 'timestamp', time.time()),
@@ -292,31 +292,31 @@ class PrecipitationDataHandler(BaseMessageHandler):
                     if not self._init_database_table():
                         logger.error("[PRECIP_STORE] Failed to create precipitation data table")
                         return False
-                
+
                 # Log more detailed information about database operation
-                logger.error(f"[PRECIP_FLOW_DEBUG] Storing precipitation data with request_id: {data['request_id']}")
-                logger.error(f"[PRECIP_FLOW_DEBUG] Position: ({data['position_x']}, {data['position_y']})")
-                logger.error(f"[PRECIP_FLOW_DEBUG] Type: {data['type']}, Rate: {data['rate']}, Intensity: {data['intensity']}")
-                
+                logger.debug(f"[PRECIP_FLOW_DEBUG] Storing precipitation data with request_id: {data['request_id']}")
+                logger.debug(f"[PRECIP_FLOW_DEBUG] Position: ({data['position_x']}, {data['position_y']})")
+                logger.debug(f"[PRECIP_FLOW_DEBUG] Type: {data['type']}, Rate: {data['rate']}, Intensity: {data['intensity']}")
+
                 # Check if record with same request_id already exists
                 check_query = 'SELECT COUNT(*) FROM "precipitation_data" WHERE "request_id" = ?'
                 check_result = self.radar_db.execute_query(check_query, (data['request_id'],), query_type='select')
-                
+
                 if check_result and check_result[0][0] > 0:
                     logger.warning(f"[PRECIP_STORE] Record with request_id {data['request_id']} already exists - updating")
-                    
+
                     # Build update query
                     update_parts = []
                     for key in data.keys():
                         if key != 'request_id':  # Don't update the primary key
                             update_parts.append(f'"{key}" = ?')
-                    
+
                     update_query = f'UPDATE "precipitation_data" SET {", ".join(update_parts)} WHERE "request_id" = ?'
-                    
+
                     # Prepare values (all fields except request_id, then request_id at the end)
                     update_values = [data[key] for key in data.keys() if key != 'request_id']
                     update_values.append(data['request_id'])
-                    
+
                     # Execute update
                     self.radar_db.execute_query(update_query, tuple(update_values), query_type='update', manage_transaction=True)
                 else:
@@ -331,19 +331,19 @@ class PrecipitationDataHandler(BaseMessageHandler):
                 # Verify data was stored
                 verify_query = 'SELECT COUNT(*) FROM "precipitation_data" WHERE "request_id" = ?'
                 result = self.radar_db.execute_query(verify_query, (data['request_id'],), query_type='select')
-                
+
                 if result and result[0][0] > 0:
-                    logger.error("[PRECIP_FLOW_DEBUG] Precipitation data stored and verified successfully")
+                    logger.debug("[PRECIP_FLOW_DEBUG] Precipitation data stored and verified successfully")
                     # Show sample of stored data
                     sample_query = 'SELECT * FROM "precipitation_data" WHERE "request_id" = ? LIMIT 1'
                     sample_result = self.radar_db.execute_query(sample_query, (data['request_id'],), query_type='select')
                     if sample_result:
-                        logger.error(f"[PRECIP_FLOW_DEBUG] Sample of stored data: {sample_result[0]}")
+                        logger.debug(f"[PRECIP_FLOW_DEBUG] Sample of stored data: {sample_result[0]}")
                     return True
                 else:
-                    logger.error("[PRECIP_FLOW_DEBUG] Precipitation data storage verification failed")
+                    logger.debug("[PRECIP_FLOW_DEBUG] Precipitation data storage verification failed")
                     return False
-                    
+
             except Exception as e:
                 logger.error(f"[PRECIP_STORE] Error during storage: {e}")
                 logger.error(traceback.format_exc())
@@ -353,32 +353,32 @@ class PrecipitationDataHandler(BaseMessageHandler):
             logger.error(f"Error storing precipitation data: {e}")
             logger.error(traceback.format_exc())
             return False
-            
+
     def _convert_to_precipitation_data(self, row_dict: Dict) -> PrecipitationData:
         """
         Convert a database row dictionary to a PrecipitationData object
-        
+
         Args:
             row_dict: Dictionary containing precipitation data from database
-            
+
         Returns:
             PrecipitationData object initialized with the row data
         """
-        try:            
+        try:
             # Create position tuple from x,y coordinates
             position = (float(row_dict['position_x']), float(row_dict['position_y']))
-            
+
             # Parse additional_info
             try:
                 additional_info = json.loads(row_dict['additional_info']) if row_dict['additional_info'] else {}
             except json.JSONDecodeError:
                 additional_info = {}
-            
+
             # Get precipitation info
             precip_type = str(row_dict['type'])
             rate = float(row_dict['rate'])
             intensity = float(row_dict['intensity'])
-            
+
             # Create a grid cell with the precipitation data
             grid_cells = [
                 {
@@ -388,7 +388,7 @@ class PrecipitationDataHandler(BaseMessageHandler):
                     'intensity': intensity
                 }
             ]
-            
+
             # Create PrecipitationData object using the radar-local message class
             precip_data = PrecipitationData(
                 data_uuid=str(row_dict['request_id']),
@@ -400,13 +400,13 @@ class PrecipitationDataHandler(BaseMessageHandler):
                 destination="radar_handler",
                 request_id=str(row_dict['request_id'])
             )
-            
+
             # Store additional metadata
             precip_data.timestamp = float(row_dict['timestamp'])
             precip_data.show_values = bool(int(row_dict.get('show_values', 0)))
-            
+
             return precip_data
-            
+
         except Exception as e:
             logger.error(f"Error converting row to WeatherRadarPrecipitationData: {e}")
             logger.error(f"Row data: {row_dict}")
@@ -422,14 +422,14 @@ class PrecipitationDataHandler(BaseMessageHandler):
     ) -> List[PrecipitationData]:
         """
         Retrieve precipitation data with filtering
-        
+
         Args:
             start_time: Optional start time filter
             end_time: Optional end time filter
             precip_type: Optional precipitation type filter
             min_rate: Optional minimum precipitation rate filter
             max_rate: Optional maximum precipitation rate filter
-            
+
         Returns:
             List of WeatherRadarPrecipitationData objects matching the filters
         """
@@ -437,11 +437,11 @@ class PrecipitationDataHandler(BaseMessageHandler):
             # Log table verification
             table_exists = self._verify_table_exists()
             logger.info(f"[PRECIP_DB] Table exists check: {table_exists}")
-            
+
             # Build query based on filters
             query_parts = ['SELECT * FROM "precipitation_data"']
             params = []
-            
+
             where_conditions = []
             if start_time is not None and end_time is not None:
                 where_conditions.append('"timestamp" BETWEEN ? AND ?')
@@ -452,50 +452,50 @@ class PrecipitationDataHandler(BaseMessageHandler):
             if min_rate is not None and max_rate is not None:
                 where_conditions.append('"rate" BETWEEN ? AND ?')
                 params.extend([min_rate, max_rate])
-                
+
             if where_conditions:
                 query_parts.append('WHERE ' + ' AND '.join(where_conditions))
-            
+
             query_parts.append('ORDER BY "timestamp" DESC')
             query = ' '.join(query_parts)
-            
+
             # Execute query
             logger.info(f"[PRECIP_DB] Executing query: {query} with params: {params}")
-            
+
             results = self.radar_db.execute_query(query, tuple(params), query_type='select')
             if not results:
                 logger.info("[PRECIP_DB] No results found")
                 return []
-                
+
             logger.info(f"[PRECIP_DB] Found {len(results)} results")
-            
+
             # Get column names
             columns = []
             with self.radar_db.get_connection() as conn:
                 cursor = conn.cursor()
                 cursor.execute("PRAGMA table_info(precipitation_data)")
                 columns = [col[1] for col in cursor.fetchall()]
-            
+
             # Convert results to dictionaries
             raw_data = []
             for row in results:
                 row_dict = dict(zip(columns, row))
                 raw_data.append(row_dict)
-            
+
             # Convert to WeatherRadarPrecipitationData objects
             precip_data_list = []
             for row_dict in raw_data:
                 try:
                     precip_data = self._convert_to_precipitation_data(row_dict)
-                    precip_data_list.append(precip_data)                    
+                    precip_data_list.append(precip_data)
                 except Exception as e:
                     logger.error(f"Error converting row to WeatherRadarPrecipitationData: {e}")
                     logger.error(f"Row data: {row_dict}")
                     continue
-            
+
             logger.info(f"[PRECIP_DB] Successfully converted {len(precip_data_list)} records to WeatherRadarPrecipitationData objects")
             return precip_data_list
-            
+
         except Exception as e:
             logger.error(f"Error retrieving precipitation data: {e}")
             traceback.print_exc()
@@ -504,37 +504,37 @@ class PrecipitationDataHandler(BaseMessageHandler):
     def clear_old_data(self, max_age_seconds: float = 3600) -> int:
         """
         Clear precipitation data older than specified age
-        
+
         Args:
             max_age_seconds: Maximum age of data to keep in seconds
-            
+
         Returns:
             Number of records deleted
         """
         try:
             current_time = time.time()
             cutoff_time = current_time - max_age_seconds
-            
+
             # Use SystemDatabase instance directly
             condition = {'timestamp': {'<': cutoff_time}}
             result = self.radar_db.delete_from_table('precipitation_data', condition)
-            
+
             logger.info(f"Cleared precipitation data older than {max_age_seconds} seconds")
             return result
-            
+
         except Exception as e:
             logger.error(f"Error clearing old precipitation data: {e}")
             traceback.print_exc()
             return 0
-        
+
     def validate_message(self, message):
         """
         Validate if the message is a valid precipitation message.
         Enhanced to handle both object format and string data format.
-        
+
         Args:
             message: The message to validate
-            
+
         Returns:
             bool: True if message is valid, False otherwise
         """
@@ -543,13 +543,13 @@ class PrecipitationDataHandler(BaseMessageHandler):
             logger.info(f"[PRECIP_HANDLER] Validating message: {type(message)}")
             if isinstance(message, dict):
                 logger.info(f"[PRECIP_HANDLER] Message keys: {list(message.keys())}")
-                
+
                 # Check for string format data from BC/RT transfer
                 if 'data' in message and isinstance(message['data'], str):
                     logger.info(f"[PRECIP_HANDLER] Message has string data of length: {len(message['data'])}")
                     # String data from BC/RT transfer is valid for precipitation messages
                     return True
-            
+
             # Check if the message has a message_type that we can handle
             message_type = get_message_type(message)
             if not message_type:
@@ -560,17 +560,17 @@ class PrecipitationDataHandler(BaseMessageHandler):
                         if metadata.get('precipitation_message') or metadata.get('data_type') == 'precipitation':
                             logger.info(f"[PRECIP_HANDLER] Detected precipitation message from metadata flags")
                             return True
-                
+
                 logger.warning(f"[PRECIP_HANDLER] Message has no message_type: {message}")
                 return False
-                
+
             # Check if the message type is one we can handle
             if not is_message_type(message, WEATHER_RADAR_PRECIPITATION_REQUEST) and not is_message_type(message, WEATHER_RADAR_PRECIPITATION_RESPONSE):
                 # Use more flexible check with is_precipitation_message if specific type check fails
                 if not is_precipitation_message(message):
                     logger.warning(f"[PRECIP_HANDLER] Message type {message_type} is not a precipitation message")
                     return False
-            
+
             # For response messages, check for required attributes
             if is_message_type(message, WEATHER_RADAR_PRECIPITATION_RESPONSE):
                 # check - data can be in various formats
@@ -583,24 +583,24 @@ class PrecipitationDataHandler(BaseMessageHandler):
                         else:
                             logger.warning(f"[PRECIP_HANDLER] Precipitation response missing data attribute and no frames")
                             return False
-            
+
             logger.info(f"[PRECIP_HANDLER] Message validated as a valid precipitation message: {message_type}")
             return True
-            
+
         except Exception as e:
             logger.error(f"[PRECIP_HANDLER] Error validating precipitation message: {e}")
             logger.error(traceback.format_exc())
             return False
-            
+
     def handle_message(self, message):
         """
         Handle a precipitation data message.
         Implementation of the abstract method from BaseMessageHandler.
         Enhanced to handle both object format and string data format.
-        
+
         Args:
             message: The message to handle
-            
+
         Returns:
             bool: True if message was handled successfully, False otherwise
         """
@@ -610,43 +610,43 @@ class PrecipitationDataHandler(BaseMessageHandler):
             # Log message structure for diagnosis
             msg_keys = list(message.keys())
             logger.info(f"[PRECIP_HANDLER] Message keys: {msg_keys}")
-            
+
             # If message has metadata, check for specific indicators
             if 'metadata' in message and isinstance(message['metadata'], dict):
                 metadata_keys = list(message['metadata'].keys())
                 logger.info(f"[PRECIP_HANDLER] Metadata keys: {metadata_keys}")
-                
+
                 # Extract critical metadata flags for logging
                 precip_flag = message['metadata'].get('precipitation_message', False)
                 data_type = message['metadata'].get('data_type', 'unknown')
                 logger.info(f"[PRECIP_HANDLER] Precipitation flag: {precip_flag}, Data type: {data_type}")
-                
+
             # Check for data format and log
             if 'data' in message:
                 data_type = type(message['data'])
                 data_len = len(message['data']) if hasattr(message['data'], '__len__') else 'N/A'
                 logger.info(f"[PRECIP_HANDLER] Data type: {data_type}, length: {data_len}")
-                
+
                 # Try to log first data item for diagnosis
                 if isinstance(message['data'], list) and len(message['data']) > 0:
                     first_item = message['data'][0]
                     logger.info(f"[PRECIP_HANDLER] First data item type: {type(first_item)}")
                     if isinstance(first_item, dict) and 'position' in first_item:
                         logger.info(f"[PRECIP_HANDLER] First data item has position: {first_item['position']}")
-        
+
         # Standard validation
         if not self.validate_message(message):
             logger.warning(f"[PRECIP_HANDLER] Invalid precipitation message: {message}")
             return False
-            
+
         try:
             # Pre-process the message
             processed_message = self.pre_process_message(message)
-            
+
             # Extract message type using helper function
             from FMOFP.Systems.radarManagement.radar_messaging.message_types import get_message_type
             message_type = get_message_type(processed_message)
-            
+
             # Check for BC/RT string data format
             if isinstance(processed_message, dict) and 'data' in processed_message:
                 data = processed_message['data']
@@ -658,10 +658,10 @@ class PrecipitationDataHandler(BaseMessageHandler):
                         # Use precipitation_data_generator to reconstruct objects
                         from FMOFP.Systems.radarManagement.weather.precipitation_data_generator_sync import PrecipitationDataGenerator
                         generator = PrecipitationDataGenerator({})
-                        
+
                         # Use empty objects list as fallback
                         precip_objects = []
-                        
+
                         # Try to parse the string data
                         try:
                             import json
@@ -671,25 +671,25 @@ class PrecipitationDataHandler(BaseMessageHandler):
                                 precip_objects = parsed_data
                         except:
                             logger.error(f"[PRECIP_HANDLER] Failed to parse string data, using empty list")
-                            
+
                         # Get request ID
                         request_id = processed_message.get('request_id', str(time.time()))
-                        
+
                         # Create a response with the precipitation objects
                         mode = processed_message.get('metadata', {}).get('mode', 'SURVEILLANCE')
                         response = generator.create_precipitation_response(precip_objects, request_id, mode)
-                        
+
                         # Store in database
                         for obj in precip_objects:
                             self.store_precipitation_data(obj)
-                            
+
                         logger.info(f"[PRECIP_HANDLER] Stored {len(precip_objects)} precipitation objects")
                         return True
                     except Exception as e:
                         logger.error(f"[PRECIP_HANDLER] Error processing string data: {e}")
                         logger.error(traceback.format_exc())
                         return False
-            
+
             # Regular processing for standard message types
             if message_type and message_type.lower() == WEATHER_RADAR_PRECIPITATION_REQUEST.lower():
                 # Handle data request
@@ -697,15 +697,15 @@ class PrecipitationDataHandler(BaseMessageHandler):
                 # Process the request logic here
                 # This could involve retrieving data from the database or generating new data
                 return True
-                
+
             elif message_type and message_type.lower() == WEATHER_RADAR_PRECIPITATION_RESPONSE.lower():
                 # Handle data response
                 logger.info("[PRECIP_HANDLER] Handling precipitation data response")
-                
+
                 # Get message information
-                request_id = getattr(processed_message, 'request_id', 
+                request_id = getattr(processed_message, 'request_id',
                                    processed_message.get('request_id', str(time.time())))
-                
+
                 # Ensure additional_info is properly set
                 if hasattr(processed_message, 'additional_info') and isinstance(processed_message.additional_info, dict):
                     additional_info = processed_message.additional_info.copy()
@@ -713,7 +713,7 @@ class PrecipitationDataHandler(BaseMessageHandler):
                     additional_info = processed_message['metadata'].copy()
                 else:
                     additional_info = {}
-                
+
                 # Extract command word and add to additional_info
                 command_word = additional_info.get('command_word')
                 if not command_word:
@@ -721,11 +721,11 @@ class PrecipitationDataHandler(BaseMessageHandler):
                     command_word = self._get_command_word()
                     additional_info['command_word'] = command_word
                     logger.info(f"[PRECIP_HANDLER] Generated command word: {command_word}")
-                
+
                 # Add message type information if missing
                 if 'message_type' not in additional_info:
                     additional_info['message_type'] = WEATHER_RADAR_PRECIPITATION_RESPONSE
-                
+
                 # Check if we have precipitation data objects in the message
                 if isinstance(processed_message, dict) and 'data' in processed_message:
                     data = processed_message['data']
@@ -735,7 +735,7 @@ class PrecipitationDataHandler(BaseMessageHandler):
                                 # Store precipitation data object
                                 logger.info(f"[PRECIP_HANDLER] Storing precipitation data object: {obj}")
                                 self.store_precipitation_data(obj)
-                
+
                 return True
             else:
                 # For messages without a standard type, check if it has precipitation data
@@ -743,7 +743,7 @@ class PrecipitationDataHandler(BaseMessageHandler):
                     metadata = processed_message.get('metadata', {})
                     if metadata.get('precipitation_message') or metadata.get('data_type') == 'precipitation':
                         logger.info(f"[PRECIP_HANDLER] Processing non-standard precipitation message")
-                        
+
                         # Extract precipitation data if available
                         if 'data' in processed_message:
                             data = processed_message['data']
@@ -754,10 +754,10 @@ class PrecipitationDataHandler(BaseMessageHandler):
                                         logger.info(f"[PRECIP_HANDLER] Storing precipitation data object: {obj}")
                                         self.store_precipitation_data(obj)
                                 return True
-                
+
                 logger.warning(f"[PRECIP_HANDLER] Unsupported precipitation message type: {message_type}")
                 return False
-            
+
         except Exception as e:
             logger.error(f"Error handling precipitation message: {e}")
             traceback.print_exc()
@@ -766,11 +766,11 @@ class PrecipitationDataHandler(BaseMessageHandler):
     def create_precipitation_response(self, precip_data_list: List[PrecipitationData], request_id: str) -> WeatherRadarPrecipitationResponse:
         """
         Create a precipitation response message from a list of precipitation data objects
-        
+
         Args:
             precip_data_list: List of PrecipitationData objects
             request_id: Request ID to include in response
-            
+
         Returns:
             WeatherRadarPrecipitationResponse object
         """
@@ -779,7 +779,7 @@ class PrecipitationDataHandler(BaseMessageHandler):
             combined_grid_cells = []
             for precip_data in precip_data_list:
                 combined_grid_cells.extend(precip_data.grid_cells)
-                
+
             # Create response message
             response = WeatherRadarPrecipitationResponse(
                 data_uuid=str(time.time()),
@@ -793,9 +793,9 @@ class PrecipitationDataHandler(BaseMessageHandler):
                 command_type=COMMAND_TYPE_PRECIPITATION_DATA,
                 command_name="WEATHER_RADAR_PRECIPITATION"
             )
-            
+
             return response
-            
+
         except Exception as e:
             logger.error(f"Error creating precipitation response: {e}")
             traceback.print_exc()
