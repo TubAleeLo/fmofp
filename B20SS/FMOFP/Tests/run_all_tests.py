@@ -81,6 +81,12 @@ SUITES = [
     # precipitation scale factors -- severe weather decoded ~79x low and
     # rendered in the lightest colour band. Round-trip assertions.
     (True,  "FMOFP.Tests.test_blocker_precip_scale", 300),
+    # Production blockers B1/B2/B3/B4: a boot failure that hung the process
+    # forever and an error shutdown that exited 0; initialization failures
+    # swallowed so boot continued on a half-built system; coroutine stops
+    # discarded when the loop was halted straight after scheduling them; and an
+    # unbounded EventBus join holding the shared lock.
+    (True,  "FMOFP.Tests.test_blocker_lifecycle", 300),
     # Story C14.3: four radars swept across every commandable mode against a
     # live system, plus phase-policy and request-dispatch assertions.
     (True,  "FMOFP.Tests.test_radar_modes_live", 420),

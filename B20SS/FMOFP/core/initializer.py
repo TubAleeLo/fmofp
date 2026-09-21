@@ -1,6 +1,7 @@
 """
 Initializer singleton for managing shared system resources
 """
+import logging
 import os
 import sys
 import threading
@@ -30,6 +31,8 @@ class Initializer(metaclass=SingletonMeta):
         self._loop = None
         self._state_manager = None
         self._shutdown_started = False
+        # Process exit status; 1 once anything has failed (B1).
+        self._exit_status = 0
 
     def initialize(self):
         if not self.initialized:
@@ -71,7 +74,7 @@ class Initializer(metaclass=SingletonMeta):
         elif new_state == SystemState.ERROR:
             self._handle_error_state()
 
-    def _initiate_shutdown(self):
+    def _initiate_shutdown(self, failed=False):
         """Initiate graceful shutdown sequence
 
         NOTE: This is invoked synchronously from _handle_state_change(), which
@@ -124,9 +127,14 @@ class Initializer(metaclass=SingletonMeta):
         graceful shutdown themselves: try to exit cleanly, then hard-kill
         after a bounded grace period.
         """
+        # B1: record a failure even if shutdown is already under way -- an
+        # ERROR arriving during a shutdown still means this process failed.
+        if failed:
+            self._exit_status = 1
+
         if self._shutdown_started:
             return
-            
+
         self._shutdown_started = True
         logger.info("Initiating graceful shutdown sequence")
         
@@ -136,8 +144,15 @@ class Initializer(metaclass=SingletonMeta):
             # task chain finishes and control returns to run_forever() -
             # cleanup() (run_until_complete/close) must NOT be called here,
             # see docstring above.
-            if self._loop and self._loop.is_running():
-                self._loop.call_soon_threadsafe(self._loop.stop)
+            loop_was_running = bool(self._loop and self._loop.is_running())
+            if loop_was_running:
+                # BLOCKER B3: this used to schedule loop.stop() directly, which
+                # halted the loop with every component's stop() coroutine still
+                # pending on it -- sockets, executors and routing services were
+                # never actually shut down, and the watchdog below did the real
+                # work. Drain those tasks first, with a bounded budget, then
+                # stop.
+                self._loop.call_soon_threadsafe(self._drain_then_stop)
 
             # Safety-net watchdog: force the process to exit if it hasn't
             # already done so shortly after shutdown was initiated. All
@@ -148,20 +163,81 @@ class Initializer(metaclass=SingletonMeta):
             def _watchdog_force_exit():
                 logger.warning(
                     "Shutdown watchdog: process did not exit naturally within "
-                    "the grace period after all components stopped; forcing exit."
+                    "the grace period after all components stopped; forcing exit "
+                    f"with status {self._exit_status}."
                 )
-                os._exit(0)
+                # BLOCKER B1: os._exit skips every atexit hook and every
+                # logging handler flush, so the lines explaining why the
+                # process is dying were routinely lost. Flush first.
+                try:
+                    logging.shutdown()
+                except Exception:
+                    pass
+                # BLOCKER B1: this was a hardcoded os._exit(0). _handle_error_state
+                # routes fatal errors through here, so a crash terminated with
+                # SUCCESS status -- systemd, k8s, docker and any supervising
+                # script read that as a clean stop and neither restarted nor
+                # alerted.
+                os._exit(self._exit_status)
 
-            watchdog = threading.Timer(5.0, _watchdog_force_exit)
-            watchdog.daemon = True
-            watchdog.start()
+            # Only arm the watchdog if there was actually a running loop to
+            # stop. Its entire job is to force the process out when Qt's native
+            # event pump keeps running after the asyncio loop was asked to
+            # stop; with no loop running there is nothing for it to rescue, and
+            # arming it anyway means any code path that initiates a shutdown
+            # without a loop -- a test, a tool, an embedded use -- gets its
+            # process killed five seconds later.
+            if loop_was_running:
+                watchdog = threading.Timer(5.0, _watchdog_force_exit)
+                watchdog.daemon = True
+                watchdog.start()
+            else:
+                logger.info(
+                    "No running event loop to stop; shutdown watchdog not armed")
         except Exception as e:
             logger.error(f"Error during shutdown: {str(e)}")
+
+    def _drain_then_stop(self):
+        """Give the scheduled component stops a bounded chance, then stop (B3)."""
+        async def _drain():
+            try:
+                from FMOFP.core.system_manager import get_system_manager
+                await get_system_manager().await_stop_tasks(timeout=5.0)
+            except Exception as e:
+                logger.error(f"Error draining component stop tasks: {e}")
+            finally:
+                logger.info("Component stops drained; stopping the event loop")
+                self._loop.stop()
+
+        try:
+            self._loop.create_task(_drain())
+        except Exception as e:
+            # If the drain cannot even be scheduled, stopping the loop is still
+            # strictly better than not stopping it.
+            logger.error(f"Could not schedule shutdown drain: {e}")
+            self._loop.stop()
+
+    def request_stop(self, failed=False):
+        """Stop the application loop, even if the system never fully started.
+
+        BLOCKER B1: SystemState.SHUTDOWN was the only thing that ever reached
+        _initiate_shutdown, and that state is only set at the very end of
+        SystemManager.stop_system(). Every early-failure path in Main.py
+        therefore left the loop running forever: the process sat in
+        run_forever() with two 60 FPS QTimers still firing, never exiting and
+        never returning a status, so a supervisor saw a healthy long-running
+        process. Main.shutdown() now calls this directly.
+        """
+        self._initiate_shutdown(failed=failed)
+
+    def get_exit_status(self):
+        """The status the process should exit with (0 unless something failed)."""
+        return self._exit_status
 
     def _handle_error_state(self):
         """Handle transition to error state"""
         logger.error("System entered ERROR state")
-        self._initiate_shutdown()
+        self._initiate_shutdown(failed=True)
 
     def get_app(self):
         return self._app
