@@ -13,7 +13,7 @@ import math
 import time
 import random
 from typing import Dict, List, Optional, Any, Tuple
-from Utils.logger.sys_logger import get_logger
+from FMOFP.Utils.logger.sys_logger import get_logger
 from FMOFP.manual_animation_timer import ManualAnimationTimer
 
 logger = get_logger()
@@ -114,7 +114,7 @@ class HolographicMFD(HolographicDisplay):
         # thread) marshals the actual _handle_mode_event(event) call onto the GUI
         # thread where it's safe to touch widget state.
         try:
-            from core.event_driven_communication import get_event_bus, Event
+            from FMOFP.core.event_driven_communication import get_event_bus, Event
             self._event_bus = get_event_bus()
             self._mode_event_received.connect(self._handle_mode_event)
             # Stored as an attribute so cleanup() below can pass the exact

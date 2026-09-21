@@ -10,7 +10,7 @@ import traceback
 import time
 import uuid
 from typing import Dict, Any, Optional, Tuple, List, Union
-from Utils.logger.sys_logger import get_logger
+from FMOFP.Utils.logger.sys_logger import get_logger
 from .display_message_types import (
     DISPLAY_VIL_DATA, DISPLAY_PRECIPITATION_DATA, DISPLAY_ECHO_TOP_DATA, DISPLAY_STORM_CELL_DATA,
     DISPLAY_COMMAND_TYPE_SHOW, DISPLAY_COMMAND_TYPE_MODE, DISPLAY_COMMAND_TYPE_DATA, DISPLAY_COMMAND_TYPE_STATUS,
@@ -880,7 +880,7 @@ class DisplayMessageRouter:
             if not radar_node:
                 logger.error("[DISPLAY_ROUTE] No weather_radar node found")
                 # Create the node if it doesn't exist
-                from Interfaces.userInterface.displays.display_nodes import DisplayNode
+                from FMOFP.Interfaces.userInterface.displays.display_nodes import DisplayNode
                 radar_node = DisplayNode("weather_radar", parent=self._tree_manager.root)
                 self._tree_manager.root.add_child(radar_node)
                 logger.warning("[DISPLAY_ROUTE] Added child weather_radar to root")
@@ -1111,7 +1111,7 @@ class DisplayMessageRouter:
             logger.info(f"[DISPLAY_ROUTE] NOTIFICATION SENT: VIL data update to all subscribers")
             
             # Additionally, publish an event to ensure everything gets notified
-            from core.event_driven_communication import get_event_bus, Event
+            from FMOFP.core.event_driven_communication import get_event_bus, Event
             event_bus = get_event_bus()
             event_data = {'type': 'vil_update', 'timestamp': time.time(), 'count': len(vil_data)}
             event = Event('weather_radar_update', event_data)
@@ -1249,7 +1249,7 @@ class DisplayMessageRouter:
             if not radar_node:
                 logger.error("[DISPLAY_ROUTE] No weather_radar node found")
                 # Create the node if it doesn't exist
-                from Interfaces.userInterface.displays.display_nodes import DisplayNode
+                from FMOFP.Interfaces.userInterface.displays.display_nodes import DisplayNode
                 radar_node = DisplayNode("weather_radar", parent=self._tree_manager.root)
                 self._tree_manager.root.add_child(radar_node)
                 logger.warning("[DISPLAY_ROUTE] Added child weather_radar to root")
@@ -1516,7 +1516,7 @@ class DisplayMessageRouter:
             logger.info(f"[DISPLAY_ROUTE] NOTIFICATION SENT: Precipitation data update to all subscribers")
             
             # Additionally, publish an event to ensure everything gets notified
-            from core.event_driven_communication import get_event_bus, Event
+            from FMOFP.core.event_driven_communication import get_event_bus, Event
             event_bus = get_event_bus()
             event_data = {'type': 'precipitation_update', 'timestamp': time.time(), 'count': len(rich_precipitation_data)}
             event = Event('weather_radar_update', event_data)
@@ -1734,7 +1734,7 @@ class DisplayMessageRouter:
             if not radar_node:
                 logger.error(f"[DISPLAY_ROUTE] No {display_id} node found")
                 # Create the node if it doesn't exist
-                from Interfaces.userInterface.displays.display_nodes import DisplayNode
+                from FMOFP.Interfaces.userInterface.displays.display_nodes import DisplayNode
                 radar_node = DisplayNode(display_id, parent=self._tree_manager.root)
                 self._tree_manager.root.add_child(radar_node)
                 logger.warning(f"[DISPLAY_ROUTE] Added child {display_id} to root")
@@ -1742,7 +1742,7 @@ class DisplayMessageRouter:
             # Get the mode node
             mode_node = radar_node.get_child("mode")
             if not mode_node:
-                from Interfaces.userInterface.displays.display_nodes import DisplayNode
+                from FMOFP.Interfaces.userInterface.displays.display_nodes import DisplayNode
                 mode_node = DisplayNode("mode", parent=radar_node)
                 radar_node.add_child(mode_node)
                 logger.warning(f"[DISPLAY_ROUTE] Added child mode to {display_id}")
@@ -2137,7 +2137,7 @@ class DisplayMessageRouter:
                 # Get or create visual node for display updates
                 visual_node = radar_node.get_child("visual")
                 if not visual_node:
-                    from Interfaces.userInterface.displays.display_nodes import DisplayNode
+                    from FMOFP.Interfaces.userInterface.displays.display_nodes import DisplayNode
                     visual_node = DisplayNode("visual", parent=radar_node)
                     radar_node.add_child(visual_node)
                     logger.warning(f"[DISPLAY_ROUTE] Added child visual to {display_id}")

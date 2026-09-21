@@ -20,9 +20,9 @@ from typing import List, Optional, Dict, Tuple, Any
 from FMOFP.Tests.setup_env import setup_environment
 setup_environment()
 
-from core.system_manager import get_system_manager
-from Utils.logger.sys_logger import get_logger
-from Systems.radarManagement.radar_enums import weather_radarMode
+from FMOFP.core.system_manager import get_system_manager
+from FMOFP.Utils.logger.sys_logger import get_logger
+from FMOFP.Systems.radarManagement.radar_enums import weather_radarMode
 
 logger = get_logger()
 

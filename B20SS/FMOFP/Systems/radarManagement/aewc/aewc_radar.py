@@ -9,7 +9,7 @@ import traceback
 import threading
 import numpy as np
 from typing import Dict, List, Tuple, Optional
-from Systems.radarManagement.radar_enums import aewc_radarMode
+from FMOFP.Systems.radarManagement.radar_enums import aewc_radarMode
 from FMOFP.MIL_STD_1553B.mil_std_1553B  import MIL_STD_1553B_Message
 # Import radar-local message definitions to enforce system boundaries
 from FMOFP.Systems.radarManagement.radar_messaging.message_definitions.aewc_data import (
@@ -23,7 +23,7 @@ from FMOFP.Systems.radarManagement.radar_messaging.message_types import (
     COMMAND_TYPE_TRACK_DATA,
     COMMAND_TYPE_SECTOR_SCAN_DATA
 )
-from Utils.logger.sys_logger import get_logger
+from FMOFP.Utils.logger.sys_logger import get_logger
 from FMOFP.Systems.radarManagement.aewc.aewc_processor import SectorPriorityManager, ElectronicProtection
 
 logger = get_logger()

@@ -6,8 +6,8 @@ from PyQt6.QtGui import (QPainter, QColor, QPen, QImage, QTransform)
 from typing import Dict, List, Optional
 import traceback
 from .base_radar_display import BaseRadarDisplay
-from Systems.radarManagement.radar_enums import sar_radarMode
-from Utils.logger.sys_logger import get_logger
+from FMOFP.Systems.radarManagement.radar_enums import sar_radarMode
+from FMOFP.Utils.logger.sys_logger import get_logger
 
 logger = get_logger()
 

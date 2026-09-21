@@ -12,7 +12,7 @@ from ..visual.theme_manager import get_theme_manager, DisplayTheme
 from ..visual.effects import VisualEffects
 from ..visual.animation_controller import AnimationController, TransitionGroup
 from ..visual.settings_panel import SettingsPanel
-from Utils.logger.sys_logger import get_logger
+from FMOFP.Utils.logger.sys_logger import get_logger
 
 logger = get_logger()
 

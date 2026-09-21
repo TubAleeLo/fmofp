@@ -27,7 +27,7 @@ from PyQt6.QtGui import QPainter, QColor, QPen, QBrush, QFont, QLinearGradient, 
 from .mfd import MultiFunctionDisplay, RadarData, RadarType
 from .visual.enhanced_effects import get_enhanced_visual_effects
 from .visual.theme_manager import get_theme_manager
-from Utils.logger.sys_logger import get_logger
+from FMOFP.Utils.logger.sys_logger import get_logger
 
 logger = get_logger()
 

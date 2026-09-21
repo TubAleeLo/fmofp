@@ -8,7 +8,7 @@ import json
 import traceback
 from FMOFP.MIL_STD_1553B.Bus_Controller.BC_messaging.BC_encode_decode.BC_words_encoder import BCWordsEncoder
 from FMOFP.MIL_STD_1553B.Bus_Controller.BC_messaging.BC_encode_decode.BC_words_decoder import BC_decoders
-from Utils.logger.sys_logger import get_logger
+from FMOFP.Utils.logger.sys_logger import get_logger
 
 logger = get_logger()
 

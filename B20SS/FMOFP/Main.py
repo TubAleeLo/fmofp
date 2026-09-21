@@ -19,19 +19,16 @@ import asyncio
 # so the `import FMOFP...` lines below raised ModuleNotFoundError — the
 # documented entry point simply did not work (found August 2026 live-boot
 # re-verification; SystemStart.py already had this bootstrap, Main.py never
-# did). Mirror SystemStart.py: ensure both B20SS/ and B20SS/FMOFP/ are on
-# sys.path, install the dual-path import alias shim, and normalise CWD to
-# B20SS/ so the relative config paths ('FMOFP/dbConfig.xml', ...) resolve.
+# did). Put the distribution root on sys.path so `import FMOFP...` resolves.
+#
+# Story C12: B20SS/FMOFP used to be added as a SECOND entry, which let the same
+# file be imported under two dotted names and produce duplicate module and class
+# objects. Every import is FMOFP-prefixed now, so one entry is enough and the
+# dual-path shim that compensated for it is gone.
 _HERE = os.path.dirname(os.path.abspath(__file__))          # …/B20SS/FMOFP
 _ROOT = os.path.dirname(_HERE)                               # …/B20SS
-for _p in (_ROOT, _HERE):
-    if _p not in sys.path:
-        sys.path.insert(0, _p)
-try:
-    from Utils.dual_path_compat import install as _install_dual_path_alias
-    _install_dual_path_alias()
-except ImportError:
-    pass
+if _ROOT not in sys.path:
+    sys.path.insert(0, _ROOT)
 # Story C11b: the os.chdir(_ROOT) that used to sit here is gone. It existed
 # because config and database paths were written CWD-relative ('FMOFP/dbConfig.xml',
 # os.path.join('FMOFP','storage','databases',...)), so the process had to relocate

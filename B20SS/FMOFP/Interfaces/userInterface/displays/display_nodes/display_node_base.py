@@ -10,7 +10,7 @@ import time
 import traceback
 from typing import Any, Set, Dict, Optional, Callable, Awaitable
 from dataclasses import dataclass, field
-from Utils.logger.sys_logger import get_logger
+from FMOFP.Utils.logger.sys_logger import get_logger
 
 logger = get_logger()
 

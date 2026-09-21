@@ -3,7 +3,7 @@ import time
 import random
 from typing import Dict, List
 from collections import defaultdict
-import Utils.common.fetching as fetching
+import FMOFP.Utils.common.fetching as fetching
 from FMOFP.storage.DBM import DatabaseManager
 from FMOFP.MIL_STD_1553B.Messaging import ScheduleMessage
 from FMOFP.MIL_STD_1553B.mil_std_1553B  import MIL_STD_1553B_Message

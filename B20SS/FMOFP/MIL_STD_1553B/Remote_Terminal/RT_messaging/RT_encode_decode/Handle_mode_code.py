@@ -7,7 +7,7 @@
 #                   Mode_code_process(self, command_word)
 #                   Mode_code_
 
-from Utils.logger.sys_logger import get_logger
+from FMOFP.Utils.logger.sys_logger import get_logger
 
 
 logger = get_logger()

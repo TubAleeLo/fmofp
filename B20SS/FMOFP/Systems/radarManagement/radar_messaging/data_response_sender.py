@@ -13,7 +13,7 @@ import uuid
 import traceback
 import math
 
-from Utils.logger.sys_logger import get_logger
+from FMOFP.Utils.logger.sys_logger import get_logger
 from FMOFP.Systems.radarManagement.radar_messaging.address_utils import (
     get_rt_address,
     get_subaddress,

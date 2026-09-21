@@ -7,8 +7,8 @@ from typing import Dict, List
 import traceback
 from .base_radar_display import BaseRadarDisplay
 from .tfr_mode_handler import TFRModeHandler
-from Systems.radarManagement.radar_enums import tfr_radarMode
-from Utils.logger.sys_logger import get_logger
+from FMOFP.Systems.radarManagement.radar_enums import tfr_radarMode
+from FMOFP.Utils.logger.sys_logger import get_logger
 
 logger = get_logger()
 

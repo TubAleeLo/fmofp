@@ -1,9 +1,9 @@
 # system_state_manager.py
-from Utils.common.system_states import SystemState, userCLIStates
+from FMOFP.Utils.common.system_states import SystemState, userCLIStates
 import threading
 
 from typing import Callable
-from storage.tempNodes import StateNode
+from FMOFP.storage.tempNodes import StateNode
 
 from FMOFP.Utils.logger.sys_logger import get_logger
 

@@ -11,7 +11,7 @@ from enum import Enum
 from PyQt6.QtCore import QRectF, QPointF
 from PyQt6.QtGui import QPainter
 from ..utils.visual_settings_manager import get_visual_settings_manager
-from Utils.logger.sys_logger import get_logger
+from FMOFP.Utils.logger.sys_logger import get_logger
 from .legend_manager import LegendConfig, get_legend_manager
 
 logger = get_logger()

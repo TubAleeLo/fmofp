@@ -5,7 +5,7 @@ import threading
 import time
 from typing import List, Tuple, Dict
 from typing import Union
-import Utils.common.fetching as fetching
+import FMOFP.Utils.common.fetching as fetching
 from FMOFP.storage.DBM import DatabaseManager
 from FMOFP.MIL_STD_1553B.Messaging import ScheduleMessage
 from FMOFP.Utils.logger.sys_logger import get_logger

@@ -6,7 +6,7 @@ import time
 from typing import Dict, Any, Optional, List, Union
 from .display_message_base import DisplayBaseMessage
 from ..display_message_types import DISPLAY_MODE_CHANGE
-from Utils.logger.sys_logger import get_logger
+from FMOFP.Utils.logger.sys_logger import get_logger
 
 logger = get_logger()
 

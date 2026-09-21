@@ -7,7 +7,7 @@ from typing import Dict, Tuple
 import math
 import traceback
 from .base_radar_display import BaseRadarDisplay
-from Utils.logger.sys_logger import get_logger
+from FMOFP.Utils.logger.sys_logger import get_logger
 
 logger = get_logger()
 

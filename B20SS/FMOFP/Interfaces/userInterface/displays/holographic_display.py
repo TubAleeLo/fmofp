@@ -10,7 +10,7 @@ import math
 import time
 import traceback
 from typing import Dict, List, Optional, Any, Tuple
-from Utils.logger.sys_logger import get_logger
+from FMOFP.Utils.logger.sys_logger import get_logger
 
 logger = get_logger()
 

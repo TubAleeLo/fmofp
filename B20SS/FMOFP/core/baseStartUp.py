@@ -2,15 +2,15 @@ import os
 import sys
 import xml.etree.ElementTree as ET
 from typing import Dict
-import Utils.common.fetching as fetching
-from Utils.common.thread_manager import thread_manager
+import FMOFP.Utils.common.fetching as fetching
+from FMOFP.Utils.common.thread_manager import thread_manager
 from FMOFP.MIL_STD_1553B.Bus_Controller.BC import Bus_Controller
 from FMOFP.MIL_STD_1553B.Remote_Terminal.RT import Remote_Terminal
-from storage.DBM import DatabaseManager
-from Utils.logger.sys_logger import get_logger
-from Utils.common.system_state_manager import SystemStateManager
-from Utils.common.system_states import SystemState
-from Utils.debug.userCLI import get_user_cli
+from FMOFP.storage.DBM import DatabaseManager
+from FMOFP.Utils.logger.sys_logger import get_logger
+from FMOFP.Utils.common.system_state_manager import SystemStateManager
+from FMOFP.Utils.common.system_states import SystemState
+from FMOFP.Utils.debug.userCLI import get_user_cli
 
 class startup:
     def __init__(self):

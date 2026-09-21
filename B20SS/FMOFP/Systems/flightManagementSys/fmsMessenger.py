@@ -689,7 +689,7 @@ class FMSMessenger:
 
                 # Start message processing thread
                 thread_name = "FMSMessenger"
-                from Utils.common.thread_manager import thread_manager
+                from FMOFP.Utils.common.thread_manager import thread_manager
 
                 # Define the message processing function
                 def process_messages():

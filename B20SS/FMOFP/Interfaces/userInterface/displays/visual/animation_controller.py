@@ -5,7 +5,7 @@ from PyQt6.QtCore import QTimer, QObject, QEasingCurve
 from typing import Dict, Any, Optional, Callable, List, Tuple
 import time
 import math
-from Utils.logger.sys_logger import get_logger
+from FMOFP.Utils.logger.sys_logger import get_logger
 
 logger = get_logger()
 

@@ -5,7 +5,7 @@ from PyQt6.QtCore import QPointF, QRectF, Qt, QEasingCurve, QPropertyAnimation
 from PyQt6.QtGui import QPainter, QColor, QPen, QBrush, QPainterPath, QLinearGradient, QRadialGradient
 from typing import Optional, Tuple, List, Dict, Any
 from .theme_manager import get_theme_manager
-from Utils.logger.sys_logger import get_logger
+from FMOFP.Utils.logger.sys_logger import get_logger
 
 logger = get_logger()
 

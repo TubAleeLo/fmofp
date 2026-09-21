@@ -3,7 +3,7 @@ Factory for creating appropriate radar display instances
 """
 from typing import Optional, Dict, Type, List
 import traceback
-from Systems.radarManagement.radar_enums import (
+from FMOFP.Systems.radarManagement.radar_enums import (
     RadarMode, weather_radarMode, targeting_radarMode,
     tfr_radarMode, sar_radarMode, aewc_radarMode
 )
@@ -15,7 +15,7 @@ from .sar_radar_display import SARRadarDisplay
 from .aewc_radar_display import AEWCRadarDisplay
 from .holographic_radar_display import HolographicRadarDisplay
 from ..visual.theme_manager import get_theme_manager
-from Utils.logger.sys_logger import get_logger
+from FMOFP.Utils.logger.sys_logger import get_logger
 import time
 
 logger = get_logger()

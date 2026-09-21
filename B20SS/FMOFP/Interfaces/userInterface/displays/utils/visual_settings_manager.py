@@ -8,7 +8,7 @@ Provides a single source of truth for all visual overlay settings.
 import time
 import traceback
 from typing import Dict, Any, List, Callable
-from Utils.logger.sys_logger import get_logger
+from FMOFP.Utils.logger.sys_logger import get_logger
 
 logger = get_logger()
 

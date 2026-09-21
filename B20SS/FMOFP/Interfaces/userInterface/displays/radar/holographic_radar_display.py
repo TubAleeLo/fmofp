@@ -13,7 +13,7 @@ from ..visual.enhanced_theme_manager import get_enhanced_theme_manager, Enhanced
 from ..visual.effects import VisualEffects
 from ..visual.animation_controller import AnimationController, TransitionGroup
 from ..visual.holographic_settings_panel import HolographicSettingsPanel
-from Utils.logger.sys_logger import get_logger
+from FMOFP.Utils.logger.sys_logger import get_logger
 import sys
 import os
 

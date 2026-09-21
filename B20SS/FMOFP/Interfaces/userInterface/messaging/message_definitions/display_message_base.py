@@ -5,7 +5,7 @@ Base class for display-specific message definitions.
 import time
 import uuid
 from typing import Dict, Any, Optional
-from Utils.logger.sys_logger import get_logger
+from FMOFP.Utils.logger.sys_logger import get_logger
 
 logger = get_logger()
 

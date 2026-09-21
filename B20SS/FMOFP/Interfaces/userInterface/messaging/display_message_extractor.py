@@ -26,7 +26,7 @@ from .display_message_types import (
 
 # Import system logger
 try:
-    from Utils.logger.sys_logger import get_logger
+    from FMOFP.Utils.logger.sys_logger import get_logger
     logger = get_logger()
 except ImportError:
     import logging

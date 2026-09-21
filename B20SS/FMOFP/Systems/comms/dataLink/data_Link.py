@@ -1,6 +1,6 @@
 import os
 import sys
-import Utils.common.fetching as fetching
+import FMOFP.Utils.common.fetching as fetching
 import random
 import time
 import threading

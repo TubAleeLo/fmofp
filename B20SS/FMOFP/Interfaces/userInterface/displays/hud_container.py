@@ -10,7 +10,7 @@ from PyQt6.QtCore import pyqtSignal
 from .hud_display_factory import HUDDisplayFactory
 from .visual.theme_manager import get_theme_manager
 from .display_nodes.display_tree_manager import get_display_tree_manager
-from Utils.logger.sys_logger import get_logger
+from FMOFP.Utils.logger.sys_logger import get_logger
 
 logger = get_logger()
 

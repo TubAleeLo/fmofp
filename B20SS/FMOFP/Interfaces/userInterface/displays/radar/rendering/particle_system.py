@@ -13,7 +13,7 @@ import uuid
 import numpy as np
 import random
 
-from Utils.logger.sys_logger import get_logger
+from FMOFP.Utils.logger.sys_logger import get_logger
 
 # Import animation controller for wind simulation
 from .animation_controller import get_animation_controller

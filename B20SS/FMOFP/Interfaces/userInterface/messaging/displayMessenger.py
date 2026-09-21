@@ -30,7 +30,7 @@ from .display_address_utils import (
 from FMOFP.MIL_STD_1553B.Remote_Terminal.RT_connect.RT_socket import get_rt_sender
 from FMOFP.MIL_STD_1553B.Remote_Terminal.RT_messaging.message_queue_manager import get_message_queue_manager
 from ..displays.base_display import DisplayType
-from Utils.logger.sys_logger import get_logger
+from FMOFP.Utils.logger.sys_logger import get_logger
 
 logger = get_logger()
 
@@ -100,7 +100,7 @@ class DisplayMessenger:
             
             
             # Register as startup thread - KEEP EXISTING CODE
-            from Utils.common.thread_manager import thread_manager
+            from FMOFP.Utils.common.thread_manager import thread_manager
             thread_manager.register_startup_thread("DisplayMessenger")
             
             logger.info("DisplayMessenger: Initialized with RT components")
@@ -950,7 +950,7 @@ class DisplayMessenger:
                 
                 # Start message processing thread with async support
                 thread_name = "DisplayMessenger"
-                from Utils.common.thread_manager import thread_manager
+                from FMOFP.Utils.common.thread_manager import thread_manager
                 
                 # Create a wrapper function to run the async method in an event loop
                 def run_async_message_loop():

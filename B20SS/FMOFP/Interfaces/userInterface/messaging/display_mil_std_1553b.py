@@ -16,7 +16,7 @@ from .display_message_types import translate_message_type
 from .display_address_utils import get_rt_address_name, get_subaddress_name
 
 # Import system logger
-from Utils.logger.sys_logger import get_logger
+from FMOFP.Utils.logger.sys_logger import get_logger
 
 logger = get_logger()
 

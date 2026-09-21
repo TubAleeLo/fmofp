@@ -6,7 +6,7 @@ from PyQt6.QtGui import QPainter, QColor, QPen, QBrush, QPainterPath, QLinearGra
 from typing import Optional, Tuple, List, Dict, Any
 from .effects import VisualEffects
 from .enhanced_theme_manager import get_enhanced_theme_manager
-from Utils.logger.sys_logger import get_logger
+from FMOFP.Utils.logger.sys_logger import get_logger
 import math
 import time
 

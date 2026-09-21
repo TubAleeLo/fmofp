@@ -11,7 +11,7 @@ import math
 import time
 import uuid
 
-from Utils.logger.sys_logger import get_logger
+from FMOFP.Utils.logger.sys_logger import get_logger
 
 # Import particle system
 from .particle_system import get_particle_system

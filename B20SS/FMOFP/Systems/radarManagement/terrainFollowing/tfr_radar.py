@@ -9,7 +9,7 @@ import traceback
 import threading
 import numpy as np
 from typing import Dict, List, Tuple
-from Systems.radarManagement.radar_enums import tfr_radarMode
+from FMOFP.Systems.radarManagement.radar_enums import tfr_radarMode
 from FMOFP.MIL_STD_1553B.mil_std_1553B  import MIL_STD_1553B_Message
 # Import radar-local message definitions to enforce system boundaries
 from FMOFP.Systems.radarManagement.radar_messaging.message_definitions.tfr_data import (
@@ -28,7 +28,7 @@ from FMOFP.local_messaging.messageConfigurations.tfr_radar_data import (
     tfr_radarElevationProfile as LegacyTFRRadarElevationProfile,
     tfr_radarTerrainWarning as LegacyTFRRadarTerrainWarning
 )
-from Utils.logger.sys_logger import get_logger
+from FMOFP.Utils.logger.sys_logger import get_logger
 from FMOFP.Systems.radarManagement.terrainFollowing.tfr_processor import PathOptimiser, ClearanceManager
 
 logger = get_logger()

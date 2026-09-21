@@ -8,7 +8,7 @@ Enhances modularity and scalability by normalizing message structures.
 import time
 from typing import Any, Dict, List
 
-from Utils.logger.sys_logger import get_logger
+from FMOFP.Utils.logger.sys_logger import get_logger
 
 logger = get_logger()
 

@@ -10,11 +10,11 @@ import importlib
 import traceback
 from typing import Any, Dict, Optional, Union
 from .display_node_base import DisplayNode
-from Systems.radarManagement.radar_enums import (
+from FMOFP.Systems.radarManagement.radar_enums import (
     weather_radarMode, targeting_radarMode,
     tfr_radarMode, sar_radarMode, aewc_radarMode
 )
-from Utils.logger.sys_logger import get_logger
+from FMOFP.Utils.logger.sys_logger import get_logger
 
 logger = get_logger()
 

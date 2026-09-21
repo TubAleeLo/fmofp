@@ -9,7 +9,7 @@ import threading
 import traceback
 import numpy as np
 from typing import Dict, Optional
-from Systems.radarManagement.radar_enums import targeting_radarMode
+from FMOFP.Systems.radarManagement.radar_enums import targeting_radarMode
 from FMOFP.MIL_STD_1553B.mil_std_1553B  import MIL_STD_1553B_Message
 # Import radar-local message definitions to enforce system boundaries
 from FMOFP.Systems.radarManagement.radar_messaging.message_definitions.targeting_data import (
@@ -24,7 +24,7 @@ from FMOFP.Systems.radarManagement.radar_messaging.message_types import (
     COMMAND_TYPE_LOCK_DATA
 )
 
-from Utils.logger.sys_logger import get_logger
+from FMOFP.Utils.logger.sys_logger import get_logger
 from FMOFP.Systems.radarManagement.targeting.target_processor import TargetProcessor
 
 logger = get_logger()

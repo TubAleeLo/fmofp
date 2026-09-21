@@ -6,7 +6,7 @@ from PyQt6.QtCore import Qt, QRectF, QPointF
 from PyQt6.QtGui import QPainter, QColor, QPen
 from typing import Dict, Optional
 import traceback
-from Utils.logger.sys_logger import get_logger
+from FMOFP.Utils.logger.sys_logger import get_logger
 from ..visual.theme_manager import get_theme_manager, DisplayTheme
 from ..visual.enhanced_theme_manager import get_enhanced_theme_manager, EnhancedDisplayTheme
 from ..visual.effects import VisualEffects

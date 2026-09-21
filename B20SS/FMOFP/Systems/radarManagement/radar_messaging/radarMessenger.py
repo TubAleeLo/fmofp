@@ -53,7 +53,7 @@ from FMOFP.Interfaces.userInterface.displays.radar.radar_enums import (
     targeting_radarMode,
     aewc_radarMode
 )
-from Utils.logger.sys_logger import get_logger
+from FMOFP.Utils.logger.sys_logger import get_logger
 from FMOFP.Utils.common.fetching import resolve_resource
 
 logger = get_logger()
@@ -640,7 +640,7 @@ class RadarMessenger:
                 # Get mode name from enum
                 mode_name = None
                 try:
-                    from Systems.radarManagement.radar_enums import weather_radarMode
+                    from FMOFP.Systems.radarManagement.radar_enums import weather_radarMode
                     mode_name = weather_radarMode(mode_value).name
                     logger.info(f"[RADAR_MSGR] Mode identified as {mode_name} (value: {mode_value})")
                 except (ValueError, AttributeError):

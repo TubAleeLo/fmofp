@@ -9,7 +9,7 @@ from typing import Dict, List, Optional, Tuple
 import numpy as np
 import time
 from dataclasses import dataclass
-from Utils.logger.sys_logger import get_logger
+from FMOFP.Utils.logger.sys_logger import get_logger
 
 logger = get_logger()
 

@@ -10,7 +10,7 @@ import os
 import xml.etree.ElementTree as ET
 from typing import Dict, Any, Tuple
 import threading
-from Utils.logger.sys_logger import get_logger
+from FMOFP.Utils.logger.sys_logger import get_logger
 from FMOFP.Utils.common.operation_tracker import track_operation, is_operation_completed
 from FMOFP.local_messaging.address_utils import (
     get_rt_address as utils_get_rt_address,

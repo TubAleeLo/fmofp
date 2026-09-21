@@ -21,7 +21,7 @@ from .display_message_types import (
 from FMOFP.MIL_STD_1553B.metadata_codec import MetadataCodec
 
 # Import system logger
-from Utils.logger.sys_logger import get_logger
+from FMOFP.Utils.logger.sys_logger import get_logger
 
 logger = get_logger()
 

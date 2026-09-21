@@ -31,7 +31,7 @@ from .display_address_utils import (
 from ..displays.base_display import DisplayType, DisplayMode
 
 # Import system logger
-from Utils.logger.sys_logger import get_logger
+from FMOFP.Utils.logger.sys_logger import get_logger
 
 logger = get_logger()
 

@@ -7,8 +7,8 @@ from typing import Dict, List
 import math
 import traceback
 from .targeting_radar_display import TargetingRadarDisplay
-from Systems.radarManagement.radar_enums import aewc_radarMode
-from Utils.logger.sys_logger import get_logger
+from FMOFP.Systems.radarManagement.radar_enums import aewc_radarMode
+from FMOFP.Utils.logger.sys_logger import get_logger
 
 logger = get_logger()
 

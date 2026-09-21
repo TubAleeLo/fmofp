@@ -11,17 +11,17 @@ import time
 from abc import ABC, abstractmethod
 from xml.etree import ElementTree as ET
 from typing import Dict, List, Optional
-import Utils.common.fetching as fetching
-from Systems.radarManagement.weather.weather_radar import weather_radar
-from Systems.radarManagement.terrainFollowing.tfr_radar import tfr_radar, tfr_radarMode
-from Systems.radarManagement.targeting.targeting_radar import targeting_radar, targeting_radarMode
-from Systems.radarManagement.syntheticAperture.sar_radar import sar_radar, sar_radarMode
-from Systems.radarManagement.aewc.aewc_radar import aewc_radar, aewc_radarMode
-from Systems.radarManagement.radar_enums import RadarMode, MissionPhase, weather_radarMode
-from Systems.radarManagement.radar_messaging.radarMessenger import (
+import FMOFP.Utils.common.fetching as fetching
+from FMOFP.Systems.radarManagement.weather.weather_radar import weather_radar
+from FMOFP.Systems.radarManagement.terrainFollowing.tfr_radar import tfr_radar, tfr_radarMode
+from FMOFP.Systems.radarManagement.targeting.targeting_radar import targeting_radar, targeting_radarMode
+from FMOFP.Systems.radarManagement.syntheticAperture.sar_radar import sar_radar, sar_radarMode
+from FMOFP.Systems.radarManagement.aewc.aewc_radar import aewc_radar, aewc_radarMode
+from FMOFP.Systems.radarManagement.radar_enums import RadarMode, MissionPhase, weather_radarMode
+from FMOFP.Systems.radarManagement.radar_messaging.radarMessenger import (
     RadarMessenger, get_radar_messenger
 )
-from Utils.common.thread_manager import thread_manager
+from FMOFP.Utils.common.thread_manager import thread_manager
 from FMOFP.Utils.logger.sys_logger import get_logger
 from FMOFP.Utils.common.operation_tracker import is_operation_completed, mark_operation_completed
 from FMOFP.Systems.radarManagement.radar_data_fusion import get_radar_data_fusion

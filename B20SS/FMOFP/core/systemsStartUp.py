@@ -2,7 +2,7 @@ import traceback
 import asyncio
 import FMOFP.Utils.common.fetching as fetching
 from FMOFP.Utils.common.thread_manager import ThreadManager, registered_threads
-from Systems.radarManagement.radarControl import get_radar_management_system
+from FMOFP.Systems.radarManagement.radarControl import get_radar_management_system
 from FMOFP.Utils.logger.sys_logger import get_logger
 from FMOFP.Interfaces.userInterface.managers.display_manager import get_display_manager
 from FMOFP.Interfaces.userInterface.displays.display_nodes.display_tree_manager import get_display_tree_manager

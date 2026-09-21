@@ -7,7 +7,7 @@ from PyQt6.QtWidgets import QWidget
 from PyQt6.QtGui import QPainter
 from PyQt6.QtCore import QRectF, Qt, QPointF, pyqtSignal
 from .weather_radar_display import WeatherRadarDisplay
-from Utils.logger.sys_logger import get_logger
+from FMOFP.Utils.logger.sys_logger import get_logger
 
 logger = get_logger()
 
@@ -231,7 +231,7 @@ class WeatherRadarWidget(QWidget):
         self._current_display_type = display_type
         
         # Subscribe to update events
-        from core.event_driven_communication import get_event_bus
+        from FMOFP.core.event_driven_communication import get_event_bus
         self.event_bus = get_event_bus()
         # NOTE (production readiness re-analysis, August 2026): this used to be
         # `lambda _: self.update()`, called synchronously from EventBus's

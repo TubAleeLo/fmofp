@@ -9,7 +9,7 @@ maintains physical separation between Bus Controller and Remote Terminal systems
 import logging
 from typing import Dict, Optional
 
-from Utils.logger.sys_logger import get_logger
+from FMOFP.Utils.logger.sys_logger import get_logger
 
 logger = get_logger()
 

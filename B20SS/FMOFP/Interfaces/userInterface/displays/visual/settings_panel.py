@@ -8,7 +8,7 @@ import math
 import traceback
 from .theme_manager import get_theme_manager
 from .effects import VisualEffects
-from Utils.logger.sys_logger import get_logger
+from FMOFP.Utils.logger.sys_logger import get_logger
 
 logger = get_logger()
 
@@ -111,7 +111,7 @@ class SettingsOption:
     
     def set_value(self, value):
         """Set value and trigger callback"""
-        from Utils.logger.sys_logger import get_logger
+        from FMOFP.Utils.logger.sys_logger import get_logger
         logger = get_logger()
         
         logger.info(f"[SETTINGS_OPTION] Setting value for {self.id} from {self.current_value} to {value}")

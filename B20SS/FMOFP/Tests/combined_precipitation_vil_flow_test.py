@@ -29,7 +29,7 @@ from FMOFP.local_messaging.messageConfigurations.weather_radar_data import (
     weather_radarVILRequest,
     weather_radarVILResponse
 )
-from Systems.radarManagement.radar_enums import weather_radarMode
+from FMOFP.Systems.radarManagement.radar_enums import weather_radarMode
 
 logger = get_logger()
 

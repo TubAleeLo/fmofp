@@ -69,14 +69,12 @@ CHECKS = [
         # checks above could not see). RUNNING is transient — the system
         # settles into NORMAL within ~1s — so both count as success.
         "full boot reaches an operational SystemState",
-        # Mirrors SystemStart.py's bootstrap exactly, INCLUDING the
-        # dual-path import shim: without it, FMOFP.Utils.* and Utils.*
-        # resolve to two separate module objects, so this check would poll
-        # a different SystemStateManager singleton than the one the boot
-        # path updates and never see RUNNING.
+        # Mirrors SystemStart.py's bootstrap. Story C12 removed the second
+        # sys.path entry and the dual-path shim this used to install: with
+        # every import FMOFP-prefixed there is only one module identity, so
+        # this check now polls the same SystemStateManager singleton the boot
+        # path updates without any compensation.
         "import sys, os\n"
-        "sys.path.insert(0, os.path.join(os.getcwd(), 'FMOFP'))\n"
-        "from Utils.dual_path_compat import install as _i; _i()\n"
         "import asyncio\n"
         "from FMOFP.core.initializer import get_initializer\n"
         "from FMOFP.Utils.common.system_states import SystemState\n"

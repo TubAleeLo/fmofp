@@ -14,7 +14,7 @@ from PyQt6.QtGui import QPainter, QColor, QBrush, QLinearGradient, QPainterPath,
 from PyQt6.QtCore import Qt
 
 from ..utils.visual_settings_manager import get_visual_settings_manager
-from Utils.logger.sys_logger import get_logger
+from FMOFP.Utils.logger.sys_logger import get_logger
 
 logger = get_logger()
 

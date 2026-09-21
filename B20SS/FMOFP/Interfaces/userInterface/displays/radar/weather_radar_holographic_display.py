@@ -15,8 +15,8 @@ import copy
 import traceback
 
 from .holographic_radar_display import HolographicRadarDisplay
-from Utils.logger.sys_logger import get_logger
-from core.event_driven_communication import get_event_bus, Event
+from FMOFP.Utils.logger.sys_logger import get_logger
+from FMOFP.core.event_driven_communication import get_event_bus, Event
 
 # Import rendering components
 from .rendering import get_animation_controller
@@ -1271,7 +1271,7 @@ class WeatherRadarHolographicDisplay(HolographicRadarDisplay):
             # Convert to enum if needed
             try:
                 # Import radar enums
-                from Systems.radarManagement.radar_enums import weather_radarMode
+                from FMOFP.Systems.radarManagement.radar_enums import weather_radarMode
                 
                 # If it's already an enum instance, use it directly
                 if isinstance(current_mode, weather_radarMode):
@@ -1289,7 +1289,7 @@ class WeatherRadarHolographicDisplay(HolographicRadarDisplay):
                 logger.error(f"[WEATHER_HOLO] Mode enum lookup failed for {current_mode}")
                 try:
                     # Import radar enums
-                    from Systems.radarManagement.radar_enums import weather_radarMode
+                    from FMOFP.Systems.radarManagement.radar_enums import weather_radarMode
                     
                     # Map mode value to enum
                     mode_map = {
@@ -1398,7 +1398,7 @@ class WeatherRadarHolographicDisplay(HolographicRadarDisplay):
                 logger.info("[WEATHER_HOLO] Applied visual settings")
             
             # Create and publish update event
-            from core.event_driven_communication import get_event_bus, Event
+            from FMOFP.core.event_driven_communication import get_event_bus, Event
             event_bus = get_event_bus()
             event = Event('weather_radar_update', {})
             event_bus.publish(event)
@@ -3821,7 +3821,7 @@ class WeatherRadarHolographicDisplay(HolographicRadarDisplay):
         """Find the parent MFD and ensure it's in RADAR mode"""
         try:
             # Create and publish the MFD mode event
-            from core.event_driven_communication import get_event_bus, Event
+            from FMOFP.core.event_driven_communication import get_event_bus, Event
             event_bus = get_event_bus()
             
             # Send an event to switch the MFD to RADAR mode
@@ -3860,7 +3860,7 @@ class WeatherRadarHolographicDisplay(HolographicRadarDisplay):
                 current_mode = mode_node.value
             
             # Create event to switch display
-            from core.event_driven_communication import get_event_bus, Event
+            from FMOFP.core.event_driven_communication import get_event_bus, Event
             event_bus = get_event_bus()
             
             # Construct the display change event

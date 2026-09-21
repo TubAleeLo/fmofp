@@ -9,7 +9,7 @@ from typing import Any, Dict, Optional, Union, List
 import threading
 import time
 from .display_node_base import DisplayNode
-from Utils.logger.sys_logger import get_logger
+from FMOFP.Utils.logger.sys_logger import get_logger
 
 logger = get_logger()
 

@@ -15,7 +15,7 @@ from .settings_panel import SettingsPanel, SettingsOption
 from .theme_manager import get_theme_manager, DisplayTheme
 from .enhanced_theme_manager import get_enhanced_theme_manager, EnhancedDisplayTheme
 from .enhanced_effects import get_enhanced_visual_effects
-from Utils.logger.sys_logger import get_logger
+from FMOFP.Utils.logger.sys_logger import get_logger
 
 logger = get_logger()
 

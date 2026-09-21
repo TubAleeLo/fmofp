@@ -9,7 +9,7 @@ import traceback
 import threading
 import numpy as np
 from typing import Dict
-from Systems.radarManagement.radar_enums import sar_radarMode
+from FMOFP.Systems.radarManagement.radar_enums import sar_radarMode
 from FMOFP.MIL_STD_1553B.mil_std_1553B  import MIL_STD_1553B_Message
 # Import radar-local message definitions to enforce system boundaries
 from FMOFP.Systems.radarManagement.radar_messaging.message_definitions.sar_data import SARRadarImagery
@@ -20,7 +20,7 @@ from FMOFP.Systems.radarManagement.radar_messaging.message_types import (
 )
 # For backward compatibility - to be removed in future releases
 from FMOFP.local_messaging.messageConfigurations.SARRadarImagery import sar_radarImagery as LegacySARRadarImagery
-from Utils.logger.sys_logger import get_logger
+from FMOFP.Utils.logger.sys_logger import get_logger
 from FMOFP.Systems.radarManagement.syntheticAperture.sar_processor import ChangeDetector
 
 logger = get_logger()

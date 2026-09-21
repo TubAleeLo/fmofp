@@ -44,7 +44,7 @@ from ..displays.base_display import DisplayType, DisplayMode
 from FMOFP.local_messaging.routing.MessageRoutingService import get_message_routing_service
 
 # Import system logger
-from Utils.logger.sys_logger import get_logger
+from FMOFP.Utils.logger.sys_logger import get_logger
 
 logger = get_logger()
 

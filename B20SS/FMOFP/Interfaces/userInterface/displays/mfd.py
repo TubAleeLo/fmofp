@@ -24,7 +24,7 @@ import traceback
 from enum import Enum
 from typing import Dict, List, Optional, Union
 from FMOFP.local_messaging.routing.handlers.system_message_handlers.RadarMessageHandler import get_radar_message_handler
-from Systems.radarManagement.radar_enums import (
+from FMOFP.Systems.radarManagement.radar_enums import (
     RadarMode, weather_radarMode, targeting_radarMode,
     tfr_radarMode, sar_radarMode, aewc_radarMode
 )

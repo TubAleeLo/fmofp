@@ -23,7 +23,7 @@ from ...messaging.display_message_types import (
 from ...messaging.display_address_utils import (
     RADAR_DISPLAY_SUBADDRESS
 )
-from Utils.logger.sys_logger import get_logger
+from FMOFP.Utils.logger.sys_logger import get_logger
 
 logger = get_logger()
 

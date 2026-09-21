@@ -12,7 +12,7 @@ import time
 import uuid
 import numpy as np
 
-from Utils.logger.sys_logger import get_logger
+from FMOFP.Utils.logger.sys_logger import get_logger
 
 # Import implemented components
 from .weather_data_buffer_manager import WeatherDataBufferManager

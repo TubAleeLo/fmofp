@@ -6,7 +6,7 @@ from enum import Enum, auto
 from typing import Dict, Any, Optional
 import math
 import time
-from Utils.logger.sys_logger import get_logger
+from FMOFP.Utils.logger.sys_logger import get_logger
 
 logger = get_logger()
 

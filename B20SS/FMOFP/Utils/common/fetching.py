@@ -2,27 +2,27 @@ import os
 import sys
 
 def fetch():
-    # Determine project root dynamically
-    project_root = os.path.abspath(os.path.join(os.path.dirname(__file__), '..', '..', '..'))
-    sys.path.insert(0, project_root)
-    fmofp_path = os.path.join(project_root, 'FMOFP')
-    sys.path.insert(0, fmofp_path)
+    """Make the FMOFP package importable from a source checkout.
 
-    # This module is imported (directly or transitively) by nearly
-    # everything in the codebase very early on, which makes fetch()
-    # the best available single choke point for installing the
-    # dual-path import alias shim -- see Utils/dual_path_compat.py for
-    # why this is needed. Installing it here (immediately after the
-    # two sys.path entries above are in place) means both "import
-    # Systems.X" and "from FMOFP.Systems.X import Y" resolve to the
-    # same module/class objects for essentially every entry point in
-    # this codebase, without needing to duplicate this call in each
-    # one individually.
-    try:
-        from Utils.dual_path_compat import install as _install_dual_path_alias
-        _install_dual_path_alias()
-    except ImportError:
-        pass  # dual_path_compat not present (e.g. older checkout) -- degrade gracefully
+    Story C12: this used to insert TWO sys.path entries -- the distribution root
+    AND B20SS/FMOFP itself -- so the same file could be imported both as
+    `Utils.common.fetching` and as `FMOFP.Utils.common.fetching`. Python keys
+    sys.modules by dotted name, so those spellings loaded one source file twice
+    and produced two independent module objects, and with them two independent
+    copies of every class defined there. isinstance() checks, `is` comparisons
+    and every __new__-based singleton silently diverged across the boundary, and
+    the codebase carried a sys.meta_path finder (Utils/dual_path_compat.py)
+    purely to paper over it.
+
+    Every import is now FMOFP-prefixed, so only the distribution root is needed
+    and the ambiguity cannot arise. The shim is deleted.
+
+    Only source checkouts need this at all; an installed package is already on
+    sys.path via site-packages.
+    """
+    project_root = os.path.abspath(os.path.join(os.path.dirname(__file__), '..', '..', '..'))
+    if project_root not in sys.path:
+        sys.path.insert(0, project_root)
 
 def fetch_project_root():
     return os.path.abspath(os.path.join(os.path.dirname(__file__), '..', '..', '..'))

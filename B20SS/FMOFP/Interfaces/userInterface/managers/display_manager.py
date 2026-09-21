@@ -16,7 +16,7 @@ from ..messaging.display_message_types import (
 from ..displays.base_display import DisplayType, DisplayMode
 from ..displays.pfd_container import PFDContainer
 from ..displays.mfd_container import MFDContainer
-from Utils.logger.sys_logger import get_logger
+from FMOFP.Utils.logger.sys_logger import get_logger
 
 logger = get_logger()
 

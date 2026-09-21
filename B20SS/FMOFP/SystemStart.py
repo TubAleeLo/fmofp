@@ -6,25 +6,17 @@ import os
 import traceback
 
 # ── Path bootstrap ────────────────────────────────────────────────────────────
-# Ensure both B20SS/ and B20SS/FMOFP/ are on sys.path so that bare-package
-# imports (Utils.*, storage.*, core.*) resolve correctly regardless of how
-# this file is launched (debugger, CLI, venv, etc.).
+# Put the distribution root on sys.path so `import FMOFP...` resolves however
+# this file is launched (debugger, CLI, venv).
+#
+# Story C12: B20SS/FMOFP used to be added as a second entry so bare imports
+# (Utils.*, storage.*, core.*) would also resolve. That is exactly what allowed
+# one source file to load under two dotted names as two separate module and
+# class objects. All imports are FMOFP-prefixed now; the shim is deleted.
 _HERE = os.path.dirname(os.path.abspath(__file__))          # …/B20SS/FMOFP
 _ROOT = os.path.dirname(_HERE)                               # …/B20SS
-for _p in (_ROOT, _HERE):
-    if _p not in sys.path:
-        sys.path.insert(0, _p)
-
-# Install the dual-path import alias shim as early as possible, before
-# any other project-local import below. See Utils/dual_path_compat.py:
-# without this, "import Utils.X" (bare) and "from FMOFP.Utils.X import Y"
-# (absolute) -- both used in this very file -- would load the same
-# source file as two separate module/class objects.
-try:
-    from Utils.dual_path_compat import install as _install_dual_path_alias
-    _install_dual_path_alias()
-except ImportError:
-    pass
+if _ROOT not in sys.path:
+    sys.path.insert(0, _ROOT)
 
 # ── Working-directory bootstrap ───────────────────────────────────────────────
 # All relative config paths in this codebase (e.g. 'FMOFP/dbConfig.xml',
@@ -45,7 +37,7 @@ except ImportError:
 # site-packages, where an installed run proceeded to create 11 SQLite databases
 # and a log file. Relocating that data out of the package entirely is story C13.
 # ─────────────────────────────────────────────────────────────────────────────
-import Utils.common.fetching as fetching
+import FMOFP.Utils.common.fetching as fetching
 from FMOFP.Utils.logger.sys_logger import get_logger
 from FMOFP.Utils.common.system_states import SystemState
 from FMOFP.core.system_manager import get_system_manager

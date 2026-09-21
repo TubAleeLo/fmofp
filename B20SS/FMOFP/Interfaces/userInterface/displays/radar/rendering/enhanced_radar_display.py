@@ -12,7 +12,7 @@ import time
 import uuid
 import copy
 
-from Utils.logger.sys_logger import get_logger
+from FMOFP.Utils.logger.sys_logger import get_logger
 
 # Import rendering components
 from .radar_rendering_engine import RadarRenderingEngine

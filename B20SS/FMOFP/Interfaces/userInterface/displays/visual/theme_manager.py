@@ -7,7 +7,7 @@ import json
 import traceback
 import os
 from PyQt6.QtGui import QColor, QFont, QGradient, QLinearGradient
-from Utils.logger.sys_logger import get_logger
+from FMOFP.Utils.logger.sys_logger import get_logger
 
 logger = get_logger()
 

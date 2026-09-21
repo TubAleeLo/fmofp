@@ -3,7 +3,7 @@ from PyQt6.QtGui import QPainter, QColor, QPaintEvent, QPen, QBrush
 from PyQt6.QtCore import Qt, QTimer, QEvent, QMetaObject
 from enum import Enum, IntEnum
 import traceback
-from Utils.logger.sys_logger import get_logger
+from FMOFP.Utils.logger.sys_logger import get_logger
 from .visual.theme_manager import get_theme_manager, DisplayTheme
 from .visual.effects import VisualEffects
 

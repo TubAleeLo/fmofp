@@ -4,8 +4,8 @@ Weather radar display implementation with node-based state management.
 from PyQt6.QtCore import Qt, QRectF, QPointF, QTimer
 from PyQt6.QtGui import QPainter, QColor, QBrush, QLinearGradient, QPainterPath, QPen, QFont, QRadialGradient
 # Import rendering components using the function-based approach to avoid circular imports
-from Interfaces.userInterface.displays.radar.rendering import get_animation_controller
-from Interfaces.userInterface.displays.radar.rendering import get_spatial_grid, get_dirty_region_tracker
+from FMOFP.Interfaces.userInterface.displays.radar.rendering import get_animation_controller
+from FMOFP.Interfaces.userInterface.displays.radar.rendering import get_spatial_grid, get_dirty_region_tracker
 from typing import Dict, Any, Union
 import math
 import time
@@ -14,9 +14,9 @@ import copy
 import random
 import traceback
 from .base_radar_display import BaseRadarDisplay
-from Systems.radarManagement.radar_enums import weather_radarMode
-from Utils.logger.sys_logger import get_logger
-from core.event_driven_communication import get_event_bus, Event
+from FMOFP.Systems.radarManagement.radar_enums import weather_radarMode
+from FMOFP.Utils.logger.sys_logger import get_logger
+from FMOFP.core.event_driven_communication import get_event_bus, Event
 from .radar_display_data_coordinator import get_radar_display_data_coordinator
 from ..log_throttler import get_log_throttler
 

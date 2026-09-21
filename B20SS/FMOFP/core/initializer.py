@@ -7,9 +7,9 @@ import threading
 import traceback
 import asyncio
 from PyQt6.QtWidgets import QApplication
-from Utils.logger.sys_logger import get_logger
-from Utils.common.system_state_manager import SystemStateManager
-from Utils.common.system_states import SystemState
+from FMOFP.Utils.logger.sys_logger import get_logger
+from FMOFP.Utils.common.system_state_manager import SystemStateManager
+from FMOFP.Utils.common.system_states import SystemState
 from qasync import QEventLoop
 
 logger = get_logger()

@@ -6,7 +6,7 @@ from PyQt6.QtGui import (QPainter, QColor, QPen,
                         QPainterPath)
 from typing import Dict, List
 import traceback
-from Utils.logger.sys_logger import get_logger
+from FMOFP.Utils.logger.sys_logger import get_logger
 
 logger = get_logger()
 

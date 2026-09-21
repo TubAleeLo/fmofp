@@ -18,7 +18,7 @@ import time
 from typing import Dict, List, Callable, Union
 from queue import Queue
 from FMOFP.MIL_STD_1553B.mil_std_1553B  import MIL_STD_1553B_Message
-from Utils.logger.sys_logger import get_logger
+from FMOFP.Utils.logger.sys_logger import get_logger
 
 logger = get_logger()
 

@@ -10,7 +10,7 @@ import traceback
 from .mfd import MultiFunctionDisplay
 from .holographic_mfd import HolographicMFD
 from .visual.theme_manager import get_theme_manager
-from Utils.logger.sys_logger import get_logger
+from FMOFP.Utils.logger.sys_logger import get_logger
 
 logger = get_logger()
 

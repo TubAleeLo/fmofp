@@ -14,7 +14,7 @@ sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 # Import the class to test
 from FMOFP.Interfaces.userInterface.displays.radar.weather_radar_holographic_display import WeatherRadarHolographicDisplay
-from Utils.logger.sys_logger import get_logger
+from FMOFP.Utils.logger.sys_logger import get_logger
 
 logger = get_logger()
 

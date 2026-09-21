@@ -6,7 +6,7 @@ without direct dependencies or async/sync boundary issues.
 """
 
 from PyQt6.QtCore import QObject, pyqtSignal
-from Utils.logger.sys_logger import get_logger
+from FMOFP.Utils.logger.sys_logger import get_logger
 
 logger = get_logger()
 

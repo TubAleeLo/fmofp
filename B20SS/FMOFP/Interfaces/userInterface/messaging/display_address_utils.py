@@ -29,7 +29,7 @@ from FMOFP.local_messaging.message_types import (
     COMMAND_TYPE_DATA_RESPONSE,
     get_message_type
 )
-from Utils.logger.sys_logger import get_logger
+from FMOFP.Utils.logger.sys_logger import get_logger
 
 logger = get_logger()
 
