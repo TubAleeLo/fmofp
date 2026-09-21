@@ -66,6 +66,12 @@ SUITES = [
     (True,  "FMOFP.Tests.test_listener_retry_and_ports", 300),
     (True,  "FMOFP.Tests.test_data_root", 300),
     (True,  "FMOFP.Tests.test_line_endings", 300),
+    # Production blockers B5/B11/B12: singleton re-initialisation leaking a
+    # thread pool per construction, run-once markers that outlived the process
+    # (so every boot after the first skipped database init and never re-read
+    # the message-rate config), and an import-time filesystem walk that indexed
+    # site-packages on an installed deployment.
+    (True,  "FMOFP.Tests.test_blocker_singleton_and_state", 300),
     # Story C14.3: four radars swept across every commandable mode against a
     # live system, plus phase-policy and request-dispatch assertions.
     (True,  "FMOFP.Tests.test_radar_modes_live", 420),

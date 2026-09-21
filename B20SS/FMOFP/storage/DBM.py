@@ -1042,8 +1042,25 @@ class DatabaseManager:
         # both observe self.initialized == False and both run the full
         # initialization body (double ThreadPoolExecutor, double DB setup).
         with DatabaseManager._lock:
-            if not self.initialized:
-                self.config_path = config_path
+            # BLOCKER B5: every line below used to sit at THIS indent level,
+            # outside the `if not self.initialized` guard -- only the
+            # config_path assignment was inside it. __new__ returns the same
+            # singleton to all 43 non-test call sites, so each one re-ran the
+            # whole body: a fresh ThreadPoolExecutor(max_workers=20) replacing
+            # (and orphaning, never shutting down) the previous one, and
+            # `self.systems = {}` discarding every pooled SQLite connection in
+            # it. Thread count and open file descriptors climbed for the life
+            # of the process; three of those call sites are in the boot and
+            # shutdown path alone, so a single run leaked before it did any
+            # work. Re-initialisation is now a no-op, which is what callers
+            # passing the same config path have always assumed it was.
+            if self.initialized:
+                logger.debug(
+                    "[DBM] DatabaseManager already initialized; "
+                    f"ignoring repeat construction with config_path: {config_path}"
+                )
+                return
+            self.config_path = config_path
             logger.debug(f"[DBM] Initializing DatabaseManager with config_path: {config_path}")
             self.config = self.load_config(config_path)
             if self.config is None:

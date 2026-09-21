@@ -13,7 +13,7 @@ import xml.etree.ElementTree as ET
 import traceback
 import click
 import FMOFP.Utils.common.fetching as fetching
-from FMOFP.Utils.common.paths import paths
+from FMOFP.Utils.common.paths import get_paths_instance
 from FMOFP.MIL_STD_1553B.Messaging import send1553Msg
 from FMOFP.Utils.logger.sys_logger import get_logger
 from FMOFP.Utils.common.system_states import userCLIStates
@@ -54,7 +54,15 @@ class UserCLI:
         if self._initialized:
             return
         logger.info(f"UserCLI __init__ called. Thread ID: {threading.get_ident()}")
-        self.paths = paths()
+        # BLOCKER B12: this was `self.paths = paths()`, which built the whole
+        # source index -- an os.walk + MD5 + ast.parse of every .py file under
+        # the resolved project root -- as part of constructing the CLI. UserCLI
+        # is instantiated during the live boot sequence by
+        # core/system_manager.py, so every start paid for it, and on an
+        # installed package the root resolved to site-packages. Nothing read
+        # this attribute: the only consumer, get_import_statement below, is a
+        # `pass`. It is now a lazily-built property, so the cost is paid only
+        # if the index is genuinely asked for.
         self.command_queue = queue.Queue()
         self.output_queue = queue.Queue()
         self.command_processed = threading.Event()
@@ -963,6 +971,11 @@ class UserCLI:
 
         else:
             self.output_queue.put("Invalid option.")
+
+    @property
+    def paths(self):
+        """The source import index, built on first access (B12)."""
+        return get_paths_instance()
 
     def get_import_statement(self, function_name, file_path):
         pass

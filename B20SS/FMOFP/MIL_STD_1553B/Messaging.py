@@ -17,7 +17,7 @@ from FMOFP.core.event_driven_communication import get_event_bus, Event
 from FMOFP.MIL_STD_1553B.Bus_Controller.BC_connect.BC_socket import get_bc_sender, get_bc_listener
 from FMOFP.MIL_STD_1553B.Bus_Controller.BC_messaging.BC_msg import BC_construct, BC_deconstruct
 from FMOFP.Utils.logger.sys_logger import get_logger
-from FMOFP.Utils.common.operation_tracker import track_operation
+from FMOFP.Utils.common.operation_tracker import track_operation, clear_operation_tracking
 
 logger = get_logger().logger
 
@@ -449,9 +449,20 @@ class ScheduleMessage:
                     return
                 time.sleep(1)
 
-            # Reset the loaded flag to force a reload
+            # Reset the loaded flag to force a reload.
             with ScheduleMessage._message_rates_lock:
                 ScheduleMessage._message_rates_loaded = False
+
+            # BLOCKER B11: clearing the flag alone was never enough. The
+            # operation tracker also has to forget the load, or
+            # load_message_rates() below hits `track_operation` for an
+            # operation already recorded as done, gets None back, and returns
+            # without reading the file -- so this thread has been waking every
+            # five minutes to do nothing since it was written. (Before the
+            # tracker became process-scoped the same record also survived
+            # restarts, which is why the very first load stopped happening
+            # too.)
+            clear_operation_tracking('message_rates_load', 'messageRateConfig.xml')
 
             # Reload the rates
             self.load_message_rates()
