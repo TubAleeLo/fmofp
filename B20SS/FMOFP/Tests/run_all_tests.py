@@ -15,7 +15,7 @@ Run from B20SS/:  python FMOFP/Tests/run_all_tests.py
 Suites deliberately NOT run here, with reasons:
   - CLI-harness-only tests (exit 1 by design when run standalone, printing
     "This test should be run via the user CLI 'test' command"):
-      flight_control_system_test, predefined_messages_test
+      predefined_messages_test
 
     Story C14.1 removed the BLOCKER for these: Tests/live_system.py boots the
     real application in-process (~1.2s to NORMAL) and runs a test body against
@@ -38,6 +38,8 @@ Suites deliberately NOT run here, with reasons:
                                                  assertion was that a send
                                                  returned an ID
       fms_system_test.py                         replaced by test_fms_live.py
+      flight_control_system_test.py              replaced by
+                                                 test_flight_control_live.py
 
     The radar_tests/ package went with them: it held nothing but those five
     files and a docstring promising "comprehensive tests for all radar
@@ -80,6 +82,9 @@ SUITES = [
     # Story C14.4: FMS mode contract, the FMS->FCS mode mapping, attitude
     # handling and request dispatch, against a live system.
     (True,  "FMOFP.Tests.test_fms_live", 420),
+    # Story C14.5: FCS mode vocabulary, control-input saturation and the
+    # one-way FMS -> FCS coupling, against a live system.
+    (True,  "FMOFP.Tests.test_flight_control_live", 420),
     # Story C14: runs against a REAL booted application via
     # Tests/live_system.py, so it needs a longer budget than the unit
     # suites -- boot plus supervisory-convergence polling.

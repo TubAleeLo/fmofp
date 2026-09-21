@@ -437,39 +437,24 @@ class UserCLI:
             raise
 
     async def flight_control_system_test(self):
-        """Run the Flight Control System test"""
+        """Run the flight control state assertions against the RUNNING system (C14.5)."""
         try:
-            # Import test module dynamically to avoid circular imports
-            test_module = _import_test_module('FMOFP.Tests.flight_control_system_test')
-            test_class = getattr(test_module, 'TestFlightControlSystem')
+            from FMOFP.Tests.test_flight_control_live import body as fcs_body
+            from FMOFP.core.system_manager import get_system_manager
 
-            # Setup test environment
-            logger.info("Setting up test environment")
-            test_suite = test_class()
-
-            # Run the full test sequence
             logger.info("\nStarting Flight Control System Test...")
-            # NOTE (production readiness re-analysis, August 2026): this used to
-            # discard run_tests()'s return value entirely and unconditionally log
-            # "Test completed successfully!" even when the underlying test recorded
-            # a failure -- run_tests() in this module does compute a real pass/fail
-            # result internally, it just was never inspected here. Now checked, same
-            # pattern already used correctly by predefined_messages_test() below.
-            result = await test_suite.run_tests()
+            failures = await fcs_body(get_system_manager())
 
-            # Process test results
-            if result:
-                logger.info("\nTest completed successfully!")
+            if failures == 0:
+                logger.info("\nFlight Control Test completed successfully!")
             else:
-                logger.error("\nFlight Control System Test failed!")
-                raise RuntimeError("Flight Control System Test failed")
+                logger.error(f"\nFlight Control Test failed: {failures} assertion(s)")
+                raise RuntimeError(f"Flight Control Test failed: {failures} assertion(s)")
 
         except Exception as e:
             logger.error(f"Test suite error: {str(e)}", exc_info=True)
-            # Re-raise to ensure failure is caught by caller
             raise
 
-    #   test_targeting_radar_mode_change
     async def predefined_messages_test(self):
         """Run the Comprehensive Predefined Messages Test"""
         try:
