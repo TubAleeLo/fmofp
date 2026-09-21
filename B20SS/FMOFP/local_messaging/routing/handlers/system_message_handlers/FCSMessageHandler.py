@@ -35,6 +35,35 @@ from FMOFP.local_messaging.command_word_map import register_command_word, valida
 
 logger = get_logger()
 
+# The FCS mode wire encoding, in one place (B6).
+#
+# The numeric values are the ones already used by _pack_mode_data, by
+# FMSMessageHandler and by address_book.xml; they were previously written out
+# as a literal dict at each of the three sites that needed them. The names are
+# FlightControlModes constants, which is what FlightControlSystem.set_mode()
+# validates against -- the handler works in numbers, the system works in names,
+# and nothing translated between them until now.
+MODE_NAME_TO_VALUE = {
+    "NORMAL": 0,
+    "COMBAT": 1,
+    "PRECISION": 2,
+    "AUTOPILOT": 3,
+    "TERRAIN": 4,
+    "EMERGENCY": 5,
+    "STANDBY": 0,      # no FCS standby mode; treated as NORMAL
+}
+
+# Reverse direction. STANDBY deliberately does not appear: 0 decodes to NORMAL,
+# which is the mode the FCS is actually placed in.
+MODE_VALUE_TO_NAME = {
+    0: "NORMAL",
+    1: "COMBAT",
+    2: "PRECISION",
+    3: "AUTOPILOT",
+    4: "TERRAIN",
+    5: "EMERGENCY",
+}
+
 # Import command word maps from main module
 from FMOFP.local_messaging.command_word_map import (
     MODE_REQUEST_MAP, STATUS_REQUEST_MAP, DATA_REQUEST_MAP
@@ -428,12 +457,24 @@ class FCSMessageHandler:
         try:
             # Check for message loops if middleware is available
             if self.loop_prevention:
+                # BLOCKER B6/B7 (gate): this passed transaction_id= and
+                # category= to process_message(), whose signature is
+                # (message, service_name) -- in the middleware, in the prevention
+                # service beneath it, and at every other call site in the codebase.
+                # Every FCS message arriving over 1553B therefore raised TypeError
+                # here, at the loop-prevention gate, before reaching any FCS code
+                # at all -- mode change, control input, orientation data and status
+                # alike. The category is derived from the message by the prevention
+                # service itself (_extract_category), and the transaction id travels
+                # in the message metadata, which is how RadarMessageHandler does it.
                 transaction_id = self._create_transaction_id(message, "mode_change")
+                if isinstance(message, dict):
+                    message.setdefault('metadata', {})
+                    if isinstance(message['metadata'], dict):
+                        message['metadata'].setdefault('transaction_id', transaction_id)
                 should_process, enhanced_message = self.loop_prevention.process_message(
-                    message, 
-                    "fcs_mode_handler",
-                    transaction_id=transaction_id,
-                    category="fcs_mode"
+                    message,
+                    "fcs_mode_handler"
                 )
                 if not should_process:
                     logger.warning(f"Breaking loop - FCS mode change message already processed")
@@ -485,15 +526,39 @@ class FCSMessageHandler:
             # Process mode change through FCS
             if self.fcs:
                 old_mode = self.fcs.mode
-                result = self.fcs.change_mode(mode_value)
+
+                # BLOCKER B6: this was `result = self.fcs.change_mode(mode_value)`
+                # followed by `result.get('success', False)`. FlightControlSystem
+                # has no change_mode() -- the name appeared exactly once in the
+                # whole repository, at that call site -- so EVERY mode change
+                # command arriving over 1553B raised AttributeError, was
+                # swallowed by the outer handler, and returned ERROR. Worse, the
+                # exception fired before send_response() below, so the requester
+                # got no response at all and waited out its timeout. The real
+                # method is set_mode(), and it takes a mode NAME while everything
+                # upstream of here works in the numeric wire encoding, so the
+                # value has to be mapped back before the call.
+                mode_name = MODE_VALUE_TO_NAME.get(mode_value)
+                if mode_name is None:
+                    logger.warning(
+                        f"[FCS] Mode value {mode_value} is outside the defined "
+                        f"range {sorted(MODE_VALUE_TO_NAME)}")
+                    success = False
+                    detail = f"Unknown mode value: {mode_value}"
+                else:
+                    # set_mode returns a plain bool (declared `-> bool`), not a
+                    # dict. Reading it as a dict is what B7 does in the control
+                    # input path below.
+                    success = bool(self.fcs.set_mode(mode_name, request_id=request_id))
+                    detail = (f"Mode set to {mode_name}" if success
+                              else f"FCS rejected mode {mode_name}")
+
                 new_mode = self.fcs.mode
-                
-                success = result.get('success', False)
-                
-                # Create response - format depends on what process_command returns
+
+                # Create response
                 response = {
                     "status": "SUCCESS" if success else "ERROR",
-                    "message": result.get('message', ''),
+                    "message": detail,
                     "request_id": request_id,
                     "old_mode": old_mode,
                     "new_mode": new_mode
@@ -562,12 +627,24 @@ class FCSMessageHandler:
         try:
             # Check for message loops if middleware is available
             if self.loop_prevention:
+                # BLOCKER B6/B7 (gate): this passed transaction_id= and
+                # category= to process_message(), whose signature is
+                # (message, service_name) -- in the middleware, in the prevention
+                # service beneath it, and at every other call site in the codebase.
+                # Every FCS message arriving over 1553B therefore raised TypeError
+                # here, at the loop-prevention gate, before reaching any FCS code
+                # at all -- mode change, control input, orientation data and status
+                # alike. The category is derived from the message by the prevention
+                # service itself (_extract_category), and the transaction id travels
+                # in the message metadata, which is how RadarMessageHandler does it.
                 transaction_id = self._create_transaction_id(message, "control_input")
+                if isinstance(message, dict):
+                    message.setdefault('metadata', {})
+                    if isinstance(message['metadata'], dict):
+                        message['metadata'].setdefault('transaction_id', transaction_id)
                 should_process, enhanced_message = self.loop_prevention.process_message(
-                    message, 
-                    "fcs_control_input_handler",
-                    transaction_id=transaction_id,
-                    category="fcs_control_input"
+                    message,
+                    "fcs_control_input_handler"
                 )
                 if not should_process:
                     logger.warning(f"Breaking loop - FCS control input message already processed")
@@ -629,18 +706,32 @@ class FCSMessageHandler:
             
             # Process control input through FCS
             if self.fcs:
-                result = self.fcs.set_control_input(control_surface, control_value)
-                
-                success = result.get('success', False)
-                
+                # BLOCKER B7: this was `success = result.get('success', False)`.
+                # set_control_input is declared `-> bool` and returns True/False,
+                # so `.get` on it raised AttributeError -- caught by the outer
+                # handler, reported as ERROR, and send_response() below never
+                # reached. The control surface had ALREADY been moved by then,
+                # so a stick or throttle command took effect on the aircraft
+                # while the console reported failure and the request never
+                # completed. For a training system that is the worst available
+                # outcome: trainee and instructor see different aircraft.
+                success = bool(self.fcs.set_control_input(control_surface, control_value,
+                                                          request_id=request_id))
+
+                # set_control_input clamps: throttle to [0, 1], everything else
+                # to [-1, 1]. Report what the FCS actually holds rather than
+                # echoing the request back as if it were applied verbatim.
+                actual_value = self.fcs.control_inputs.get(control_surface, control_value)
+
                 # Create response
                 response = {
                     "status": "SUCCESS" if success else "ERROR",
-                    "message": result.get('message', ''),
+                    "message": (f"{control_surface} set to {actual_value}" if success
+                                else f"FCS rejected control input for {control_surface}"),
                     "request_id": request_id,
                     "control_surface": control_surface,
                     "control_value": control_value,
-                    "actual_value": result.get('actual_value', control_value)
+                    "actual_value": actual_value
                 }
                 
                 # Send response
@@ -706,12 +797,24 @@ class FCSMessageHandler:
         try:
             # Check for message loops if middleware is available
             if self.loop_prevention:
+                # BLOCKER B6/B7 (gate): this passed transaction_id= and
+                # category= to process_message(), whose signature is
+                # (message, service_name) -- in the middleware, in the prevention
+                # service beneath it, and at every other call site in the codebase.
+                # Every FCS message arriving over 1553B therefore raised TypeError
+                # here, at the loop-prevention gate, before reaching any FCS code
+                # at all -- mode change, control input, orientation data and status
+                # alike. The category is derived from the message by the prevention
+                # service itself (_extract_category), and the transaction id travels
+                # in the message metadata, which is how RadarMessageHandler does it.
                 transaction_id = self._create_transaction_id(message, "orientation_data")
+                if isinstance(message, dict):
+                    message.setdefault('metadata', {})
+                    if isinstance(message['metadata'], dict):
+                        message['metadata'].setdefault('transaction_id', transaction_id)
                 should_process, enhanced_message = self.loop_prevention.process_message(
-                    message, 
-                    "fcs_orientation_data_handler",
-                    transaction_id=transaction_id,
-                    category="fcs_orientation"
+                    message,
+                    "fcs_orientation_data_handler"
                 )
                 if not should_process:
                     logger.warning(f"Breaking loop - FCS orientation data message already processed")
@@ -806,12 +909,24 @@ class FCSMessageHandler:
         try:
             # Check for message loops if middleware is available
             if self.loop_prevention:
+                # BLOCKER B6/B7 (gate): this passed transaction_id= and
+                # category= to process_message(), whose signature is
+                # (message, service_name) -- in the middleware, in the prevention
+                # service beneath it, and at every other call site in the codebase.
+                # Every FCS message arriving over 1553B therefore raised TypeError
+                # here, at the loop-prevention gate, before reaching any FCS code
+                # at all -- mode change, control input, orientation data and status
+                # alike. The category is derived from the message by the prevention
+                # service itself (_extract_category), and the transaction id travels
+                # in the message metadata, which is how RadarMessageHandler does it.
                 transaction_id = self._create_transaction_id(message, "status")
+                if isinstance(message, dict):
+                    message.setdefault('metadata', {})
+                    if isinstance(message['metadata'], dict):
+                        message['metadata'].setdefault('transaction_id', transaction_id)
                 should_process, enhanced_message = self.loop_prevention.process_message(
-                    message, 
-                    "fcs_status_handler",
-                    transaction_id=transaction_id,
-                    category="fcs_status"
+                    message,
+                    "fcs_status_handler"
                 )
                 if not should_process:
                     logger.warning(f"Breaking loop - FCS status message already processed")

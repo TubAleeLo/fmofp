@@ -81,122 +81,8 @@ class RadarDisplayMode(Enum):
     AEWC_TRACK = 55     # Track mode (AEWC)
 
     
-    # Comprehensive mode map for all radar types
-    mode_map = {
-        # Universal Base Modes
-        'INITIALIZING': INITIALIZING,
-        'STANDBY': STANDBY,
-        'NORMAL': NORMAL,
-        'DEGRADED': DEGRADED,
-        'TEST': TEST,
-        'MAINTENANCE': MAINTENANCE,
-        'EMERGENCY': EMERGENCY,
-        'FAILURE': FAILURE,
-        'RECOVERY': RECOVERY,
-        'CALIBRATION': CALIBRATION,
-        
-        # Weather Radar Modes
-        'SURVEILLANCE': SURVEILLANCE,
-        'MAPPING': MAPPING,
-        'TURBULENCE': TURBULENCE,
-        'WINDSHEAR': WINDSHEAR,
-        'PRECIPITATION': PRECIPITATION,
-        
-        # TFR Radar Modes
-        'TFR_SEARCH': TFR_SEARCH,
-        'SEARCH': TFR_SEARCH,  # Alias for backward compatibility
-        'TFR_TRACK': TFR_TRACK,
-        'TRACK': TFR_TRACK,    # Alias for backward compatibility
-        'TFR_ACTIVE': TFR_ACTIVE,
-        'ACTIVE': TFR_ACTIVE,  # Alias for backward compatibility
-        'TERRAIN_FOLLOWING': TERRAIN_FOLLOWING,
-        'OBSTACLE_AVOIDANCE': OBSTACLE_AVOIDANCE,
-        'TFR_GROUND_MAPPING': TFR_GROUND_MAPPING,
-        'GROUND_MAPPING': TFR_GROUND_MAPPING,  # Alias for backward compatibility
-        
-        # SAR Radar Modes
-        'STRIPMAP': STRIPMAP,
-        'SPOTLIGHT': SPOTLIGHT,
-        'SCANSAR': SCANSAR,
-        'INTERFEROMETRIC': INTERFEROMETRIC,
-        'DOPPLER_BEAM': DOPPLER_BEAM,
-        
-        # Targeting Radar Modes
-        'TARGET_SEARCH': TARGET_SEARCH,
-        'TARGET_TRACK': TARGET_TRACK,
-        'LOCK': LOCK,
-        'TERRAIN_AVOIDANCE': TERRAIN_AVOIDANCE,
-        
-        # AEWC Radar Modes
-        'AEWC_SEARCH': AEWC_SEARCH,
-        'AEWC_SURVEILLANCE': AEWC_SURVEILLANCE,
-        'SECTOR_SCAN': SECTOR_SCAN,
-        'STEALTH_DETECTION': STEALTH_DETECTION, 
-        'ELECTRONIC_PROTECTION': ELECTRONIC_PROTECTION,
-        'AEWC_TRACK': AEWC_TRACK,
-
-        # NOTE (production readiness re-analysis, August 2026): a duplicate
-        # 'SEARCH'/'TRACK'/'ACTIVE' block used to be here, repeating the same
-        # three keys (with identical values: TFR_SEARCH/TFR_TRACK/TFR_ACTIVE)
-        # already defined above under "TFR Radar Modes" as backward-
-        # compatibility aliases. Found via `ruff check --select F601`
-        # (multi-value-repeated-key-literal). Since the values were
-        # byte-for-byte identical both times, this was purely redundant --
-        # not a behavior bug, just dead duplicate code -- removed rather than
-        # the earlier occurrence to keep the aliases defined in one place.
-    }
-    
-    # Radar-specific mode maps to help with converting between system and display modes
-    weather_radar_modes = {
-        'STANDBY': STANDBY,
-        'NORMAL': NORMAL,
-        'SURVEILLANCE': SURVEILLANCE,
-        'MAPPING': MAPPING,
-        'TURBULENCE': TURBULENCE,
-        'WINDSHEAR': WINDSHEAR,
-        'PRECIPITATION': PRECIPITATION
-    }
-    
-    tfr_radar_modes = {
-        'STANDBY': STANDBY,
-        'NORMAL': NORMAL,
-        'SEARCH': TFR_SEARCH,
-        'TRACK': TFR_TRACK,
-        'ACTIVE': TFR_ACTIVE,
-        'TERRAIN_FOLLOWING': TERRAIN_FOLLOWING,
-        'OBSTACLE_AVOIDANCE': OBSTACLE_AVOIDANCE,
-        'GROUND_MAPPING': TFR_GROUND_MAPPING
-    }
-    
-    sar_radar_modes = {
-        'STANDBY': STANDBY,
-        'NORMAL': NORMAL,
-        'STRIPMAP': STRIPMAP,
-        'SPOTLIGHT': SPOTLIGHT,
-        'SCANSAR': SCANSAR,
-        'INTERFEROMETRIC': INTERFEROMETRIC,
-        'DOPPLER_BEAM': DOPPLER_BEAM
-    }
-    
-    targeting_radar_modes = {
-        'STANDBY': STANDBY,
-        'NORMAL': NORMAL,
-        'SEARCH': TARGET_SEARCH,
-        'TRACK': TARGET_TRACK,
-        'LOCK': LOCK,
-        'TERRAIN_AVOIDANCE': TERRAIN_AVOIDANCE
-    }
-    
-    aewc_radar_modes = {
-        'STANDBY': STANDBY,
-        'NORMAL': NORMAL,
-        'SEARCH': AEWC_SEARCH,
-        'TRACK': AEWC_TRACK,
-        'SURVEILLANCE': AEWC_SURVEILLANCE,
-        'SECTOR_SCAN': SECTOR_SCAN,
-        'STEALTH_DETECTION': STEALTH_DETECTION,
-        'ELECTRONIC_PROTECTION': ELECTRONIC_PROTECTION
-    }
+    # NOTE (B8): the six lookup dictionaries that used to sit here now live
+    # at module level, below the class. See the comment there.
 
     @classmethod
     def from_string(cls, mode_str):
@@ -297,3 +183,160 @@ class RadarDisplayMode(Enum):
             
         # Default to STANDBY if not found anywhere
         return cls.STANDBY
+
+
+# ── mode lookup tables (BLOCKER B8) ──────────────────────────────────────────
+#
+# These six dictionaries used to be declared INSIDE the RadarDisplayMode class
+# body. In an Enum class body every plain assignment becomes an enum MEMBER, so
+# `mode_map`, `weather_radar_modes` and the other four were not dictionaries at
+# all -- they were members of RadarDisplayMode whose .value happened to be a
+# dict. Two consequences, both live:
+#
+#   * `mode_str in cls.mode_map` in from_string() raised
+#     TypeError: argument of type 'RadarDisplayMode' is not iterable.
+#     Every lookup by mode NAME therefore failed. The one consumer that caught
+#     it, displays/radar/display_radar_enums.py, returns STANDBY on failure --
+#     so a radar commanded to SURVEILLANCE or TURBULENCE by name quietly stayed
+#     in standby, with only a log line. The five call sites in
+#     display_outgoing_router.py all took their exception paths.
+#
+#   * len(RadarDisplayMode) counted them, which is why the range check in
+#     DisplayMessageHandler (`0 <= mode_value < len(RadarDisplayMode)`) was
+#     measuring 42 against real values that run -1..55.
+#
+# At module level they are ordinary dicts again, and because the class now
+# exists when they are built, the values are real enum members rather than the
+# bare ints the class-body version captured -- which is what from_string() has
+# always documented itself as returning, and what callers reading
+# `.value` off the result need.
+
+# Comprehensive mode map for all radar types
+MODE_MAP = {
+    # Universal Base Modes
+    'INITIALIZING': RadarDisplayMode.INITIALIZING,
+    'STANDBY': RadarDisplayMode.STANDBY,
+    'NORMAL': RadarDisplayMode.NORMAL,
+    'DEGRADED': RadarDisplayMode.DEGRADED,
+    'TEST': RadarDisplayMode.TEST,
+    'MAINTENANCE': RadarDisplayMode.MAINTENANCE,
+    'EMERGENCY': RadarDisplayMode.EMERGENCY,
+    'FAILURE': RadarDisplayMode.FAILURE,
+    'RECOVERY': RadarDisplayMode.RECOVERY,
+    'CALIBRATION': RadarDisplayMode.CALIBRATION,
+    
+    # Weather Radar Modes
+    'SURVEILLANCE': RadarDisplayMode.SURVEILLANCE,
+    'MAPPING': RadarDisplayMode.MAPPING,
+    'TURBULENCE': RadarDisplayMode.TURBULENCE,
+    'WINDSHEAR': RadarDisplayMode.WINDSHEAR,
+    'PRECIPITATION': RadarDisplayMode.PRECIPITATION,
+    
+    # TFR Radar Modes
+    'TFR_SEARCH': RadarDisplayMode.TFR_SEARCH,
+    'SEARCH': RadarDisplayMode.TFR_SEARCH,  # Alias for backward compatibility
+    'TFR_TRACK': RadarDisplayMode.TFR_TRACK,
+    'TRACK': RadarDisplayMode.TFR_TRACK,    # Alias for backward compatibility
+    'TFR_ACTIVE': RadarDisplayMode.TFR_ACTIVE,
+    'ACTIVE': RadarDisplayMode.TFR_ACTIVE,  # Alias for backward compatibility
+    'TERRAIN_FOLLOWING': RadarDisplayMode.TERRAIN_FOLLOWING,
+    'OBSTACLE_AVOIDANCE': RadarDisplayMode.OBSTACLE_AVOIDANCE,
+    'TFR_GROUND_MAPPING': RadarDisplayMode.TFR_GROUND_MAPPING,
+    'GROUND_MAPPING': RadarDisplayMode.TFR_GROUND_MAPPING,  # Alias for backward compatibility
+    
+    # SAR Radar Modes
+    'STRIPMAP': RadarDisplayMode.STRIPMAP,
+    'SPOTLIGHT': RadarDisplayMode.SPOTLIGHT,
+    'SCANSAR': RadarDisplayMode.SCANSAR,
+    'INTERFEROMETRIC': RadarDisplayMode.INTERFEROMETRIC,
+    'DOPPLER_BEAM': RadarDisplayMode.DOPPLER_BEAM,
+    
+    # Targeting Radar Modes
+    'TARGET_SEARCH': RadarDisplayMode.TARGET_SEARCH,
+    'TARGET_TRACK': RadarDisplayMode.TARGET_TRACK,
+    'LOCK': RadarDisplayMode.LOCK,
+    'TERRAIN_AVOIDANCE': RadarDisplayMode.TERRAIN_AVOIDANCE,
+    
+    # AEWC Radar Modes
+    'AEWC_SEARCH': RadarDisplayMode.AEWC_SEARCH,
+    'AEWC_SURVEILLANCE': RadarDisplayMode.AEWC_SURVEILLANCE,
+    'SECTOR_SCAN': RadarDisplayMode.SECTOR_SCAN,
+    'STEALTH_DETECTION': RadarDisplayMode.STEALTH_DETECTION, 
+    'ELECTRONIC_PROTECTION': RadarDisplayMode.ELECTRONIC_PROTECTION,
+    'AEWC_TRACK': RadarDisplayMode.AEWC_TRACK,
+
+    # NOTE (production readiness re-analysis, August 2026): a duplicate
+    # 'SEARCH'/'TRACK'/'ACTIVE' block used to be here, repeating the same
+    # three keys (with identical values: TFR_SEARCH/TFR_TRACK/TFR_ACTIVE)
+    # already defined above under "TFR Radar Modes" as backward-
+    # compatibility aliases. Found via `ruff check --select F601`
+    # (multi-value-repeated-key-literal). Since the values were
+    # byte-for-byte identical both times, this was purely redundant --
+    # not a behavior bug, just dead duplicate code -- removed rather than
+    # the earlier occurrence to keep the aliases defined in one place.
+}
+
+# Radar-specific mode maps to help with converting between system and display modes
+WEATHER_RADAR_MODES = {
+    'STANDBY': RadarDisplayMode.STANDBY,
+    'NORMAL': RadarDisplayMode.NORMAL,
+    'SURVEILLANCE': RadarDisplayMode.SURVEILLANCE,
+    'MAPPING': RadarDisplayMode.MAPPING,
+    'TURBULENCE': RadarDisplayMode.TURBULENCE,
+    'WINDSHEAR': RadarDisplayMode.WINDSHEAR,
+    'PRECIPITATION': RadarDisplayMode.PRECIPITATION
+}
+
+TFR_RADAR_MODES = {
+    'STANDBY': RadarDisplayMode.STANDBY,
+    'NORMAL': RadarDisplayMode.NORMAL,
+    'SEARCH': RadarDisplayMode.TFR_SEARCH,
+    'TRACK': RadarDisplayMode.TFR_TRACK,
+    'ACTIVE': RadarDisplayMode.TFR_ACTIVE,
+    'TERRAIN_FOLLOWING': RadarDisplayMode.TERRAIN_FOLLOWING,
+    'OBSTACLE_AVOIDANCE': RadarDisplayMode.OBSTACLE_AVOIDANCE,
+    'GROUND_MAPPING': RadarDisplayMode.TFR_GROUND_MAPPING
+}
+
+SAR_RADAR_MODES = {
+    'STANDBY': RadarDisplayMode.STANDBY,
+    'NORMAL': RadarDisplayMode.NORMAL,
+    'STRIPMAP': RadarDisplayMode.STRIPMAP,
+    'SPOTLIGHT': RadarDisplayMode.SPOTLIGHT,
+    'SCANSAR': RadarDisplayMode.SCANSAR,
+    'INTERFEROMETRIC': RadarDisplayMode.INTERFEROMETRIC,
+    'DOPPLER_BEAM': RadarDisplayMode.DOPPLER_BEAM
+}
+
+TARGETING_RADAR_MODES = {
+    'STANDBY': RadarDisplayMode.STANDBY,
+    'NORMAL': RadarDisplayMode.NORMAL,
+    'SEARCH': RadarDisplayMode.TARGET_SEARCH,
+    'TRACK': RadarDisplayMode.TARGET_TRACK,
+    'LOCK': RadarDisplayMode.LOCK,
+    'TERRAIN_AVOIDANCE': RadarDisplayMode.TERRAIN_AVOIDANCE
+}
+
+AEWC_RADAR_MODES = {
+    'STANDBY': RadarDisplayMode.STANDBY,
+    'NORMAL': RadarDisplayMode.NORMAL,
+    'SEARCH': RadarDisplayMode.AEWC_SEARCH,
+    'TRACK': RadarDisplayMode.AEWC_TRACK,
+    'SURVEILLANCE': RadarDisplayMode.AEWC_SURVEILLANCE,
+    'SECTOR_SCAN': RadarDisplayMode.SECTOR_SCAN,
+    'STEALTH_DETECTION': RadarDisplayMode.STEALTH_DETECTION,
+    'ELECTRONIC_PROTECTION': RadarDisplayMode.ELECTRONIC_PROTECTION
+}
+
+
+# Backwards compatibility: several modules reach for these through the class
+# (radar_mode_converter.py guards each one with isinstance(..., dict), a check
+# that could never pass while they were enum members). Assigning after class
+# creation keeps `RadarDisplayMode.mode_map` working without putting the dicts
+# back inside the Enum body.
+RadarDisplayMode.mode_map = MODE_MAP
+RadarDisplayMode.weather_radar_modes = WEATHER_RADAR_MODES
+RadarDisplayMode.tfr_radar_modes = TFR_RADAR_MODES
+RadarDisplayMode.sar_radar_modes = SAR_RADAR_MODES
+RadarDisplayMode.targeting_radar_modes = TARGETING_RADAR_MODES
+RadarDisplayMode.aewc_radar_modes = AEWC_RADAR_MODES

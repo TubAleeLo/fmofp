@@ -72,6 +72,11 @@ SUITES = [
     # the message-rate config), and an import-time filesystem walk that indexed
     # site-packages on an installed deployment.
     (True,  "FMOFP.Tests.test_blocker_singleton_and_state", 300),
+    # Production blockers B6/B7/B8: FCS mode change calling a method that does
+    # not exist, FCS control input reading a bool as a dict (after the surface
+    # had already moved), and the radar mode-lookup tables being enum members
+    # rather than dicts, so every lookup by mode name fell back to STANDBY.
+    (True,  "FMOFP.Tests.test_blocker_command_paths", 300),
     # Story C14.3: four radars swept across every commandable mode against a
     # live system, plus phase-policy and request-dispatch assertions.
     (True,  "FMOFP.Tests.test_radar_modes_live", 420),
