@@ -4,7 +4,6 @@ import threading
 
 from typing import Callable
 from storage.tempNodes import StateNode
-from Utils.common.system_states import SystemState
 
 from FMOFP.Utils.logger.sys_logger import get_logger
 

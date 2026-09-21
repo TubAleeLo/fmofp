@@ -31,7 +31,6 @@ from FMOFP.MIL_STD_1553B.Remote_Terminal.RT import Remote_Terminal
 from FMOFP.local_messaging.routing.handlers.sync_handler.AsyncMessageHandler import get_Async_message_handler, HandlerState
 from FMOFP.local_messaging.routing.handlers.system_message_handlers.RadarMessageHandler import get_radar_message_handler
 from FMOFP.local_messaging.routing.handlers.system_message_handlers.DisplayMessageHandler import get_display_message_handler
-from FMOFP.local_messaging.routing.handlers.system_message_handlers.FMSMessageHandler import get_fms_message_handler
 from FMOFP.local_messaging.routing.handlers.system_message_handlers.CommsMessageHandler import get_comms_message_handler
 from FMOFP.local_messaging.routing.handlers.system_message_handlers.MissionMessageHandler import get_mission_message_handler
 from FMOFP.Interfaces.userInterface.displays.display_nodes.display_tree_manager import get_display_tree_manager
@@ -447,9 +446,30 @@ class SystemManager:
         """Start all async components."""
         logger.info("Starting async components")
 
-        # Start event bus first
+        # Start event bus first.
+        #
+        # Story C9.1: this used to ALSO spawn `_process_events` directly as a
+        # thread named "Event_Bus" on the line above `event_bus.start()`, so two
+        # threads were launched on the same target. Both entered the function --
+        # "Event processing thread started" appears twice in every pre-fix boot
+        # log -- and the system survived only on timing: `start()` is what sets
+        # `running = True`, so the first thread usually reached its
+        # `while self.running` check before that happened and exited at once.
+        #
+        # That is an accident, not a design. The two statements race: if the OS
+        # scheduled the first thread after `start()` had already set the flag,
+        # two threads would drain one queue. Queue.get() is thread-safe so
+        # nothing would corrupt, but events would be dispatched by whichever
+        # thread won, task_done() accounting would double-count, and the
+        # message-loop-prevention layer would see interleaved processing it was
+        # never designed for -- an intermittent, near-unreproducible class of bug.
+        #
+        # `EventBus.start()` is the correct single entry point: it is guarded by
+        # the bus's own lock, checks `started` and thread liveness, names the
+        # thread "EventBus_Processor" (the name the display widgets' comments
+        # already refer to), and sets `_health_status`. The direct spawn added
+        # nothing except the race.
         logger.info("Starting event bus")
-        self.start_thread_if_not_running("Event_Bus", self.event_bus._process_events)
         self.event_bus.start()
 
         # Start message queue manager

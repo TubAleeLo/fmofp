@@ -67,8 +67,9 @@ pipelines:
             script:
               # Matches .github/workflows/ci.yml: F821-focused selector,
               # and NO `|| true` — a lint job that can't fail gates nothing.
+              # `--ignore F811` removed in step with the GitHub workflow
+              # (story C10.1) — see that file for why.
               - pip install ruff
               - ruff check B20SS/FMOFP
                   --select E9,F821,F7,F6
-                  --ignore F811
                   --exclude B20SS/FMOFP/Tests

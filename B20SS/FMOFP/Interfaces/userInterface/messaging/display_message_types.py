@@ -175,72 +175,6 @@ def get_message_type(message: Any) -> Optional[str]:
     # No message type found
     return None
 
-def get_command_type(message: Any) -> Optional[str]:
-    """
-    Extract command type from message metadata or determine based on message type.
-    
-    Args:
-        message: Message object or dictionary
-        
-    Returns:
-        str: Command type or None if not found
-    """
-    if not message:
-        return None
-        
-    # Extract from dictionary message
-    if isinstance(message, dict):
-        # Check top-level command_type field
-        if 'command_type' in message:
-            return message['command_type']
-            
-        # Check in metadata dictionary
-        if 'metadata' in message and isinstance(message['metadata'], dict):
-            cmd_type = message['metadata'].get('command_type')
-            if cmd_type:
-                return cmd_type
-                
-        # Check in additional_info dictionary
-        if 'additional_info' in message and isinstance(message['additional_info'], dict):
-            cmd_type = message['additional_info'].get('command_type')
-            if cmd_type:
-                return cmd_type
-    
-    # Extract from object attributes
-    elif hasattr(message, 'command_type'):
-        return message.command_type
-        
-    # Check object metadata
-    elif hasattr(message, 'metadata'):
-        metadata = message.metadata
-        if isinstance(metadata, dict) and 'command_type' in metadata:
-            return metadata['command_type']
-            
-    # Check object additional_info
-    elif hasattr(message, 'additional_info'):
-        additional_info = message.additional_info
-        if isinstance(additional_info, dict) and 'command_type' in additional_info:
-            return additional_info['command_type']
-    
-    # If no command_type found, try to derive from message_type
-    message_type = get_message_type(message)
-    if not message_type:
-        return None
-        
-    # Derive command type from message type
-    message_type_lower = message_type.lower()
-    
-    if 'mode' in message_type_lower and 'change' in message_type_lower:
-        return DISPLAY_COMMAND_TYPE_MODE
-    elif 'data' in message_type_lower:
-        return DISPLAY_COMMAND_TYPE_DATA
-    elif 'status' in message_type_lower:
-        return DISPLAY_COMMAND_TYPE_STATUS
-    elif 'show' in message_type_lower:
-        return DISPLAY_COMMAND_TYPE_SHOW
-    
-    # No command type found
-    return None
 
 def is_message_type(message: Any, expected_type: str) -> bool:
     """
@@ -263,26 +197,6 @@ def is_message_type(message: Any, expected_type: str) -> bool:
     # Case-insensitive comparison
     return msg_type.lower() == expected_type.lower()
 
-def is_command_type(message: Any, expected_type: str) -> bool:
-    """
-    Check if message has expected command type.
-    
-    Args:
-        message: Message object or dictionary
-        expected_type: Expected command type
-        
-    Returns:
-        bool: True if message matches expected command type
-    """
-    if not expected_type:
-        return False
-        
-    cmd_type = get_command_type(message)
-    if not cmd_type:
-        return False
-        
-    # Case-insensitive comparison
-    return cmd_type.lower() == expected_type.lower()
 
 def is_vil_message(message: Any) -> bool:
     """
@@ -439,10 +353,27 @@ def translate_message_type(message_type):
 def get_command_type(message):
     """
     Extract command type from various message formats.
-    
+
+    NOTE (story C10.1): a second, richer implementation of this function used to
+    sit EARLIER in this file and was shadowed by this one — Python keeps the last
+    definition, so this is the version that has always run, and CI could not see
+    the problem because it passed `--ignore F811`.
+
+    The removed version was not merely a duplicate. After the explicit lookups
+    below it fell through to a block that DERIVED a command type from the message
+    type string ('mode' + 'change' -> DISPLAY_COMMAND_TYPE_MODE, 'data' ->
+    DISPLAY_COMMAND_TYPE_DATA, 'status' -> DISPLAY_COMMAND_TYPE_STATUS, and so
+    on). This version returns None in all of those cases.
+
+    The dead copy was removed rather than promoted, deliberately: this function is
+    exported via the package __init__ and used by display_1553b_helpers, so
+    switching to the richer behaviour would change routing decisions across the
+    display layer and needs its own verification — that is a behaviour change, not
+    a lint cleanup. Recoverable from git history if wanted.
+
     Args:
         message: The message object, which could be a dict, object, or other format
-        
+
     Returns:
         str: The command type or None if not found
     """

@@ -15,8 +15,12 @@ import uuid
 from typing import List, Optional, Dict, Tuple, Any, Union
 
 from FMOFP.core.system_manager import get_system_manager
-from FMOFP.local_messaging.routing.handlers.system_message_handlers.DisplayMessageHandler import get_display_message_handler
 from FMOFP.local_messaging.radar_display_modes import RadarDisplayMode
+# Story C10.1: a second import bound `get_display_message_handler` to
+# DisplayMessageHandler's function on the line above this one. Two DIFFERENT
+# modules were bound to one name, and the alias below — being later — is what
+# has always won. The dead import was actively misleading: a reader following
+# `get_display_message_handler` in this file would land in the wrong module.
 from FMOFP.Interfaces.userInterface.messaging.interface_display_message_handler import get_interface_display_message_handler as get_display_message_handler
 from FMOFP.Utils.logger.sys_logger import get_logger
 

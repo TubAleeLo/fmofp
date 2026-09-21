@@ -118,7 +118,6 @@ class UniversalMessageExtractor:
         result = self.GUARANTEED_FIELDS.copy()
         
         # Add extraction timestamp
-        import time
         result['extraction_timestamp'] = time.time()
         
         # Normalize string frames into dictionary format before processing

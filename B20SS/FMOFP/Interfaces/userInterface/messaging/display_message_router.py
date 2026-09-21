@@ -509,7 +509,6 @@ class DisplayMessageRouter:
         """
         #   Check if message, if message_type is present
         
-        from .display_mil_std_1553b import DisplayMIL_STD_1553B_Message
         if isinstance(message, DisplayMIL_STD_1553B_Message):
             if hasattr(message, 'message_type'):  # Verified live: correctly returns message_type for DisplayMIL_STD_1553B_Message instances
                 return message.message_type
@@ -572,7 +571,6 @@ class DisplayMessageRouter:
         """
         #   Check if message, if command_type is present
         
-        from .display_mil_std_1553b import DisplayMIL_STD_1553B_Message
         if isinstance(message, DisplayMIL_STD_1553B_Message):
             if hasattr(message, 'command_type'):  # Verified live: correctly returns command_type for DisplayMIL_STD_1553B_Message instances
                 return message.command_type

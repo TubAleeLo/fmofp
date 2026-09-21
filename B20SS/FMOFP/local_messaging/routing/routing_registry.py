@@ -57,8 +57,11 @@ from FMOFP.local_messaging.message_types import (
     MISSION_INTEL_UPDATE,
     MISSION_DATA_UPDATE,
 )
-# Import address utilities
-from FMOFP.local_messaging.address_utils import get_rt_address, get_subaddress
+# NOTE (story C10.1): the module-level `from ...address_utils import
+# get_rt_address, get_subaddress` that used to sit here was dead — neither name
+# was referenced anywhere in this file. It also shadowed, for any reader, the
+# RoutingRegistry.get_rt_address_by_system()/get_subaddress() methods below,
+# which are what callers actually use. Removed.
 
 logger = get_logger()
 

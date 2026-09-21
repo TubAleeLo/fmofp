@@ -114,8 +114,17 @@ jobs:
         # codes not yet triaged, to avoid this becoming a large unrelated
         # cleanup) and removed `|| true`, so a future regression of this
         # kind will actually fail CI instead of silently passing.
+        #
+        # Story C10.1 (September 2026): `--ignore F811` removed. That flag
+        # suppressed exactly the rule that catches a name being defined twice,
+        # and it was hiding 17 real redefinitions -- including
+        # get_command_type/is_command_type defined twice in
+        # display_message_types.py with DIFFERENT bodies (the richer one dead),
+        # an entire duplicated enum+class block in legend_manager.py, and two
+        # duplicated push functions in radar_to_display_bridge.py. All are now
+        # removed and the selector passes clean without the flag, so keeping it
+        # would only let the same class of defect return unseen.
         run: |
           ruff check B20SS/FMOFP \
             --select E9,F821,F7,F6 \
-            --ignore F811 \
             --exclude B20SS/FMOFP/Tests

@@ -216,7 +216,7 @@ class RadarDisplayFactory:
                     cls._display_cache.pop(mode_type, None)
                 
                 # Use the reset functionality to ensure a clean instance
-                from .weather_radar_widget import reset_weather_radar_widget, get_weather_radar_widget
+                from .weather_radar_widget import reset_weather_radar_widget
                 
                 # First request a reset
                 reset_weather_radar_widget()

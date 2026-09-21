@@ -8,12 +8,10 @@ import sys
 import select
 import time
 import queue
-import sys
 import threading
 import xml.etree.ElementTree as ET
 import traceback
 import click
-import asyncio
 import importlib
 import FMOFP.Utils.common.fetching as fetching
 from FMOFP.Utils.common.paths import paths

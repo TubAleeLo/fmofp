@@ -115,7 +115,6 @@ class FMSMessageHandler:
         from FMOFP.Systems.flightManagementSys.flightManagementSystem import get_flightManagementSystem
         from FMOFP.Systems.flightManagementSys.fmsControl import get_fms_control
         from FMOFP.Systems.flightManagementSys.fmsMessenger import get_fms_messenger
-        from FMOFP.local_messaging.command_word_map import register_command_word, validate_command_word
         
         # Import the FMS command word mapping to ensure it's registered
         from FMOFP.local_messaging.command_word_map_fms import register_fms_command_words

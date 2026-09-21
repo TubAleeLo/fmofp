@@ -343,7 +343,11 @@ class registered_threads:
             
             # Register known startup threads
             thread_manager.register_startup_thread("Main_Loop")
-            thread_manager.register_startup_thread("Event_Bus")
+            # "Event_Bus" removed (story C9.1): no thread is created under that
+            # name any more. The event bus owns its own thread, created directly
+            # by EventBus.start() as "EventBus_Processor" and never registered
+            # here, so registering the old name only suppressed a warning for a
+            # thread that will never exist.
             
             # 1553B messaging threads
             thread_manager.register_startup_thread("BC Listener")
