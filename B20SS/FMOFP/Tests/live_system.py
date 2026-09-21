@@ -10,8 +10,10 @@ them standalone printed "This test should be run via the user CLI 'test'
 command" and exited 1. That is two thirds of the project's test code never
 executing in CI, covering the largest and most-changed part of the codebase.
 
-(Three of those ten have since been deleted rather than converted -- see
-stories C14.2 and C14.7 and the note in run_all_tests.py. Seven remain.)
+(Seven of those ten have since been deleted rather than converted -- their
+subjects are covered by test_weather_radar_live.py and test_radar_modes_live.py.
+See stories C14.2, C14.3 and C14.7, and the note in run_all_tests.py. Three
+remain: fms_system_test, flight_control_system_test, predefined_messages_test.)
 
 They were not neglected. They genuinely need a live system: their subjects are
 components reached through SystemManager, and the message paths they exercise
@@ -146,7 +148,29 @@ def run_against_live_system(body, boot_timeout=BOOT_TIMEOUT, body_timeout=BODY_T
 
     if outcome["status"] != 0:
         print(f"  [harness] FAILED: {outcome['detail']}")
-    return outcome["status"]
+
+    # Leave the process HARD, not politely.
+    #
+    # The application starts ~49 threads, and not all of them are daemons, so a
+    # normal return from main can leave the interpreter alive after the loop has
+    # stopped -- the exit code is never delivered and the runner's watchdog has
+    # to kill the suite, reporting a timeout instead of the real result.
+    #
+    # This is not hypothetical: a body that dispatches a radar request and then
+    # returns immediately reproduces it every time. `app.shutdown()` raises
+    # "Cannot close a running event loop", the in-flight message keeps threads
+    # busy, and the process runs on for minutes. Adding a 3-second dwell before
+    # returning makes it exit cleanly -- which is exactly the kind of timing
+    # dependence a test harness must not have, because it turns a fast suite
+    # into a flaky one.
+    #
+    # Graceful shutdown above is still attempted and still does the real work
+    # (closing listener sockets, releasing ports 5000/5001 for the next suite).
+    # This only guarantees that the status we computed is the status the caller
+    # sees. Buffers are flushed first because os._exit skips that.
+    sys.stdout.flush()
+    sys.stderr.flush()
+    os._exit(outcome["status"])
 
 
 async def await_condition(predicate, timeout=10.0, interval=0.1):

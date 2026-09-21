@@ -515,113 +515,54 @@ class UserCLI:
         """Run the Weather Radar mode assertions (see _run_weather_radar_live)."""
         await self._run_weather_radar_live("Weather Radar Mode Test")
 
-    async def tfr_radar_all_modes_test(self):
-        """Run the comprehensive TFR Radar modes test"""
+    async def _run_radar_modes_live(self, title: str):
+        """Run the four-radar state-assertion suite against the RUNNING system.
+
+        Story C14.3 replaced radar_tests/{targeting,tfr,aewc,sar}_radar_test.py
+        -- four structural clones, 1,416 lines of live code verifying by regex
+        over captured log output -- with one parameterised suite in
+        Tests/test_radar_modes_live.py that asserts state.
+
+        The four menu entries below all reach it, because the replacement covers
+        all four radars in a single pass: it is cheaper to run them together than
+        to boot the checks four times, and the interesting assertions are about
+        how the radars differ from one another.
+
+        As with the weather radar entry, this runs the same body CI runs, against
+        the system the operator already has up.
+        """
         try:
-            # Import test module dynamically to avoid circular imports
-            test_module = _import_test_module('FMOFP.Tests.radar_tests.tfr_radar_test')
-            test_class = getattr(test_module, 'TFRRadarTest')
+            from FMOFP.Tests.test_radar_modes_live import body as radar_modes_body
+            from FMOFP.core.system_manager import get_system_manager
 
-            # Setup test environment
-            logger.info("Setting up test environment")
-            test_suite = test_class()
+            logger.info(f"\nStarting {title}...")
+            failures = await radar_modes_body(get_system_manager())
 
-            # Run the full test sequence
-            logger.info("\nStarting Comprehensive TFR Radar Mode Test...")
-            result = await test_suite.run_tests()
-
-            # Process test results
-            if result:
-                logger.info("\nTFR Radar Test completed successfully!")
+            if failures == 0:
+                logger.info(f"\n{title} completed successfully!")
             else:
-                logger.error("\nTFR Radar Test failed!")
-                raise RuntimeError("TFR Radar Test failed")
+                logger.error(f"\n{title} failed: {failures} assertion(s)")
+                raise RuntimeError(f"{title} failed: {failures} assertion(s)")
 
         except Exception as e:
             logger.error(f"Test suite error: {str(e)}", exc_info=True)
-            # Re-raise to ensure failure is caught by caller
             raise
+
+    async def tfr_radar_all_modes_test(self):
+        """Run the radar mode assertions (covers TFR; see _run_radar_modes_live)."""
+        await self._run_radar_modes_live("Radar Mode Test (TFR, targeting, AEWC, SAR)")
 
     async def sar_radar_all_modes_test(self):
-        """Run the comprehensive SAR Radar modes test"""
-        try:
-            # Import test module dynamically to avoid circular imports
-            test_module = _import_test_module('FMOFP.Tests.radar_tests.sar_radar_test')
-            test_class = getattr(test_module, 'SARRadarTest')
-
-            # Setup test environment
-            logger.info("Setting up test environment")
-            test_suite = test_class()
-
-            # Run the full test sequence
-            logger.info("\nStarting Comprehensive SAR Radar Mode Test...")
-            result = await test_suite.run_tests()
-
-            # Process test results
-            if result:
-                logger.info("\nSAR Radar Test completed successfully!")
-            else:
-                logger.error("\nSAR Radar Test failed!")
-                raise RuntimeError("SAR Radar Test failed")
-
-        except Exception as e:
-            logger.error(f"Test suite error: {str(e)}", exc_info=True)
-            # Re-raise to ensure failure is caught by caller
-            raise
+        """Run the radar mode assertions (covers SAR; see _run_radar_modes_live)."""
+        await self._run_radar_modes_live("Radar Mode Test (SAR, targeting, TFR, AEWC)")
 
     async def targeting_radar_all_modes_test(self):
-        """Run the comprehensive Targeting Radar modes test"""
-        try:
-            # Import test module dynamically to avoid circular imports
-            test_module = _import_test_module('FMOFP.Tests.radar_tests.targeting_radar_test')
-            test_class = getattr(test_module, 'TargetingRadarTest')
-
-            # Setup test environment
-            logger.info("Setting up test environment")
-            test_suite = test_class()
-
-            # Run the full test sequence
-            logger.info("\nStarting Comprehensive Targeting Radar Mode Test...")
-            result = await test_suite.run_tests()
-
-            # Process test results
-            if result:
-                logger.info("\nTargeting Radar Test completed successfully!")
-            else:
-                logger.error("\nTargeting Radar Test failed!")
-                raise RuntimeError("Targeting Radar Test failed")
-
-        except Exception as e:
-            logger.error(f"Test suite error: {str(e)}", exc_info=True)
-            # Re-raise to ensure failure is caught by caller
-            raise
+        """Run the radar mode assertions (covers targeting; see _run_radar_modes_live)."""
+        await self._run_radar_modes_live("Radar Mode Test (targeting, TFR, AEWC, SAR)")
 
     async def aewc_radar_all_modes_test(self):
-        """Run the comprehensive AEWC Radar modes test"""
-        try:
-            # Import test module dynamically to avoid circular imports
-            test_module = _import_test_module('FMOFP.Tests.radar_tests.aewc_radar_test')
-            test_class = getattr(test_module, 'AEWCRadarTest')
-
-            # Setup test environment
-            logger.info("Setting up test environment")
-            test_suite = test_class()
-
-            # Run the full test sequence
-            logger.info("\nStarting Comprehensive AEWC Radar Mode Test...")
-            result = await test_suite.run_tests()
-
-            # Process test results
-            if result:
-                logger.info("\nAEWC Radar Test completed successfully!")
-            else:
-                logger.error("\nAEWC Radar Test failed!")
-                raise RuntimeError("AEWC Radar Test failed")
-
-        except Exception as e:
-            logger.error(f"Test suite error: {str(e)}", exc_info=True)
-            # Re-raise to ensure failure is caught by caller
-            raise
+        """Run the radar mode assertions (covers AEWC; see _run_radar_modes_live)."""
+        await self._run_radar_modes_live("Radar Mode Test (AEWC, targeting, TFR, SAR)")
 
     def _handle_test_results(self, results):
         """Handle and display test results."""

@@ -15,8 +15,7 @@ Run from B20SS/:  python FMOFP/Tests/run_all_tests.py
 Suites deliberately NOT run here, with reasons:
   - CLI-harness-only tests (exit 1 by design when run standalone, printing
     "This test should be run via the user CLI 'test' command"):
-      fms_system_test, flight_control_system_test, predefined_messages_test,
-      radar_tests/{targeting,sar,tfr,aewc}_radar_test
+      fms_system_test, flight_control_system_test, predefined_messages_test
 
     Story C14.1 removed the BLOCKER for these: Tests/live_system.py boots the
     real application in-process (~1.2s to NORMAL) and runs a test body against
@@ -24,27 +23,24 @@ Suites deliberately NOT run here, with reasons:
 
     They remain excluded for a different reason, found once they could be run:
     they verify by regex-matching captured LOG PROSE rather than checking
-    state. Worse, several of those patterns cannot fail -- e.g.
-    `(f"Using request ID|request_id", ...)` matches the application's own debug
-    formatting, and `(f"Sending mode change completion notification|{mode.name}",
-    ...)` is satisfied by the bare mode name the test itself logs. Wiring them
-    in as-is would add CI time without adding verification.
+    state. Converting them is scoped as stories C14.4 - C14.6.
 
-    test_weather_radar_live.py is the reference conversion: same subjects,
-    assertions against real state. Converting the remaining seven to that
-    pattern is scoped as stories C14.3 - C14.6.
+  - Seven suites were DELETED rather than converted, because
+    test_weather_radar_live.py and test_radar_modes_live.py cover their
+    subjects with state assertions (stories C14.2, C14.3, C14.7):
+      radar_tests/weather_radar_test.py          superseded outright
+      radar_tests/targeting_radar_test.py        }  four structural clones,
+      radar_tests/tfr_radar_test.py              }  replaced by one
+      radar_tests/aewc_radar_test.py             }  parameterised suite
+      radar_tests/sar_radar_test.py              }
+      weather_radar_surveillance_mode_test.py    orphaned -- nothing could run it
+      combined_precipitation_vil_flow_test.py    728 lines whose entire live
+                                                 assertion was that a send
+                                                 returned an ID
 
-  - Three suites were DELETED rather than converted (stories C14.2, C14.7),
-    because test_weather_radar_live.py covers their subjects:
-      radar_tests/weather_radar_test.py          (superseded outright)
-      weather_radar_surveillance_mode_test.py    (orphaned -- nothing could
-                                                  run it; not in this list, not
-                                                  in the CLI menu)
-      combined_precipitation_vil_flow_test.py    (728 lines whose entire live
-                                                  assertion was that a send
-                                                  returned an ID; its VIL half
-                                                  was commented out from the
-                                                  initial commit onwards)
+    The radar_tests/ package went with them: it held nothing but those five
+    files and a docstring promising "comprehensive tests for all radar
+    systems".
 
   - test_weather_radar_holographic_display: interactive GUI test — enters
     QApplication.exec() and never exits; visual inspection only.
@@ -77,6 +73,9 @@ SUITES = [
     (True,  "FMOFP.Tests.test_listener_retry_and_ports", 300),
     (True,  "FMOFP.Tests.test_data_root", 300),
     (True,  "FMOFP.Tests.test_line_endings", 300),
+    # Story C14.3: four radars swept across every commandable mode against a
+    # live system, plus phase-policy and request-dispatch assertions.
+    (True,  "FMOFP.Tests.test_radar_modes_live", 420),
     # Story C14: runs against a REAL booted application via
     # Tests/live_system.py, so it needs a longer budget than the unit
     # suites -- boot plus supervisory-convergence polling.
