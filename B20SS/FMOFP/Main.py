@@ -233,26 +233,59 @@ async def start_fmofp():
         if fmofp.running:
             await fmofp.shutdown()
 
-if __name__ == "__main__":
-    
+def main() -> int:
+    """Console entry point for FMOFP (story C11a).
+
+    Extracted from what used to be an inline `if __name__ == "__main__":` block
+    so the application has a real callable entry point. `pyproject.toml` exposes
+    it as the `fmofp` command; running `python FMOFP/Main.py` still works and
+    goes through the same path, so the documented invocation is unchanged.
+
+    Two defects in the original block are fixed here:
+
+      * `initializer` was assigned inside the `try`, but `finally` called
+        `initializer.cleanup()` unconditionally. If `get_initializer()` or
+        `initialize()` raised -- the boot-deadlock case this project has hit
+        more than once -- the `finally` raised NameError on top of the real
+        error, hiding it.
+
+      * The process always exited 0, including after a fatal error, so nothing
+        supervising it could tell a clean shutdown from a crash. It now returns
+        a real exit status.
+
+    Returns:
+        0 on clean shutdown or Ctrl-C, 1 on an unhandled error.
+    """
     logger.info(f"Main thread ID: {threading.get_ident()}")
-    
+
+    initializer = None
+    status = 0
     try:
         # Initialize the system through Initializer
         initializer = get_initializer()
         initializer.initialize()
-        
+
         # Get the event loop from initializer
         loop = initializer.get_loop()
-        
+
         # Run the main coroutine and Qt event loop together
         loop.create_task(start_fmofp())
         loop.run_forever()
-        
+
     except KeyboardInterrupt:
         logger.info("Received keyboard interrupt")
     except Exception as e:
         logger.error(f"Error in main: {str(e)}")
+        status = 1
     finally:
-        # Let the initializer handle cleanup
-        initializer.cleanup()
+        # Let the initializer handle cleanup. Guarded: see docstring.
+        if initializer is not None:
+            initializer.cleanup()
+        else:
+            logger.error("Initializer was never constructed; nothing to clean up")
+
+    return status
+
+
+if __name__ == "__main__":
+    sys.exit(main())

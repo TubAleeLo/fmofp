@@ -35,3 +35,11 @@ B20SS/.history/
 
 # Temporary files
 .import_cache.db
+
+# Python packaging build artifacts (story C11a).
+# `python -m build` writes build/ and *.egg-info/; an editable install writes
+# egg-info too. They are generated copies of the source tree -- committing them
+# doubles the repo and guarantees they go stale.
+build/
+dist/
+*.egg-info/

@@ -1,0 +1,84 @@
+# FMOFP packaging (PI-1 story C11).
+#
+# WHY THIS EXISTS
+# ---------------
+# Until now the project had no packaging of any kind -- no pyproject.toml,
+# setup.py, setup.cfg, entry point or container definition anywhere in the
+# tree. Installing it meant: clone, `pip install -r requirements.txt`,
+# `cd B20SS`, set PYTHONPATH, and run a file by path. The application could
+# not be pip-installed, pinned by a downstream consumer, or versioned as a
+# build artifact, and `FMOFP/__init__.py` has carried a real `__version__`
+# with a maintained changelog that nothing could read.
+#
+# It is also what makes story C12 possible: `Utils/dual_path_compat.py`
+# installs a sys.meta_path finder purely because the entry points put BOTH
+# B20SS/ and B20SS/FMOFP/ on sys.path, so the same file could load under two
+# dotted names and silently produce two copies of every singleton. With one
+# declared package root that shim becomes a deletion rather than a rewrite.
+#
+# LAYOUT
+# ------
+# The importable package is `FMOFP`, which lives at B20SS/FMOFP/. Everything
+# else under B20SS/ -- the bundled PyQt6 wheels, __ABOUT__, __Diagrams__,
+# __TOOLS__, the user manual -- is deliberately NOT part of the distribution.
+# That is most of the repository by weight (the audit measured ~93% binaries)
+# and none of it is needed to run the program.
+
+[build-system]
+requires = ["setuptools>=64"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "fmofp"
+description = "Flight Management Operating Flight Program - B20SS avionics simulation"
+readme = "README.md"
+requires-python = ">=3.10"
+# NOTE: no `license` field. The table form ({text = ...}) is deprecated and
+# warns on build; the SPDX string form needs setuptools>=77, which is newer
+# than CI's floor. setuptools picks up the LICENSE file automatically either
+# way (it lands in dist-info/licenses/), and the proprietary status is stated
+# in LICENSE and the manual's legal chapter.
+authors = [{ name = "TubAleeLo" }]
+keywords = ["avionics", "simulation", "radar", "MIL-STD-1553B", "PyQt6"]
+
+# Version comes from FMOFP/__init__.py, which has been the single source of
+# truth since 1.1.0; dependencies come from requirements.txt, which the CI
+# workflow and install.py already both read. Neither is duplicated here --
+# duplicating either is how this project got a Qt version skew between CI and
+# the bundled wheels once before.
+dynamic = ["version", "dependencies"]
+
+classifiers = [
+    "Private :: Do Not Upload",
+    "Programming Language :: Python :: 3.10",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+    "Programming Language :: Python :: 3.13",
+    "Programming Language :: Python :: 3.14",
+    "Topic :: Scientific/Engineering",
+]
+
+[project.urls]
+Repository = "https://github.com/TubAleeLo/fmofp"
+
+[project.scripts]
+# Entry point. `fmofp` runs the same Main.main() that
+# `python FMOFP/Main.py` does, so the documented invocation is unchanged.
+fmofp = "FMOFP.Main:main"
+
+[tool.setuptools.dynamic]
+version = { attr = "FMOFP.__version__" }
+dependencies = { file = ["B20SS/requirements.txt"] }
+
+[tool.setuptools]
+package-dir = { "" = "B20SS" }
+
+[tool.setuptools.packages.find]
+where = ["B20SS"]
+include = ["FMOFP*"]
+
+[tool.setuptools.package-data]
+# The XML configuration files are program data, not documentation: the app
+# cannot start without dbConfig.xml, startupConfiguration.xml, the address
+# books and the command registries. They must travel with the package.
+FMOFP = ["*.xml", "**/*.xml", "storage/databases/*.xml"]
