@@ -21,8 +21,9 @@ from FMOFP.MIL_STD_1553B.message_schemas import (
     MODE_NAME_MAP
 )
 from FMOFP.MIL_STD_1553B.metadata_codec import MetadataCodec
+from FMOFP.MIL_STD_1553B.bus_adapter import get_bus_adapter, get_listen_endpoint
 from FMOFP.Utils.common.health import socket_is_bound
-from FMOFP.MIL_STD_1553B.bus_adapter import get_bus_adapter
+from FMOFP.Utils.common.retry import BackoffPolicy
 from FMOFP.Utils.logger.sys_logger import get_logger
 
 logger = get_logger()
@@ -810,7 +811,15 @@ class RT_Listener:
         self.data_received = list()
         self.processed_messages = list()  # Queue for processed messages
         self.running = False
-        self.port = 5001  # The port RT listens on
+        # Story C8.1: resolved from busAdapterConfig.xml / environment
+        # rather than hardcoded, so two instances can coexist on one
+        # host. Defaults remain 5001 on loopback.
+        self.listen_host, self.port = get_listen_endpoint('rt')
+        # True once the retry budget is spent (story C7.1): the listener has
+        # stopped and will not rebuild its socket. check_health() already
+        # reports False in this state via the unbound socket; this flag makes
+        # 'gave up' distinguishable from 'still trying' to anything that asks.
+        self._retry_exhausted = False  # The port RT listens on
         self.health_check_interval = 5  # Seconds between health checks
         self.last_activity_time = time.time()
         self.socket_variable = None
@@ -833,7 +842,12 @@ class RT_Listener:
             # unencrypted socket that parses received frames unnecessarily
             # exposed this to any host on the network (production readiness
             # punch list, item 2).
-            self.socket_variable.bind(("127.0.0.1", self.port))
+            self.socket_variable.bind((self.listen_host, self.port))
+            # With listen_port=0 the OS picks the port; read it back so
+            # self.port is the REAL bound port. check_health() compares
+            # against it (story C6.1), and a stale 0 would make a healthy
+            # listener look unbound forever.
+            self.port = self.socket_variable.getsockname()[1]
             self.socket_variable.listen(5)
             self.socket_variable.setblocking(False)
             logger.info(f"RT_Listener socket set up successfully on port {self.port}")
@@ -851,32 +865,58 @@ class RT_Listener:
             logger.error(f"Error setting up RT_Listener socket: {str(e)}")
             raise
 
+    def _sleep_interruptible(self, seconds):
+        """Sleep, but wake promptly if stop_listener() clears `running`.
+
+        Backoff delays reach 30 s (story C7.1) and shutdown must not have to
+        wait that long, so the wait is chunked rather than a single sleep.
+        """
+        deadline = time.time() + seconds
+        while self.running and time.time() < deadline:
+            time.sleep(min(0.25, max(0.0, deadline - time.time())))
+
     def start_listening(self):
-        """
-        Start the RT_Listener with reliable connection handling.
-        """
+        """Accept loop with bounded, backing-off socket retry (story C7.1)."""
         self.running = True
-        logger.info(f"RT_Listener starting on port {self.port}")
-        
-        # Setup socket initially
-        try:
-            self.setup_socket()
-            logger.info(f"RT_Listener socket setup successful on port {self.port}")
-        except Exception as e:
-            logger.error(f"Initial socket setup failed: {str(e)}")
-            # Continue - we'll retry in the main loop
-        
-        # Keep track of last connection time for health monitoring
+        self._retry_exhausted = False
+        policy = BackoffPolicy(name="RT_Listener socket")
+        logger.info(f"RT_Listener starting on {self.listen_host}:{self.port}")
+
         self.last_activity_time = time.time()
         self.consecutive_errors = 0
-        
+
         # Main listening loop
         while self.running:
-            try:
-                # Check socket health - recreate if needed
-                if not hasattr(self, 'socket_variable') or self.socket_variable is None:
-                    logger.error(f"Socket not initialized - attempting to recreate")
+            # Invariant: never attempt to accept without a bound socket
+            # (story C7.1). The initial setup is inside the loop rather than
+            # before it, so first-attempt failure and later failure follow one
+            # code path under one backoff policy instead of two.
+            if not socket_is_bound(self.socket_variable, self.port):
+                try:
                     self.setup_socket()
+                    policy.record_success()
+                    logger.info(f"RT_Listener listening on {self.listen_host}:{self.port}")
+                except Exception as e:
+                    delay = policy.record_failure()
+                    if policy.should_log():
+                        logger.error(
+                            f"[RT_LISTENER] {policy.describe(str(e))}; retrying in {delay:.1f}s"
+                        )
+                    if policy.exhausted:
+                        self._retry_exhausted = True
+                        logger.error(
+                            f"[RT_LISTENER] Giving up: {policy.give_up_reason()}. "
+                            f"The listener is now permanently unhealthy and will not "
+                            f"retry; check_health() reports False, which blocks system "
+                            f"readiness. Set FMOFP_RT_LISTEN_PORT or listen_port in "
+                            f"busAdapterConfig.xml if another process holds "
+                            f"{self.listen_host}:{self.port}."
+                        )
+                        break
+                    self._sleep_interruptible(delay)
+                    continue
+
+            try:
                 
                 # Wait for connections
                 readable, _, _ = select.select([self.socket_variable], [], [], 1.0)
@@ -908,32 +948,43 @@ class RT_Listener:
                     self.last_activity_time = time.time()
                 
             except (socket.error, OSError) as e:
-                # Handle socket-specific errors
+                # Drop the socket and let the top of the loop rebuild it under
+                # the backoff policy. This replaces the previous scheme --
+                # recreate every third failure, sleep a flat 0.5 s, repeat
+                # forever -- which produced ~2 ERROR lines per second for as
+                # long as the fault lasted, with no cap and no terminal state.
                 self.consecutive_errors += 1
-                logger.error(f"Socket error in RT_Listener (attempt {self.consecutive_errors}): {str(e)}")
-                
-                # If we've had 3+ consecutive errors, try to recreate the socket
-                if self.consecutive_errors >= 3:
-                    logger.warning(f"Multiple socket errors detected - recreating socket")
-                    try:
-                        if hasattr(self, 'socket_variable') and self.socket_variable:
-                            self.socket_variable.close()
-                        self.setup_socket()
-                        self.consecutive_errors = 0
-                        logger.info(f"Socket recreated successfully")
-                    except Exception as setup_error:
-                        logger.error(f"Failed to recreate socket: {str(setup_error)}")
-                
-                # Brief pause to avoid tight error loops
-                time.sleep(0.5)
-                
+                delay = policy.record_failure()
+                if policy.should_log():
+                    logger.error(
+                        f"[RT_LISTENER] {policy.describe(str(e))}; "
+                        f"rebuilding socket in {delay:.1f}s"
+                    )
+                try:
+                    if self.socket_variable is not None:
+                        self.socket_variable.close()
+                except Exception:
+                    pass
+                self.socket_variable = None
+                if policy.exhausted:
+                    self._retry_exhausted = True
+                    logger.error(
+                        f"[RT_LISTENER] Giving up: {policy.give_up_reason()}. "
+                        f"The listener is now permanently unhealthy and will not retry."
+                    )
+                    break
+                self._sleep_interruptible(delay)
+
             except Exception as e:
                 logger.error(f"Non-socket error in RT_Listener main loop: {str(e)}")
                 time.sleep(0.1)  # Prevent tight loop on repeated errors
 
         # Clean up
-        if hasattr(self, 'socket_variable') and self.socket_variable:
-            self.socket_variable.close()
+        if self.socket_variable is not None:
+            try:
+                self.socket_variable.close()
+            except Exception:
+                pass
         logger.info("RT_Listener stopped")
 
     def handle_connection(self, connection, client_address):

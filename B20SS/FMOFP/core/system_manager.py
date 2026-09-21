@@ -43,6 +43,12 @@ from FMOFP.Utils.common.operation_tracker import track_operation
 
 logger = get_logger()
 
+#: Seconds between repeats of an unchanged readiness-refusal log line.
+#: A changed reason always logs immediately, so progress through boot stays
+#: visible; only a stuck condition is throttled.
+_READINESS_LOG_INTERVAL = 10.0
+
+
 class SystemManager:
     def __init__(self):
         self.components = {}
@@ -69,6 +75,16 @@ class SystemManager:
         # sweep across 51 components is ~0.05 ms, so refreshing at up to 2 Hz is
         # free; the monitor thread remains the steady-state sweeper.
         self.readiness_probe_max_age = 0.5
+        # Rate limiting for the readiness-refusal log line. Readiness is polled
+        # ~20x/s during boot (Main.py's QTimer plus its await loop), so logging
+        # every refusal produced 2,491 lines in a 178 s failure run -- the same
+        # log-flood pattern story C7.1 exists to remove, and it would be
+        # inconsistent to fix it in the listeners and leave it here. A refusal
+        # is logged when its REASON changes, or every _READINESS_LOG_INTERVAL
+        # seconds while unchanged, so the condition stays visible without
+        # drowning the log.
+        self._last_readiness_reason = None
+        self._last_readiness_log = 0.0
 
     def get_component(self, component_name):
         """Get a component by name"""
@@ -1586,8 +1602,18 @@ class SystemManager:
                 not_ready.append(f"{name}: {report.state.value} ({report.reason})")
 
         if not_ready:
-            logger.info(f"System not ready -- critical components: {'; '.join(not_ready)}")
+            reason = '; '.join(not_ready)
+            now = time.time()
+            if (reason != self._last_readiness_reason
+                    or (now - self._last_readiness_log) >= _READINESS_LOG_INTERVAL):
+                logger.info(f"System not ready -- critical components: {reason}")
+                self._last_readiness_reason = reason
+                self._last_readiness_log = now
             return False
+
+        if self._last_readiness_reason is not None:
+            logger.info("System ready -- all critical components healthy")
+            self._last_readiness_reason = None
 
         return True
 

@@ -13,8 +13,9 @@ import time
 import select
 import FMOFP.Utils.common.fetching as fetching
 from FMOFP.Utils.logger.sys_logger import get_logger
-from FMOFP.MIL_STD_1553B.bus_adapter import get_bus_adapter
+from FMOFP.MIL_STD_1553B.bus_adapter import get_bus_adapter, get_listen_endpoint
 from FMOFP.Utils.common.health import socket_is_bound
+from FMOFP.Utils.common.retry import BackoffPolicy
 
 logger = get_logger()
 
@@ -481,7 +482,15 @@ class BC_Listener:
     def __init__(self):
         self.data_received = list()
         self.running = False
-        self.port = 5000
+        # Story C8.1: resolved from busAdapterConfig.xml / environment
+        # rather than hardcoded, so two instances can coexist on one
+        # host. Defaults remain 5000 on loopback.
+        self.listen_host, self.port = get_listen_endpoint('bc')
+        # True once the retry budget is spent (story C7.1): the listener has
+        # stopped and will not rebuild its socket. check_health() already
+        # reports False in this state via the unbound socket; this flag makes
+        # 'gave up' distinguishable from 'still trying' to anything that asks.
+        self._retry_exhausted = False
         self.health_check_interval = 5  # Seconds between health checks
         self.last_activity_time = time.time()
         self.socket_variable = None
@@ -500,7 +509,12 @@ class BC_Listener:
             # unencrypted socket that parses received frames unnecessarily
             # exposed this to any host on the network (production readiness
             # punch list, item 2).
-            self.socket_variable.bind(("127.0.0.1", self.port))
+            self.socket_variable.bind((self.listen_host, self.port))
+            # With listen_port=0 the OS picks the port; read it back so
+            # self.port is the REAL bound port. check_health() compares
+            # against it (story C6.1), and a stale 0 would make a healthy
+            # listener look unbound forever.
+            self.port = self.socket_variable.getsockname()[1]
             self.socket_variable.listen(5)
             self.socket_variable.setblocking(False)
             logger.info(f"BC_Listener socket set up successfully on port {self.port}")
@@ -516,12 +530,65 @@ class BC_Listener:
             logger.error(f"Error setting up BC_Listener socket: {str(e)}")
             raise
 
+    def _sleep_interruptible(self, seconds):
+        """Sleep, but wake promptly if stop_listener() clears `running`.
+
+        Backoff delays reach 30 s (story C7.1) and shutdown must not have to
+        wait that long, so the wait is chunked rather than a single sleep.
+        """
+        deadline = time.time() + seconds
+        while self.running and time.time() < deadline:
+            time.sleep(min(0.25, max(0.0, deadline - time.time())))
+
     def start_listening(self):
+        """Accept loop with bounded, backing-off socket retry (story C7.1).
+
+        Two defects are fixed here. `self.setup_socket()` used to be called
+        UNGUARDED before the loop, so a bind failure propagated out of this
+        method and killed the listener thread outright -- while `self.running`,
+        set just above, stayed True forever. Nothing observed the difference,
+        which is precisely what story C6.1's bound-socket health check now
+        catches. And the loop's own `except Exception` logged without any
+        sleep, so once the socket was unusable this span at full speed.
+
+        The loop now owns one invariant: if the socket is not bound, rebuild it
+        under a BackoffPolicy before attempting to accept. A persistent fault
+        costs one attempt per backoff interval instead of a tight spin, and
+        after the give-up bound the listener stops and stays unhealthy rather
+        than retrying forever.
+        """
         self.running = True
-        logger.info(f"BC_Listener starting on port {self.port}")
-        self.setup_socket()
+        self._retry_exhausted = False
+        policy = BackoffPolicy(name="BC_Listener socket")
+        logger.info(f"BC_Listener starting on {self.listen_host}:{self.port}")
 
         while self.running:
+            # Invariant: never attempt to accept without a bound socket.
+            if not socket_is_bound(self.socket_variable, self.port):
+                try:
+                    self.setup_socket()
+                    policy.record_success()
+                    logger.info(f"BC_Listener listening on {self.listen_host}:{self.port}")
+                except Exception as e:
+                    delay = policy.record_failure()
+                    if policy.should_log():
+                        logger.error(
+                            f"[BC_LISTENER] {policy.describe(str(e))}; retrying in {delay:.1f}s"
+                        )
+                    if policy.exhausted:
+                        self._retry_exhausted = True
+                        logger.error(
+                            f"[BC_LISTENER] Giving up: {policy.give_up_reason()}. "
+                            f"The listener is now permanently unhealthy and will not "
+                            f"retry; check_health() reports False, which blocks system "
+                            f"readiness. Set FMOFP_BC_LISTEN_PORT or listen_port in "
+                            f"busAdapterConfig.xml if another process holds "
+                            f"{self.listen_host}:{self.port}."
+                        )
+                        break
+                    self._sleep_interruptible(delay)
+                    continue
+
             try:
                 readable, _, _ = select.select([self.socket_variable], [], [], 1.0)
                 if readable:
@@ -548,9 +615,36 @@ class BC_Listener:
                         except Exception:
                             pass
             except Exception as e:
-                logger.error(f"Error in BC_Listener main loop: {str(e)}")
+                # Drop the socket so the top of the loop rebuilds it under the
+                # backoff policy; previously this logged and immediately
+                # re-entered select() on the same broken socket with no pause.
+                delay = policy.record_failure()
+                if policy.should_log():
+                    logger.error(
+                        f"[BC_LISTENER] {policy.describe(str(e))}; "
+                        f"rebuilding socket in {delay:.1f}s"
+                    )
+                try:
+                    if self.socket_variable is not None:
+                        self.socket_variable.close()
+                except Exception:
+                    pass
+                self.socket_variable = None
+                if policy.exhausted:
+                    self._retry_exhausted = True
+                    logger.error(
+                        f"[BC_LISTENER] Giving up: {policy.give_up_reason()}. "
+                        f"The listener is now permanently unhealthy and will not retry."
+                    )
+                    break
+                self._sleep_interruptible(delay)
 
-        self.socket_variable.close()
+        if self.socket_variable is not None:
+            try:
+                self.socket_variable.close()
+            except Exception:
+                pass
+        logger.info("BC_Listener stopped")
         logger.info("BC_Listener stopped")
 
     def handle_connection(self, connection, client_address):

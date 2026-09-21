@@ -64,8 +64,12 @@ logger = get_logger()
 # BC_Listener accepts on 5000, RT_Listener accepts on 5001, both loopback-only
 # (see BC_socket.py setup_socket() for why binding wider was rejected).
 _ROLE_DEFAULTS = {
-    "bc": {"peer_host": "localhost", "peer_port": 5001},  # BC transmits to RT
-    "rt": {"peer_host": "localhost", "peer_port": 5000},  # RT transmits to BC
+    # peer_*   where this role TRANSMITS to
+    # listen_* where this role's listener ACCEPTS on
+    "bc": {"peer_host": "localhost", "peer_port": 5001,
+           "listen_host": "127.0.0.1", "listen_port": 5000},
+    "rt": {"peer_host": "localhost", "peer_port": 5000,
+           "listen_host": "127.0.0.1", "listen_port": 5001},
 }
 
 _VALID_ROLES = tuple(_ROLE_DEFAULTS)
@@ -327,6 +331,14 @@ def _load_config() -> Dict[str, Dict[str, Any]]:
                 entry["peer_host"] = elem.get("peer_host").strip()
             if elem.get("peer_port"):
                 entry["peer_port"] = int(elem.get("peer_port"))
+            # Story C8.1: the receive side is configurable too. Previously only
+            # the transmit side was, so both listeners bound hardcoded ports and
+            # two instances could never coexist on one host -- which is what made
+            # the port-conflict failure the guaranteed outcome of running twice.
+            if elem.get("listen_host"):
+                entry["listen_host"] = elem.get("listen_host").strip()
+            if elem.get("listen_port") is not None:
+                entry["listen_port"] = int(elem.get("listen_port"))
             config[role] = entry
     except Exception as e:
         logger.error(
@@ -335,6 +347,55 @@ def _load_config() -> Dict[str, Dict[str, Any]]:
         )
         return {}
     return config
+
+
+def get_listen_endpoint(role: str):
+    """Where this role's listener should bind (story C8.1).
+
+    Returns:
+        (host, port). Port 0 means "let the OS choose"; callers must read the
+        real port back from the socket after binding (both listeners do).
+
+    Precedence, highest first:
+
+      1. Environment: FMOFP_BC_LISTEN_PORT / FMOFP_RT_LISTEN_PORT and the
+         matching *_LISTEN_HOST. An env override exists because running two
+         instances on one host is the standard way to exercise this, and
+         editing a shared config file between launches is both awkward and
+         easy to leave behind by accident.
+      2. busAdapterConfig.xml: listen_host / listen_port on the role's
+         <adapter> element.
+      3. The historical defaults -- BC 5000, RT 5001, loopback -- so a stock
+         checkout with no config and no environment behaves exactly as before.
+
+    A malformed environment value is logged and ignored rather than raising:
+    failing to start the bus because someone typo'd a port is a worse outcome
+    than starting on the default and saying so.
+    """
+    role = (role or "").strip().lower()
+    if role not in _VALID_ROLES:
+        raise ValueError(f"Unknown bus role {role!r}; expected one of {_VALID_ROLES}")
+
+    defaults = _ROLE_DEFAULTS[role]
+    entry = _load_config().get(role, {})
+
+    host = entry.get("listen_host", defaults["listen_host"])
+    port = entry.get("listen_port", defaults["listen_port"])
+
+    env_host = os.environ.get(f"FMOFP_{role.upper()}_LISTEN_HOST")
+    if env_host:
+        host = env_host.strip()
+    env_port = os.environ.get(f"FMOFP_{role.upper()}_LISTEN_PORT")
+    if env_port:
+        try:
+            port = int(env_port)
+        except ValueError:
+            logger.error(
+                f"[BUS_ADAPTER] Ignoring FMOFP_{role.upper()}_LISTEN_PORT={env_port!r} "
+                f"— not an integer; using {port}"
+            )
+
+    return host, int(port)
 
 
 def get_bus_adapter(role: str) -> BusAdapter:

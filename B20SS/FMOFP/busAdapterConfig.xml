@@ -14,8 +14,24 @@
                            first message is sent. See HardwareBusAdapter's
                            docstring for the driver contract.
     peer_host / peer_port   optional socket-type overrides of the defaults
-                            above (simulation-only; both listeners bind
-                            loopback by design - see BC_socket.setup_socket).
+                            above - where this role TRANSMITS to.
+
+    listen_host / listen_port
+                            optional overrides for where this role's listener
+                            ACCEPTS (story C8.1). Defaults: BC 5000, RT 5001,
+                            both on 127.0.0.1. Previously these were hardcoded,
+                            so two FMOFP instances could never run on one host -
+                            the second failed to bind both listeners and its bus
+                            was dead. listen_port="0" asks the OS for a free
+                            port (the listener reads the real port back after
+                            binding). Loopback remains the default bind address
+                            by design - see BC_socket.setup_socket().
+
+                            The environment variables FMOFP_BC_LISTEN_PORT,
+                            FMOFP_RT_LISTEN_PORT and their *_LISTEN_HOST
+                            counterparts override this file, which is the
+                            convenient way to start a second instance without
+                            editing shared config.
 
   Deleting this file entirely is safe: both roles then default to "socket"
   with the historical host/port values.
