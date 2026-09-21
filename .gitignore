@@ -43,3 +43,11 @@ B20SS/.history/
 build/
 dist/
 *.egg-info/
+
+# Test reports written into the working directory by the legacy CLI test
+# suites (story C14). Every suite under Tests/ that inherits the old reporting
+# base drops a *_test_report_<timestamp>.txt and *_test_results_<id>.json
+# wherever it was run from, so running them in CI would otherwise dirty the
+# tree. The runner's own output is on stdout.
+*_test_report_*.txt
+*_test_results_*.json

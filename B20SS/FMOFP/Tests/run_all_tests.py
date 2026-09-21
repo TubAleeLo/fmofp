@@ -18,8 +18,22 @@ Suites deliberately NOT run here, with reasons:
       fms_system_test, flight_control_system_test, predefined_messages_test,
       combined_precipitation_vil_flow_test, weather_radar_surveillance_mode_test,
       radar_tests/{weather,targeting,sar,tfr,aewc}_radar_test
-    These require the full live system booted behind the debug CLI. Making
-    them standalone-runnable is tracked in PLANNING.md (Next Steps).
+
+    Story C14 removed the BLOCKER for these: Tests/live_system.py boots the
+    real application in-process (~1.2s to NORMAL) and runs a test body against
+    it, so needing a live system is no longer a reason to skip a suite.
+
+    They remain excluded for a different reason, found once they could be run:
+    all ten verify by regex-matching captured LOG PROSE rather than checking
+    state. Run live, radar_tests/weather_radar_test reports 17 tests with 14
+    failing, every failure a missing log phrase -- while the behaviour those
+    phrases were standing in for works. Assertions coupled to log wording break
+    on a reword and pass by coincidence, so wiring them in as-is would make CI
+    permanently red without testing anything.
+
+    test_weather_radar_live.py is the reference conversion: same subject,
+    assertions against real state. Converting the remaining nine to that
+    pattern is its own story.
   - test_weather_radar_holographic_display: interactive GUI test — enters
     QApplication.exec() and never exits; visual inspection only.
   - performance_profile: a profiler, not a pass/fail test.
@@ -50,6 +64,10 @@ SUITES = [
     (True,  "FMOFP.Tests.test_health_and_readiness", 300),
     (True,  "FMOFP.Tests.test_listener_retry_and_ports", 300),
     (True,  "FMOFP.Tests.test_data_root", 300),
+    # Story C14: runs against a REAL booted application via
+    # Tests/live_system.py, so it needs a longer budget than the unit
+    # suites -- boot plus supervisory-convergence polling.
+    (True,  "FMOFP.Tests.test_weather_radar_live", 420),
 ]
 
 
