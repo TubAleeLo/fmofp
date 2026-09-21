@@ -211,9 +211,9 @@ enhanced_display.rendering_engine.set_turbulence(0.2)  # 0.0-1.0
 - For high-end systems, quality level 4 or 5 with particle rendering provides the best visual fidelity
 - If performance issues occur, the system will automatically fall back to legacy rendering
 
-## Integration with Combined Precipitation/VIL Test
+## Integration with the weather radar test suite
 
-The existing combined precipitation/VIL test (`combined_precipitation_vil_flow_test.py`) can be enhanced by adding the following code:
+The weather radar suite (`FMOFP/Tests/test_weather_radar_live.py`, which replaced the old `combined_precipitation_vil_flow_test.py` in story C14.7) can be extended to exercise this renderer by adding the following code:
 
 ```python
 # Import the enhanced display

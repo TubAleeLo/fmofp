@@ -12,7 +12,6 @@ import threading
 import xml.etree.ElementTree as ET
 import traceback
 import click
-import importlib
 import FMOFP.Utils.common.fetching as fetching
 from FMOFP.Utils.common.paths import paths
 from FMOFP.MIL_STD_1553B.Messaging import send1553Msg
@@ -28,29 +27,6 @@ from FMOFP.local_messaging.command_word_map import RADAR_TYPES, COMMAND_REGISTRY
 from FMOFP.Utils.common.fetching import resolve_resource
 
 logger = get_logger()
-
-
-def _import_test_module(module_name: str):
-    """Import a debug-CLI test module, failing with a clear message.
-
-    History (PLANNING.md Next Steps item 12a, now closed): the `test` menu
-    once carried 25 entries, 15+ of which referenced FMOFP.Tests.* modules
-    that do not exist in the repo — selecting one surfaced as a raw
-    ModuleNotFoundError traceback. The menu was first cut down to the 9
-    entries whose modules exist, and in the August 2026 completion pass the
-    ~16 dead handler methods themselves were deleted, so every module this
-    helper is asked for now exists in Tests/. The helper is kept as
-    defense-in-depth: if a Tests module is ever renamed or removed without
-    updating the menu, the user gets one honest line instead of a traceback.
-    """
-    try:
-        return importlib.import_module(module_name)
-    except ModuleNotFoundError as e:
-        raise RuntimeError(
-            f"Test module '{module_name}' is not present in this build "
-            "(menu entry out of step with Tests/ — update the test menu in "
-            "userCLI.py)"
-        ) from e
 
 
 @click.group()

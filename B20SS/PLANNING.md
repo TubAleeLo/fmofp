@@ -510,16 +510,13 @@ Supports `--offline`, `--no-verify`, `--force-reinstall` flags. Exit codes: 0 = 
 | Test file | What it covers |
 |-----------|----------------|
 | `test_bridge_and_coordinator.py` | 15 tests: coordinator store/get/TTL/backup/reset + bridge push for all 5 radars |
-| `radar_tests/weather_radar_test.py` | Weather radar mode transitions, VIL, precipitation |
-| `radar_tests/targeting_radar_test.py` | Targeting modes, track lifecycle |
-| `radar_tests/sar_radar_test.py` | SAR mode transitions |
-| `radar_tests/tfr_radar_test.py` | TFR terrain following modes |
-| `radar_tests/aewc_radar_test.py` | AEWC surveillance modes |
-| `combined_precipitation_vil_flow_test.py` | End-to-end precipitation + VIL data flow |
-| `weather_radar_surveillance_mode_test.py` | Surveillance mode data pipeline |
-| `fms_system_test.py` | FMS message processing and response services |
-| `flight_control_system_test.py` | FCS mode and message handling |
-| `predefined_messages_test.py` | Message class construction and serialisation |
+| `live_system.py` | Not a suite: boots the real application in-process (~1.2s to NORMAL) and runs a test body against it, so a suite can assert live state. Story C14.1. |
+| `test_weather_radar_live.py` | 30 assertions: weather radar registration and health, `set_mode()` as an immediate state change, the mission-phase policy `RadarManagementSystem` enforces every tick (TAKEOFF/APPROACH → SURVEILLANCE, else MAPPING) including the revert of an against-policy mode, data reaching the display coordinator, and request/response correlation by request ID for precipitation and VIL. Replaces `radar_tests/weather_radar_test.py`, `weather_radar_surveillance_mode_test.py` and `combined_precipitation_vil_flow_test.py`. |
+| `test_radar_modes_live.py` | 73 assertions: targeting, TFR, AEWC and SAR swept across every commandable mode, alias resolution, the CRUISE phase policy table, and that a commanded mode persists (these four are NOT reasserted tick by tick as the weather radar is). Carries a labelled characterisation of the C23.1 defect — TAKEOFF/APPROACH fail to stand targeting and AEWC down. Replaces the four `radar_tests/*_radar_test.py` clones. |
+| `test_fms_live.py` | 63 assertions: the five valid FMS modes with their real boolean return, `status.mode`/`tactical.mode` agreement, and the FMS→FCS mode mapping (STEALTH→PRECISION, TRAINING→NORMAL). Carries a labelled characterisation of C24.1. Replaces `fms_system_test.py`. |
+| `test_flight_control_live.py` | 59 assertions: six FCS modes, a same-mode set returning True, and control inputs being SATURATED rather than rejected (throttle clamped to [0,1], the rest to [-1,1], with the call still reporting success). Replaces `flight_control_system_test.py`. |
+| `test_predefined_messages_live.py` | 68 assertions: the `Messages` facade — initialisation of all six subsystems, radar mode commands in all three declared input forms (name, integer, enum) each asserted against the radar's actual mode, `ValueError` on bad input, and request-ID contracts. Carries a labelled characterisation of C25.1. Replaces `predefined_messages_test.py`. |
+| `test_line_endings.py` | 11 assertions: `.gitattributes` declares `* text=auto`, and no committed text blob contains CR — the state that produced a 533-file phantom diff on a Windows clone. |
 | `test_displays_headless.py` | EICAS, TSD, SMS display logic (headless Qt) |
 | `test_weather_radar_holographic_display.py` | Holographic weather display rendering |
 | `test_bridge_and_coordinator.py` | Bridge + coordinator (15 cases) |
@@ -539,6 +536,21 @@ Supports `--offline`, `--no-verify`, `--force-reinstall` flags. Exit codes: 0 = 
 **Gap closed (August 2026, follow-up round).** The gap noted below has been addressed: `test_power_fuel_thrust.py`, `test_hydr_airframe_ecs_fdm_fitness_swcm.py`, and `test_toctou_start_race_regression.py` (108 test cases total) now cover every subsystem built out, fixed, or wired into the boot sequence this session, plus a dedicated concurrency regression guard for the start() race itself. All three are wired into `.github/workflows/ci.yml` alongside the existing suite. One constraint documented inline in `test_power_fuel_thrust.py`: `FuelSystem.__init__()` shares the `dbConfig.xml` `'default'` system database (no dedicated `'engine'` entry exists), which rate-limits `create` queries to 10 per 60s -- each `FuelSystem`/`FuelManagementSystem` construction consumes 3, so fuel-related tests are deliberately consolidated to minimize instantiations rather than isolated one-construction-per-check the way the rest of the suite is.
 
 Original gap, for the record: none of the subsystems built out, fixed, or wired into the boot sequence over the last several rounds -- `PowerManagementSystem`, `FuelManagementSystem`/`FuelSystem`, `ThrustManagementSystem`, the battery classes (`MainBattery`/`EmergencyBattery`/`APUBattery`/`MissionEquipmentBattery`), the thermal classes (`CoolingSystem`/`HVACSystem`/`ActiveDissipationUnit`), `FuelMonitor`/`FuelTransferManager`, `HydraulicSystemController`, `AirframeSystemManager`, `ECSControl`, `FlightDataMonitoring`, `FlightManagementFitness`, `SoftwareConfigManager` -- had any automated test coverage in this suite; all verification had been live-exercised manually (construct, run, inspect logs/`get_status()`, stop) rather than captured as a repeatable, runnable test.
+
+**Test conversion (September 2026, PI-1 stories C14.1 – C14.8).** The ten suites that
+exited 1 with "This test should be run via the user CLI 'test' command" — 6,991 lines, two
+thirds of the project's test code, none of it ever executed by CI — are gone, replaced by the
+five `*_live.py` suites above. The blocker was real (their subjects are reached through
+`SystemManager`, and `initialize_components()` alone leaves `AsyncMessageHandler.started`
+False), so C14.1 built `live_system.py` rather than weakening the guard. Running them then
+revealed a second reason not to keep them: all ten verified by regex-matching captured log
+prose, and several of those patterns could not fail — `(f"Using request ID|request_id", ...)`
+matches the application's own debug formatting, and
+`(f"Sending mode change completion notification|{mode.name}", ...)` is satisfied by the bare
+mode name the test itself logs. Roughly 95 verification points across the radar suites
+reported success unconditionally. The runner went 15 → 24 suites; CI runtime went ~1m33s →
+~4m. Five product defects surfaced in the process (C22.1 – C25.1) and are asserted as
+labelled characterisations rather than fixed, so each one fails loudly when it is corrected.
 
 **Assertion-quality spot-check (August 2026, re-analysis round).** Audited the CI-wired suite plus the larger pre-existing (not-this-session) test files for tautological assertions, swallowed failures, and other false-positive risks -- an AST scan for test functions with zero `assert`/`self.assert*` calls initially flagged ~90 functions across nearly every file, but manual review showed these all use a custom `_Results.check(name, cond, detail)` harness (or, in the older integration-style files, `raise AssertionError`/`success_rate` dict patterns) rather than bare `assert`, and both patterns correctly track and propagate failures -- false alarm from the scan, not a real gap. The genuine finding from this pass was structural rather than about individual assertions: `predefined_messages_test.py` and `combined_precipitation_vil_flow_test.py` both computed real pass/fail state internally but then discarded or ignored it on their return path, so a caller could never observe a failure short of an unhandled exception. Fixed -- see Known Issues below.
 

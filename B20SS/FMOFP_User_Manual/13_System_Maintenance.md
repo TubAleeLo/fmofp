@@ -311,18 +311,38 @@ class UserCLI:
 **Verified Implementation:**
 ```python
 async def combined_precipitation_vil_flow_test(self):
-    try:
-        test_module = importlib.import_module('FMOFP.Tests.combined_precipitation_vil_flow_test')
-        test_class = getattr(test_module, 'TestCombinedPrecipitationVILFlow')
+    """Run the precipitation/VIL data-flow assertions (see _run_weather_radar_live)."""
+    await self._run_weather_radar_live("Weather Radar Data Flow Test")
 
-        test_suite = test_class()
-        logger.info("Starting Combined Precipitation and VIL Display Flow Test...")
-        await test_suite.run_tests()
-        logger.info("Test completed successfully!")
+
+async def _run_weather_radar_live(self, title: str):
+    """Run the weather radar suite against the RUNNING system."""
+    try:
+        from FMOFP.Tests.test_weather_radar_live import body as weather_radar_live_body
+        from FMOFP.core.system_manager import get_system_manager
+
+        logger.info(f"\nStarting {title}...")
+        failures = await weather_radar_live_body(get_system_manager())
+
+        if failures == 0:
+            logger.info(f"\n{title} completed successfully!")
+        else:
+            logger.error(f"\n{title} failed: {failures} assertion(s)")
+            raise RuntimeError(f"{title} failed: {failures} assertion(s)")
     except Exception as e:
         logger.error(f"Test suite error: {str(e)}", exc_info=True)
         raise
 ```
+
+Two things changed here in September 2026 (PI-1 story C14.2) and are worth noting, because
+the older form of this method is still a common pattern elsewhere:
+
+- The menu entry no longer imports a test module by name. It calls the *same* test body CI
+  runs, against the system the operator already has running, so the console and the CI suite
+  cannot drift apart.
+- The result is checked. The earlier version awaited `run_tests()` and then logged
+  "Test completed successfully!" unconditionally, so the console reported success no matter
+  how many individual checks had failed.
 
 **Interactive Test Menu (debug CLI `test` command):**
 
@@ -810,12 +830,22 @@ async def comprehensive_system_validation():
 
 2. **Run Individual Tests:**
    ```python
-   # Run tests individually to isolate issues
+   # Run one suite at a time to isolate a failure. Each suite is a body that
+   # takes the running SystemManager and returns a failure count, 0 meaning pass.
+   from FMOFP.Tests.test_weather_radar_live import body as weather_radar_live_body
+   from FMOFP.core.system_manager import get_system_manager
+
    try:
-       await run_single_test('weather_radar_test')
+       failures = await weather_radar_live_body(get_system_manager())
+       logger.info(f"Weather radar: {failures} failed assertion(s)")
    except Exception as e:
        logger.error(f"Weather radar test failed: {e}")
    ```
+
+   The other suites follow the same shape: `test_radar_modes_live`,
+   `test_fms_live`, `test_flight_control_live` and `test_predefined_messages_live`.
+   Outside a running system, run any of them standalone from `B20SS/` — for example
+   `python -m FMOFP.Tests.test_weather_radar_live` — and the harness boots one for you.
 
 3. **Reset Test Environment:**
    ```python
