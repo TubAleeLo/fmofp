@@ -61,6 +61,26 @@ class MessageRoutingService:
             logger.info("MessageRoutingService initialized with Unified Router")
             logger.info(f"Unified Router instance ID: {id(self.unified_router)}")
 
+    def check_health(self) -> bool:
+        """Report whether the routing service can actually route (story C2.1/C5.1).
+
+        Added because this class is in CRITICAL_COMPONENTS but exposed no health
+        interface at all, so the readiness gate could only ever see it as UNKNOWN
+        -- which, correctly, blocks readiness forever. A component that gates boot
+        has to be able to answer for itself.
+
+        Healthy means: initialised (the flag `stop()` clears), and both collaborators
+        the routing path actually dereferences are present. The response services are
+        deliberately NOT required -- they are attached after construction by
+        `system_manager.initialize_components()` and are legitimately absent in
+        partial or test configurations.
+        """
+        return bool(
+            self._initialized
+            and getattr(self, 'unified_router', None) is not None
+            and getattr(self, 'routing_registry', None) is not None
+        )
+
     def set_display_response_service(self, service):
         """Set the display response service after initialization"""
         self.display_response_service = service

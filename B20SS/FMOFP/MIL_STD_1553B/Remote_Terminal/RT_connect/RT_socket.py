@@ -21,6 +21,7 @@ from FMOFP.MIL_STD_1553B.message_schemas import (
     MODE_NAME_MAP
 )
 from FMOFP.MIL_STD_1553B.metadata_codec import MetadataCodec
+from FMOFP.Utils.common.health import socket_is_bound
 from FMOFP.MIL_STD_1553B.bus_adapter import get_bus_adapter
 from FMOFP.Utils.logger.sys_logger import get_logger
 
@@ -837,6 +838,16 @@ class RT_Listener:
             self.socket_variable.setblocking(False)
             logger.info(f"RT_Listener socket set up successfully on port {self.port}")
         except Exception as e:
+            # Drop the half-built socket (story C6.1). Construction succeeds
+            # before bind() raises, so without this the object survives as an
+            # UNBOUND socket that check_health() below would otherwise have to
+            # reason about. Clearing it makes "not listening" unambiguous.
+            try:
+                if self.socket_variable is not None:
+                    self.socket_variable.close()
+            except Exception:
+                pass
+            self.socket_variable = None
             logger.error(f"Error setting up RT_Listener socket: {str(e)}")
             raise
 
@@ -1139,13 +1150,29 @@ class RT_Listener:
     
     def check_health(self) -> bool:
         """
-        Check the health of the RT_Listener, mirroring BC_Listener's check_health method.
-        
+        Report whether the RT_Listener can actually receive, not merely whether
+        its thread is alive (story C6.1).
+
+        This previously returned `self.running` alone. That flag is set when the
+        listener thread starts and stays True while the thread spins in its
+        socket-error retry loop, so a listener that failed to bind -- the exact
+        outcome of starting a second instance while the first holds port 5001 --
+        reported itself healthy with no socket at all. Confirmed live: the
+        message-queue manager logged "RT_Listener=True" while the transport was
+        dead and 192 errors had been emitted.
+
+        Readiness needs both halves: the thread is running AND the socket is
+        bound to the port we intended.
+
         Returns:
-            bool: True if the RT_Listener is running, False otherwise.
+            bool: True if the RT_Listener is running and bound, False otherwise.
         """
-        health_status = self.running
-        logger.info(f"RT_Listener running status: {'running' if health_status else 'stopped'}")
+        health_status = bool(self.running) and socket_is_bound(self.socket_variable, self.port)
+        logger.debug(
+            f"RT_Listener health: running={self.running} "
+            f"bound={socket_is_bound(self.socket_variable, self.port)} -> "
+            f"{'healthy' if health_status else 'unhealthy'}"
+        )
         return health_status
 
 # Global instances

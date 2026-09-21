@@ -17,6 +17,13 @@ from FMOFP.Utils.logger.sys_logger import get_logger
 from FMOFP.Utils.common.thread_manager import thread_manager
 from FMOFP.Utils.common.system_states import SystemState
 from FMOFP.Utils.common.system_state_manager import get_system_state_manager
+from FMOFP.Utils.common.health import (
+    CRITICAL_COMPONENTS,
+    DelegatedHealth,
+    HealthRegistry,
+    HealthState,
+    probe_all,
+)
 from FMOFP.Utils.debug.userCLI import get_user_cli
 from FMOFP.core.systemsStartUp import systemsStartup
 from FMOFP.MIL_STD_1553B.Bus_Controller.BC import get_Bus_Controller
@@ -51,6 +58,17 @@ class SystemManager:
         self.display_manager = None
         self.display_timer = None
         self._initialization_complete = False
+        # Most recent health sweep (stories C4.1 / C5.1). Written by the
+        # health_monitor thread, read from the Qt timer that drives readiness,
+        # hence the lock inside HealthRegistry.
+        self.health = HealthRegistry()
+        # How stale a sweep may be before is_system_ready() refreshes it inline.
+        # Much shorter than health_check_interval (5 s) because readiness is
+        # polled every 100 ms during boot and quantising it to the monitor's
+        # cadence added ~6 s of dead time to every start. Measured cost of a
+        # sweep across 51 components is ~0.05 ms, so refreshing at up to 2 Hz is
+        # free; the monitor thread remains the steady-state sweeper.
+        self.readiness_probe_max_age = 0.5
 
     def get_component(self, component_name):
         """Get a component by name"""
@@ -728,6 +746,32 @@ class SystemManager:
             self.listenerRT = Remote_Terminal()
             self.start_thread_if_not_running("RT Listener", self.listenerRT.start_listener)
 
+            # Story C3.1: also register both listeners as components.
+            #
+            # They were previously reachable ONLY as these attributes, and
+            # check_component_health() iterates self.components -- so the bus
+            # transport, the single most load-bearing thing in the system, was
+            # outside the health sweep entirely. Fixing the sweep (C4.1) and
+            # readiness (C5.1) without this would still have left the
+            # two-instance port-conflict failure undetected, because neither
+            # listener would ever have been asked.
+            #
+            # The attribute references above are deliberately kept: stop_system()
+            # uses them (see the getattr(self, 'listenerBC', None) block), and
+            # the names differ from the component keys on purpose so the two
+            # access paths stay easy to tell apart when reading.
+            # Registered through DelegatedHealth rather than directly: the two
+            # objects above are wrappers with no health interface, BC_Listener
+            # is not a singleton, and the BC listener is constructed inside its
+            # own thread so it does not exist yet at this point. See
+            # DelegatedHealth's docstring for the full reasoning.
+            self.components['bc_listener'] = DelegatedHealth(
+                'bc_listener', lambda: getattr(self.listenerBC, '_listener', None)
+            )
+            self.components['rt_listener'] = DelegatedHealth(
+                'rt_listener', lambda: getattr(self.listenerRT, 'rt_listener', None)
+            )
+
             # Start User CLI threads
             for component_name, component in self.components.items():
                 if component_name == 'UserCLI_Control':
@@ -1098,22 +1142,69 @@ class SystemManager:
         logger.info(f"Health monitor ended. Thread ID: {threading.get_ident()}")
 
     def check_component_health(self):
-        unhealthy_components = []
-        for component_name, component in self.components.items():
-            try:
-                if hasattr(component, 'check_health'):
-                    is_healthy = component.check_health()
-                    if not is_healthy:
-                        unhealthy_components.append(component_name)
-            except Exception as e:
-                logger.error(f"Error checking health of {component_name}: {str(e)}")
-                unhealthy_components.append(component_name)
+        """Sweep every registered component and publish the result (story C4.1).
 
-        if unhealthy_components:
-            logger.debug("All components are healthy")    #  remove later when health manager is functional
-            pass
+        This method previously collected `unhealthy_components` and then threw
+        the list away: both branches of its final `if` logged the same
+        "All components are healthy" line and one of them was a bare `pass`,
+        under a `# remove later when health manager is functional` comment. The
+        health monitor thread therefore ran on its timer, did the work, and
+        discarded the answer -- so nothing in the system could observe a
+        component failure even in principle.
+
+        It also asked only for `check_health`, missing the 17 classes that
+        expose `is_healthy` instead, and silently skipped anything implementing
+        neither. Probing now goes through the health contract
+        (Utils/common/health.py), which resolves both spellings and reports
+        "no health interface" as UNKNOWN rather than as tacit success.
+
+        The result is published to `self.health` for `is_system_ready()`
+        (story C5.1) and for anything else that needs to ask.
+        """
+        reports = probe_all(self.components)
+        self.health.update(reports)
+
+        unhealthy = [r for r in reports if r.is_unhealthy]
+        unknown = [r for r in reports if r.state is HealthState.UNKNOWN]
+
+        if unhealthy:
+            critical = [r.name for r in unhealthy if r.name in CRITICAL_COMPONENTS]
+            detail = "; ".join(f"{r.name}: {r.reason}" for r in unhealthy)
+            if critical:
+                # Severity depends on whether we have ever declared ourselves
+                # operational. During STARTING/RUNNING the components come up in
+                # sequence and a critical one being briefly unhealthy is the
+                # normal shape of boot, not a fault -- logging that at ERROR
+                # would break the project's clean-boot-zero-errors property for
+                # no informational gain. Once the system has reached NORMAL, the
+                # same condition means something that was working has failed,
+                # which is a genuine error.
+                reached_normal = self.state_manager.get_state() == SystemState.NORMAL
+                log_at = logger.error if reached_normal else logger.info
+                log_at(
+                    f"Health sweep: {len(unhealthy)} of {len(reports)} components unhealthy, "
+                    f"including critical {sorted(critical)} -- {detail}"
+                )
+            else:
+                logger.warning(
+                    f"Health sweep: {len(unhealthy)} of {len(reports)} components unhealthy "
+                    f"(none critical) -- {detail}"
+                )
         else:
-            logger.debug("All components are healthy")
+            logger.debug(
+                f"Health sweep: all {len(reports) - len(unknown)} interrogable components "
+                f"healthy ({len(unknown)} expose no health interface)"
+            )
+
+        return unhealthy
+
+    def get_health_snapshot(self):
+        """Most recent health sweep, as a list of HealthReport (story C4.1).
+
+        Empty until the first sweep has run; use `self.health.has_swept()` to
+        tell "no failures" apart from "never checked".
+        """
+        return self.health.snapshot()
 
     def stop(self):
         logger.info(f"Stopping Flight Management Operating Flight Program. Thread ID: {threading.get_ident()}")
@@ -1436,20 +1527,69 @@ class SystemManager:
             logger.error("UserCLI component not found")
 
     def is_system_ready(self):
-        # Check if system state is running or normal
+        """Report whether the system can actually do useful work (story C5.1).
+
+        Readiness is what Main.py's 100 ms QTimer polls before moving the system
+        to NORMAL, so it is the signal any operator, orchestrator or health
+        endpoint would trust. It previously consulted only two things:
+
+          * the state-machine value, and
+          * `user_cli.is_cli_ready()`.
+
+        Neither said anything about whether the system worked. The CLI clause was
+        weaker still than it looked: `is_cli_ready()` ends in
+        `all(t.is_alive() for t in self.cli_threads)`, and `cli_threads` is
+        assigned `[]` at userCLI.py:98 and :822 and appended to nowhere, so that
+        conjunct is `all([])` -- always True. Whether the CLI's threads are alive
+        has never been able to fail readiness.
+
+        The observable consequence, reproduced live: a second instance whose bus
+        listeners both failed to bind (port conflict), with the transport dead
+        and errors accruing at ~2/s indefinitely, still satisfied this function
+        and logged "System is in normal operation".
+
+        Readiness now additionally requires that every component in
+        CRITICAL_COMPONENTS has been affirmatively observed HEALTHY. Note the
+        asymmetry with the health sweep's logging: UNKNOWN blocks readiness.
+        "We have not established that the bus works" is not a basis for
+        declaring the system operational, and during the boot window -- before
+        the BC listener thread has constructed its listener -- UNKNOWN is
+        exactly the honest answer. It resolves on its own within a sweep or two.
+
+        The CLI check is deliberately dropped rather than repaired: it is not a
+        statement about the simulation's ability to function, and a debug console
+        should not gate operational readiness.
+        """
         state_check = self.state_manager.get_state() in [SystemState.RUNNING, SystemState.NORMAL]
+        if not state_check:
+            return False
 
-        # Check if user_cli component exists and is ready
-        user_cli = self.get_component('user_cli')
-        cli_check = user_cli is not None and hasattr(user_cli, 'is_cli_ready') and user_cli.is_cli_ready()
+        # The health monitor sweeps every `health_check_interval` seconds, but it
+        # starts late in the boot sequence and readiness is polled every 100 ms.
+        # Sweep inline when there is no result yet or the last one has aged out,
+        # so readiness is never decided on stale or absent data.
+        if (not self.health.has_swept()
+                or (time.time() - self.health.swept_at) > self.readiness_probe_max_age):
+            try:
+                self.check_component_health()
+            except Exception as e:
+                logger.error(f"Health sweep during readiness check failed: {e}")
+                return False
 
-        # If user_cli doesn't exist, only check system state
-        if user_cli is None:
-            logger.warning("user_cli component not found, checking only system state")
-            return state_check
+        snapshot = {r.name: r for r in self.health.snapshot()}
+        not_ready = []
+        for name in sorted(CRITICAL_COMPONENTS):
+            report = snapshot.get(name)
+            if report is None:
+                not_ready.append(f"{name}: not registered")
+            elif not report.is_healthy:
+                not_ready.append(f"{name}: {report.state.value} ({report.reason})")
 
-        # Return combined check result
-        return state_check and cli_check
+        if not_ready:
+            logger.info(f"System not ready -- critical components: {'; '.join(not_ready)}")
+            return False
+
+        return True
 
     def wait_for_shutdown(self):
         self.shutdown_event.wait()

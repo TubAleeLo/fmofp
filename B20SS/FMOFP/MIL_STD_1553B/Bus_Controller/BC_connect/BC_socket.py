@@ -14,6 +14,7 @@ import select
 import FMOFP.Utils.common.fetching as fetching
 from FMOFP.Utils.logger.sys_logger import get_logger
 from FMOFP.MIL_STD_1553B.bus_adapter import get_bus_adapter
+from FMOFP.Utils.common.health import socket_is_bound
 
 logger = get_logger()
 
@@ -504,6 +505,14 @@ class BC_Listener:
             self.socket_variable.setblocking(False)
             logger.info(f"BC_Listener socket set up successfully on port {self.port}")
         except Exception as e:
+            # See RT_socket.setup_socket() for why the half-built socket is
+            # dropped rather than left assigned (story C6.1).
+            try:
+                if self.socket_variable is not None:
+                    self.socket_variable.close()
+            except Exception:
+                pass
+            self.socket_variable = None
             logger.error(f"Error setting up BC_Listener socket: {str(e)}")
             raise
 
@@ -881,8 +890,17 @@ class BC_Listener:
         return health_status
     
     def check_health(self) -> bool:
-        health_status = self.running
-        logger.info(f"BC_Listener running status: {'running' if health_status else 'stopped'}")
+        """
+        Report whether the BC_Listener can actually receive, not merely whether
+        its thread is alive (story C6.1). Mirrors RT_Listener.check_health() --
+        see that method for the full rationale and the live evidence.
+        """
+        health_status = bool(self.running) and socket_is_bound(self.socket_variable, self.port)
+        logger.debug(
+            f"BC_Listener health: running={self.running} "
+            f"bound={socket_is_bound(self.socket_variable, self.port)} -> "
+            f"{'healthy' if health_status else 'unhealthy'}"
+        )
         return health_status
 
 # Global instances
