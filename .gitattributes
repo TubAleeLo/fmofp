@@ -1,0 +1,36 @@
+# Line-ending normalisation.
+#
+# WHY THIS EXISTS
+# ---------------
+# Every text blob in this repository is stored LF-only (verified: 612 of 612
+# tracked text files). Nothing in the repo declared that, so each clone was
+# left to guess from its own `core.autocrlf` setting. On a Windows clone with
+# autocrlf unset, git compared CRLF working-tree bytes against LF blobs and
+# reported 533 modified files, 194,476 insertions and 194,476 deletions, with
+# zero real content changes. That diff is indistinguishable at a glance from
+# catastrophic damage, and committing it would have rewritten the entire
+# repository's line endings for everyone.
+#
+# `text=auto` moves that decision out of each developer's local config and into
+# the repository, where it belongs: text is normalised to LF on commit and
+# checked out in the platform's native ending. This is exactly the behaviour
+# the affected clone already gets from `core.autocrlf=true`, so it changes
+# nothing for existing checkouts -- `git add --renormalize .` produces no diff.
+# It prevents the next clone from starting in the broken state.
+* text=auto
+
+# Binary formats. `text=auto` detects these correctly on its own (it looks for
+# NUL bytes), but stating them is cheaper than relying on a heuristic, and it
+# documents that 93.7% of this repo by weight is binary -- see backlog item
+# C19.1, which proposes moving the bundled wheels out of the tree entirely.
+*.whl   binary
+*.gz    binary
+*.mkv   binary
+*.png   binary
+*.PNG   binary
+*.jpg   binary
+*.jpeg  binary
+*.ico   binary
+*.pdf   binary
+*.db    binary
+

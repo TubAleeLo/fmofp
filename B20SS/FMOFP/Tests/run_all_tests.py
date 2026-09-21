@@ -64,6 +64,7 @@ SUITES = [
     (True,  "FMOFP.Tests.test_health_and_readiness", 300),
     (True,  "FMOFP.Tests.test_listener_retry_and_ports", 300),
     (True,  "FMOFP.Tests.test_data_root", 300),
+    (True,  "FMOFP.Tests.test_line_endings", 300),
     # Story C14: runs against a REAL booted application via
     # Tests/live_system.py, so it needs a longer budget than the unit
     # suites -- boot plus supervisory-convergence polling.
