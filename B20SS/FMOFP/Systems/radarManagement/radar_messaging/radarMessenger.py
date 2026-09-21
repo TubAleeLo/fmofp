@@ -54,6 +54,7 @@ from FMOFP.Interfaces.userInterface.displays.radar.radar_enums import (
     aewc_radarMode
 )
 from Utils.logger.sys_logger import get_logger
+from FMOFP.Utils.common.fetching import resolve_resource
 
 logger = get_logger()
 
@@ -98,7 +99,7 @@ class RadarMessenger:
 
     def load_address_book(self):
         try:
-            address_book_tree = ET.parse('FMOFP/local_messaging/messageConfigurations/address_book.xml')
+            address_book_tree = ET.parse(resolve_resource('FMOFP/local_messaging/messageConfigurations/address_book.xml'))
             address_book_root = address_book_tree.getroot()
             address_book = {}
             for system in address_book_root.findall('system'):

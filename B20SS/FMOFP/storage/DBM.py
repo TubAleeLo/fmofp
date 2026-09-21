@@ -15,6 +15,7 @@ from datetime import datetime
 from queue import Queue, Empty, PriorityQueue
 import concurrent.futures
 from FMOFP.Utils.logger.sys_logger import get_logger
+from FMOFP.Utils.common.fetching import resolve_resource, resolve_data_dir
 from FMOFP.Utils.common.operation_tracker import mark_operation_completed, is_operation_completed
 
 logger = get_logger()
@@ -1029,6 +1030,12 @@ class DatabaseManager:
         return cls._instance
 
     def __init__(self, config_path):
+        # Story C11b: resolve the config path against the package rather than the
+        # process CWD. 44 call sites pass the literal 'FMOFP/dbConfig.xml', which
+        # only ever worked because both entry points chdir() to the distribution
+        # root first. Resolving here fixes every one of those callers without
+        # touching them, and makes DatabaseManager usable from any directory.
+        config_path = resolve_resource(config_path)
         # Also guard __init__'s own initialized-check with the same lock:
         # __new__ alone only dedups object creation, but two threads that
         # both receive the same (newly created) instance could otherwise
@@ -1169,7 +1176,7 @@ class DatabaseManager:
         logger.debug("[DBM] Initializing system databases")
         
         # Create a directory for lock files if it doesn't exist
-        lock_dir = os.path.join('FMOFP', 'storage', 'locks')
+        lock_dir = resolve_data_dir('storage', 'locks')
         os.makedirs(lock_dir, exist_ok=True)
 
         # Ensure the databases directory exists for EVERY path below. The
@@ -1179,7 +1186,7 @@ class DatabaseManager:
         # went straight to SystemDatabase(...) and failed with "[DBM] Error
         # creating connection ...: unable to open database file" — live
         # reproduced August 2026.
-        os.makedirs(os.path.join('FMOFP', 'storage', 'databases'), exist_ok=True)
+        os.makedirs(resolve_data_dir('storage', 'databases'), exist_ok=True)
 
         for system_name, system_config in self.config['systems'].items():
             db_name = system_config.get('db_name')
@@ -1195,7 +1202,7 @@ class DatabaseManager:
             if is_operation_completed('db_init', f"{system_key}_db"):
                 # Make sure the system is in our systems dictionary regardless
                 if system_name not in self.systems:
-                    db_path = os.path.join('FMOFP', 'storage', 'databases', db_name)
+                    db_path = resolve_data_dir('storage', 'databases', db_name)
                     self.systems[system_name] = SystemDatabase(system_name, db_path, system_config, self.worker_pool)
                 continue
             
@@ -1205,7 +1212,7 @@ class DatabaseManager:
                 
                 # Make sure the system is in our systems dictionary regardless
                 if system_name not in self.systems:
-                    db_path = os.path.join('FMOFP', 'storage', 'databases', db_name)
+                    db_path = resolve_data_dir('storage', 'databases', db_name)
                     self.systems[system_name] = SystemDatabase(system_name, db_path, system_config, self.worker_pool)
                 
                 # Mark this operation as completed
@@ -1214,7 +1221,7 @@ class DatabaseManager:
 
             # Initialize the system database
             logger.debug(f"[DBM] Initializing database for system: {system_name}, db_name: {db_name}")
-            db_path = os.path.join('FMOFP', 'storage', 'databases', db_name)
+            db_path = resolve_data_dir('storage', 'databases', db_name)
             os.makedirs(os.path.dirname(db_path), exist_ok=True)
             self.systems[system_name] = SystemDatabase(system_name, db_path, system_config, self.worker_pool)
             

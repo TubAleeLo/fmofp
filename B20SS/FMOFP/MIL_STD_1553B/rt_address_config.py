@@ -19,6 +19,7 @@ from FMOFP.local_messaging.address_utils import (
     is_valid_rt_address,
     is_valid_subaddress
 )
+from FMOFP.Utils.common.fetching import resolve_resource
 
 logger = get_logger()
 
@@ -68,12 +69,12 @@ def _load_rt_config_from_file() -> Dict[str, Any]:
         config = DEFAULT_RT_CONFIG.copy()
         
         # Try to load from configuration file
-        config_file = os.path.join(os.path.join('FMOFP', 'rtAddressConfig.xml'))
+        config_file = resolve_resource(os.path.join('FMOFP', 'rtAddressConfig.xml'))
         
         if not os.path.exists(config_file):
             logger.warning(f"RT address configuration file not found: {config_file}")
             # Try to load from address book
-            address_book_file = os.path.join(os.path.join('FMOFP', 'local_messaging', 'messageConfigurations', 'address_book.xml'))
+            address_book_file = resolve_resource(os.path.join('FMOFP', 'local_messaging', 'messageConfigurations', 'address_book.xml'))
             if os.path.exists(address_book_file):
                 logger.info(f"Loading RT address configuration from address book: {address_book_file}")
                 return _load_from_address_book(address_book_file)
@@ -81,7 +82,7 @@ def _load_rt_config_from_file() -> Dict[str, Any]:
                 logger.warning(f"Address book file not found: {address_book_file}")
                 return config
 
-        COMMAND_REGISTRY_PATH = os.path.join('FMOFP', 'local_messaging', 'messageConfigurations', 'command_registry.xml')
+        COMMAND_REGISTRY_PATH = resolve_resource(os.path.join('FMOFP', 'local_messaging', 'messageConfigurations', 'command_registry.xml'))
         tree = ET.parse(config_file)
         root = tree.getroot()
         

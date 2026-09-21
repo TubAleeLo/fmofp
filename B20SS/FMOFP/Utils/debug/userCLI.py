@@ -25,6 +25,7 @@ from FMOFP.Systems.radarManagement.radar_enums import RadarMode
 from FMOFP.Systems.radarManagement.weather.weather_radar import weather_radarMode
 from FMOFP.Systems.radarManagement.radarControl import get_radar_management_system
 from FMOFP.local_messaging.command_word_map import RADAR_TYPES, COMMAND_REGISTRY
+from FMOFP.Utils.common.fetching import resolve_resource
 
 logger = get_logger()
 
@@ -220,7 +221,7 @@ class UserCLI:
                 self.debugging = debugging_elem is not None and debugging_elem.text.lower() == 'true'
                 self.prompt_printed = prompt_printed_elem is not None and prompt_printed_elem.text.lower() == 'true'
 
-            command_registry_file = os.path.join('FMOFP', 'local_messaging', 'messageConfigurations', 'command_registry.xml')
+            command_registry_file = resolve_resource(os.path.join('FMOFP', 'local_messaging', 'messageConfigurations', 'command_registry.xml'))
             command_registry_tree = ET.parse(command_registry_file)
             command_registry_root = command_registry_tree.getroot()
             command_words_config = command_registry_root.find('command_words')

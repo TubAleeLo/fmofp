@@ -10,6 +10,7 @@ from core.system_manager import get_system_manager
 from Utils.common.thread_manager import ThreadManager
 from Utils.logger.sys_logger import SysLogger
 from FMOFP.Utils.logger.sys_logger import get_logger
+from FMOFP.Utils.common.fetching import resolve_resource
 
 logger = get_logger()
 sys_logger = logger
@@ -42,7 +43,7 @@ class ApplicationController:
 
     def load_logging_config(self):
         try:
-            tree = ET.parse('FMOFP/startupConfiguration.xml')
+            tree = ET.parse(resolve_resource('FMOFP/startupConfiguration.xml'))
             root = tree.getroot()
             command_interface_element = root.find('./logging/logging_enabled')
             if command_interface_element is not None:
@@ -55,7 +56,7 @@ class ApplicationController:
 
     def load_debugging_config(self):
         try:
-            tree = ET.parse('FMOFP/startupConfiguration.xml')
+            tree = ET.parse(resolve_resource('FMOFP/startupConfiguration.xml'))
             root = tree.getroot()
             command_interface_element = root.find('./logging/debugging')
             if command_interface_element is not None:
@@ -68,7 +69,7 @@ class ApplicationController:
 
     def load_command_interface(self):
         try:
-            tree = ET.parse('FMOFP/startupConfiguration.xml')
+            tree = ET.parse(resolve_resource('FMOFP/startupConfiguration.xml'))
             root = tree.getroot()
             command_interface_element = root.find('./logging/commandInterface')
             if command_interface_element is not None:

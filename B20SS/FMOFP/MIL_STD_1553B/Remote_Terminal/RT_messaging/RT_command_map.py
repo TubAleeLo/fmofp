@@ -8,6 +8,7 @@ Simplified version of command_word_map.py for RT use.
 import xml.etree.ElementTree as ET
 from typing import Dict, Tuple, Any
 from FMOFP.Utils.logger.sys_logger import get_logger
+from FMOFP.Utils.common.fetching import resolve_resource
 
 logger = get_logger()
 
@@ -77,7 +78,7 @@ def _load_command_registry() -> Dict[str, str]:
     """Load command registry from XML file."""
     try:
         registry = {}
-        tree = ET.parse('FMOFP/local_messaging/messageConfigurations/command_registry.xml')
+        tree = ET.parse(resolve_resource('FMOFP/local_messaging/messageConfigurations/command_registry.xml'))
         root = tree.getroot()
         
         for cmd in root.findall('.//command'):
@@ -103,7 +104,7 @@ def _load_address_book() -> Tuple[Dict[int, str], Dict[Tuple[int, int], str]]:
         system_map = {}  # RT address -> system id
         subsystem_map = {}  # (RT address, subaddress) -> subsystem id
         
-        tree = ET.parse('FMOFP/local_messaging/messageConfigurations/address_book.xml')
+        tree = ET.parse(resolve_resource('FMOFP/local_messaging/messageConfigurations/address_book.xml'))
         root = tree.getroot()
         
         # Load systems

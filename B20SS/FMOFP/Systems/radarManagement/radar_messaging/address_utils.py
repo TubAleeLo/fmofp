@@ -7,11 +7,12 @@ Provides handling for radar subsystems according to MIL-STD-1553B protocol.
 import os
 import xml.etree.ElementTree as ET
 from FMOFP.Utils.logger.sys_logger import get_logger
+from FMOFP.Utils.common.fetching import resolve_resource
 
 logger = get_logger()
 
 # Path to the address book XML file
-ADDRESS_BOOK_PATH = os.path.join('FMOFP', 'Systems', 'radarManagement', 'radar_messaging', 'radar_address_book.xml')
+ADDRESS_BOOK_PATH = resolve_resource(os.path.join('FMOFP', 'Systems', 'radarManagement', 'radar_messaging', 'radar_address_book.xml'))
 
 # List of radar subsystem IDs
 RADAR_SUBSYSTEMS = ['weather_radar', 'tfr_radar', 'sar_radar', 'targeting_radar', 'aewc_radar']

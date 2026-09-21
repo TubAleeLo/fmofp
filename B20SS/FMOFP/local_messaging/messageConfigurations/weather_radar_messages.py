@@ -4,6 +4,7 @@ from dataclasses import dataclass
 from FMOFP.local_messaging.messageConfigurations.base_message import BaseMessage, register_message_type
 from FMOFP.local_messaging.routing.handlers.sync_handler.AsyncMessageHandler import AsyncMessageHandler
 from FMOFP.local_messaging.command_word_map import COMMAND_REGISTRY, register_command_word
+from FMOFP.Utils.common.fetching import resolve_resource
 
 # Register all necessary message types for local messaging
 @dataclass
@@ -116,7 +117,7 @@ register_message_type("weather_radarStatus", weather_radarStatus)
 # Load address book for system identification
 try:
     # Try to load the address book from the file
-    address_book_tree = ET.parse('FMOFP/local_messaging/messageConfigurations/address_book.xml')
+    address_book_tree = ET.parse(resolve_resource('FMOFP/local_messaging/messageConfigurations/address_book.xml'))
     address_book_root = address_book_tree.getroot()
 
     # Create system address mapping

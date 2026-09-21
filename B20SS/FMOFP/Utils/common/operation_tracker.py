@@ -11,11 +11,15 @@ from datetime import datetime
 from typing import Callable, Optional, Any, Dict
 
 from FMOFP.Utils.logger.sys_logger import get_logger
+from FMOFP.Utils.common.fetching import resolve_data_dir
 
 logger = get_logger()
 
 # Create tracking directory if it doesn't exist
-TRACKING_DIR = os.path.join('FMOFP', 'tracking')
+# Story C11b: package-relative, not CWD-relative. This executes at IMPORT
+# time and is followed by os.makedirs(), so the CWD-relative form silently
+# created an FMOFP/tracking directory wherever the process happened to start.
+TRACKING_DIR = resolve_data_dir('tracking')
 os.makedirs(TRACKING_DIR, exist_ok=True)
 
 # Thread safety for file operations

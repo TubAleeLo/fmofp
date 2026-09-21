@@ -33,8 +33,17 @@ except ImportError:
 # so those paths resolve correctly whether SystemStart.py is run as:
 #   cd B20SS      && py FMOFP/SystemStart.py   (CWD already correct)
 #   cd B20SS/FMOFP && py SystemStart.py        (CWD was wrong — fixed here)
-if os.path.abspath(os.getcwd()) != os.path.abspath(_ROOT):
-    os.chdir(_ROOT)
+# Story C11b: the os.chdir(_ROOT) that used to sit here is gone. It existed
+# because config and database paths were written CWD-relative ('FMOFP/dbConfig.xml',
+# os.path.join('FMOFP','storage','databases',...)), so the process had to relocate
+# itself before anything could be read. Those are now resolved against the package
+# (Utils/common/fetching.resolve_resource / resolve_data_dir), so the working
+# directory no longer changes program behaviour.
+#
+# chdir() is process-global: it changed the CWD for anything embedding this code,
+# and once the project became pip-installable it pointed the process at
+# site-packages, where an installed run proceeded to create 11 SQLite databases
+# and a log file. Relocating that data out of the package entirely is story C13.
 # ─────────────────────────────────────────────────────────────────────────────
 import Utils.common.fetching as fetching
 from FMOFP.Utils.logger.sys_logger import get_logger

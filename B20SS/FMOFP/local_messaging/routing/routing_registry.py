@@ -63,6 +63,8 @@ from FMOFP.local_messaging.message_types import (
 # RoutingRegistry.get_rt_address_by_system()/get_subaddress() methods below,
 # which are what callers actually use. Removed.
 
+from FMOFP.Utils.common.fetching import resolve_resource
+
 logger = get_logger()
 
 class RoutingRegistry:
@@ -90,7 +92,15 @@ class RoutingRegistry:
                 logger.info("RoutingRegistry initialized")
 
     def load_from_xml(self, address_book_path, command_registry_path):
-        """Load routing information from XML files."""
+        """Load routing information from XML files.
+
+        Story C11b: both paths are resolved against the package rather than the
+        process CWD. Callers pass distribution-root-relative literals such as
+        'FMOFP/local_messaging/messageConfigurations/address_book.xml', which
+        previously depended on the entry point having chdir'd first.
+        """
+        address_book_path = resolve_resource(address_book_path)
+        command_registry_path = resolve_resource(command_registry_path)
         self._load_address_book(address_book_path)
         self._load_command_registry(command_registry_path)
         self._initialize_special_cases()

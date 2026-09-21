@@ -13,6 +13,7 @@ from typing import List
 from xml.etree import ElementTree as ET
 from FMOFP.MIL_STD_1553B.mil_std_1553B  import MIL_STD_1553B_Message
 from FMOFP.Utils.logger.sys_logger import get_logger
+from FMOFP.Utils.common.fetching import resolve_resource
 
 logger = get_logger()
 
@@ -83,7 +84,7 @@ class MessageQueueManager:
     def _load_address_book(self):
         """Load address book from XML."""
         try:
-            address_book_tree = ET.parse('FMOFP/local_messaging/messageConfigurations/address_book.xml')
+            address_book_tree = ET.parse(resolve_resource('FMOFP/local_messaging/messageConfigurations/address_book.xml'))
             address_book_root = address_book_tree.getroot()
             address_book = {}
             for system in address_book_root.findall('system'):
