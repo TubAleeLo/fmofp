@@ -22,6 +22,10 @@ from FMOFP.Systems.radarManagement.radar_messaging.address_utils import (
     get_system_id_for_addressing
 )
 
+from FMOFP.Utils.common.precipitation_scale import (
+    RATE_SCALE, INTENSITY_SCALE, TYPE_NAME_TO_CODE, DEFAULT_TYPE,
+)
+
 logger = get_logger()
 
 class DataResponseSender:
@@ -288,9 +292,10 @@ class DataResponseSender:
         # Scaling factors for 6-bit fields (0-63):
         #   RATE_SCALE=2      → range 0–31.5 mm/hr, resolution 0.5 mm/hr
         #   INTENSITY_SCALE=63 → range 0–1.0, resolution 1/63 ≈ 0.016
-        # These constants must match precipitation_data_handler.extract_and_store_binary_data.
-        RATE_SCALE = 2.0
-        INTENSITY_SCALE = 63.0
+        # B9: these were literals here and had to "match" four decoders by
+        # convention; three of them did not. They now come from one module that
+        # every decoder imports, so drift is a merge conflict rather than a
+        # thunderstorm rendered green.
 
         # Word 0: number of objects
         encoded_data.append(len(objects_list))
@@ -347,8 +352,9 @@ class DataResponseSender:
                     #   Bits 15-12 (4 bits): type_code
                     #   Bits 11-6  (6 bits): rate_code  = min(63, int(rate * RATE_SCALE))
                     #   Bits  5-0  (6 bits): intensity_code = min(63, int(intensity * INTENSITY_SCALE))
-                    type_map   = {'rain': 0, 'snow': 1, 'sleet': 2, 'hail': 3, 'mixed': 4}
-                    type_code  = type_map.get(getattr(obj, 'type', 'rain'), 0)
+                    type_code  = TYPE_NAME_TO_CODE.get(
+                        getattr(obj, 'type', DEFAULT_TYPE),
+                        TYPE_NAME_TO_CODE[DEFAULT_TYPE])
                     rate       = getattr(obj, 'rate', 0.0)
                     rate_code  = max(0, min(63, int(rate * RATE_SCALE)))
                     intensity  = getattr(obj, 'intensity', 0.5)

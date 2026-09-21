@@ -22,6 +22,10 @@ from ...messaging.display_message_types import (
 
 from FMOFP.Utils.logger.sys_logger import get_logger
 
+from FMOFP.Utils.common.precipitation_scale import (
+    RATE_SCALE, INTENSITY_SCALE, TYPE_CODE_TO_NAME,
+)
+
 logger = get_logger()
 
 # Define data type constants
@@ -525,26 +529,35 @@ class RadarDisplayDataCoordinator:
                         type_bits = clean_binary[16:20]
                         rate_bits = clean_binary[20:26]
 
-                        # Map type value to precipitation type
+                        # BLOCKER B9: the type list here was
+                        # ['rain','snow','sleet','hail'], one short of the
+                        # encoder's map -- so 'mixed' (code 4) fell off the end
+                        # and was dropped entirely, while the rate and intensity
+                        # scale factors below were "from the logs" rather than
+                        # from the encoder: * 0.01 and * 0.0002 against an
+                        # encoder writing rate * 2 and intensity * 63. Intensity
+                        # came out about 79x low, which is why severe cells
+                        # rendered in the lightest colour band. All three now
+                        # come from Utils/common/precipitation_scale.
                         type_value = int(type_bits, 2)
-                        precip_types = ['rain', 'snow', 'sleet', 'hail']
-                        if type_value < len(precip_types):
-                            item_dict['type'] = precip_types[type_value]
-                            item_dict['precip_type'] = precip_types[type_value]
-                            logger.warning(f"[RADAR_DATA_COORD] Extracted type: {item_dict['type']} (value: {type_value})")
+                        precip_type = TYPE_CODE_TO_NAME.get(type_value)
+                        if precip_type is not None:
+                            item_dict['type'] = precip_type
+                            item_dict['precip_type'] = precip_type
+                            logger.debug(f"[RADAR_DATA_COORD] Extracted type: {precip_type} (value: {type_value})")
+                        else:
+                            logger.debug(f"[RADAR_DATA_COORD] Unknown precipitation type code {type_value}")
 
-                        # Extract rate with proper scaling factor (matching transfer aggregator)
-                        rate_value = int(rate_bits, 2) * 0.01  # Scale factor from logs
+                        rate_value = int(rate_bits, 2) / RATE_SCALE
                         item_dict['rate'] = rate_value
-                        logger.warning(f"[RADAR_DATA_COORD] Extracted rate: {rate_value} (bits: {rate_bits})")
+                        logger.debug(f"[RADAR_DATA_COORD] Extracted rate: {rate_value} (bits: {rate_bits})")
 
                     # Extract intensity if available
                     if len(clean_binary) >= 32:
                         intensity_bits = clean_binary[26:32]
-                        # Use the correct scaling factor from the logs (1/5000.0 according to transfer aggregator)
-                        intensity_value = int(intensity_bits, 2) * 0.0002
+                        intensity_value = int(intensity_bits, 2) / INTENSITY_SCALE
                         item_dict['intensity'] = min(intensity_value, 1.0)  # Cap at 1.0
-                        logger.warning(f"[RADAR_DATA_COORD] Extracted intensity: {intensity_value} (bits: {intensity_bits})")
+                        logger.debug(f"[RADAR_DATA_COORD] Extracted intensity: {intensity_value} (bits: {intensity_bits})")
 
                     # Add to processed items - even with 0,0 coordinates (removed position filter)
                     logger.warning(f"[RADAR_DATA_COORD] Created precipitation object from binary: {item_dict}")

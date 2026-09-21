@@ -77,6 +77,10 @@ SUITES = [
     # had already moved), and the radar mode-lookup tables being enum members
     # rather than dicts, so every lookup by mode name fell back to STANDBY.
     (True,  "FMOFP.Tests.test_blocker_command_paths", 300),
+    # Production blocker B9: one encoder, five decoders, four different sets of
+    # precipitation scale factors -- severe weather decoded ~79x low and
+    # rendered in the lightest colour band. Round-trip assertions.
+    (True,  "FMOFP.Tests.test_blocker_precip_scale", 300),
     # Story C14.3: four radars swept across every commandable mode against a
     # live system, plus phase-policy and request-dispatch assertions.
     (True,  "FMOFP.Tests.test_radar_modes_live", 420),

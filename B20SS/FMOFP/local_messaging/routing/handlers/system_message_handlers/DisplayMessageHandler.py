@@ -32,6 +32,10 @@ from FMOFP.local_messaging.message_types import (
     is_vil_message, is_precipitation_message, is_mode_change_message
 )
 
+from FMOFP.Utils.common.precipitation_scale import (
+    RATE_SCALE, INTENSITY_SCALE, TYPE_CODE_TO_NAME, DEFAULT_TYPE,
+)
+
 logger = get_logger()
 
 class DisplayMessageHandler:
@@ -1343,13 +1347,18 @@ class DisplayMessageHandler:
                             rate_bits = (attribute_value >> 6) & 0x3F     # Middle 6 bits
                             intensity_bits = attribute_value & 0x3F       # Bottom 6 bits
 
-                            # Map type value to precipitation type (same as transfer aggregator)
-                            type_map = {0: 'rain', 1: 'snow', 2: 'sleet', 3: 'hail', 4: 'mixed'}
-                            precip_type = type_map.get(type_bits, 'rain')
-
-                            # Scale values exactly like transfer aggregator
-                            rate = rate_bits * 0.01  # Match transfer aggregator scale factor
-                            intensity = intensity_bits * 0.0002  # Match transfer aggregator scale factor
+                            # BLOCKER B9: "scale values exactly like transfer
+                            # aggregator" -- which was itself wrong. * 0.01 and
+                            # * 0.0002 against an encoder writing rate * 2 and
+                            # intensity * 63 put intensity about 79x low and
+                            # rate 50x low, so severe weather arrived at the
+                            # display inside the lightest colour band. Scale
+                            # factors and the type map now come from
+                            # Utils/common/precipitation_scale, which the
+                            # encoder reads too.
+                            precip_type = TYPE_CODE_TO_NAME.get(type_bits, DEFAULT_TYPE)
+                            rate = rate_bits / RATE_SCALE
+                            intensity = intensity_bits / INTENSITY_SCALE
 
                             # Create precipitation data object
                             formatted_data = {
@@ -1430,12 +1439,14 @@ class DisplayMessageHandler:
                     type_value = int(type_bits, 2)
                     rate_value = int(rate_bits, 2)
 
-                    # Map type value to precipitation type
-                    precip_types = ['rain', 'snow', 'sleet', 'hail']
-                    precip_type = precip_types[min(type_value, len(precip_types)-1)]
+                    # BLOCKER B9: this list was one short of the encoder's map,
+                    # so 'mixed' (code 4) was clamped to 'hail' by the min();
+                    # the rate factor was "typically 0.01 as seen in the logs"
+                    # rather than the encoder's. Both now come from
+                    # Utils/common/precipitation_scale.
+                    precip_type = TYPE_CODE_TO_NAME.get(type_value, DEFAULT_TYPE)
 
-                    # Scale rate (typically 0.01 factor as seen in transfer aggregator logs)
-                    rate = rate_value * 0.01
+                    rate = rate_value / RATE_SCALE
 
                     formatted_data['type'] = precip_type
                     formatted_data['precip_type'] = precip_type  # Add both fields for compatibility
@@ -1451,8 +1462,8 @@ class DisplayMessageHandler:
                     intensity_bits = clean_binary[26:32]
                     intensity_value = int(intensity_bits, 2)
 
-                    # Scale intensity (typically 0.0002 factor as seen in transfer aggregator)
-                    intensity = intensity_value * 0.0002
+                    # B9: see above -- the encoder's constant, not the log's.
+                    intensity = intensity_value / INTENSITY_SCALE
                     formatted_data['intensity'] = min(intensity, 1.0)  # Cap at 1.0
                     logger.debug(f"[PRECIP_CONVERTER] Extracted intensity: {intensity}")
             except Exception as int_error:
