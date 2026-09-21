@@ -3,6 +3,7 @@ import os
 import sqlite3
 import hashlib
 from typing import Optional
+from FMOFP.Utils.common.fetching import resolve_data_dir
 from FMOFP.Utils.logger.sys_logger import get_logger
 
 logger = get_logger()
@@ -10,7 +11,14 @@ logger = get_logger()
 class paths:
     def __init__(self):
         self.project_root = self._find_project_root()
-        self.db_path = os.path.join(self.project_root, '.import_cache.db')
+        # Story C13: the import cache is runtime-written data, so it belongs
+        # under the data root rather than beside the code. Previously it was
+        # created at project_root, which for an INSTALLED package resolves to
+        # site-packages -- this was the last writer still putting a SQLite
+        # file inside the installed distribution. It reaches every boot
+        # because Utils/debug/userCLI.py imports this module at load time.
+        self.db_path = resolve_data_dir('.import_cache.db')
+        os.makedirs(os.path.dirname(self.db_path), exist_ok=True)
         self.conn = sqlite3.connect(self.db_path)
         self.c = self.conn.cursor()
         self.skipped_files_count = 0

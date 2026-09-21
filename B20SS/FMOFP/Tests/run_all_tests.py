@@ -49,6 +49,7 @@ SUITES = [
     (True,  "FMOFP.Tests.test_radar_shutdown_health", 300),
     (True,  "FMOFP.Tests.test_health_and_readiness", 300),
     (True,  "FMOFP.Tests.test_listener_retry_and_ports", 300),
+    (True,  "FMOFP.Tests.test_data_root", 300),
 ]
 
 

@@ -4,7 +4,7 @@ import sys
 import os
 import xml.etree.ElementTree as ET
 from datetime import datetime
-from FMOFP.Utils.common.fetching import fetch_fmofp_path
+from FMOFP.Utils.common.fetching import data_root, fetch_fmofp_path, resolve_data_dir
 from FMOFP.Utils.logger.test_log_handler import TestLogHandler
 
 class Singleton(type):
@@ -125,14 +125,14 @@ class SysLogger(metaclass=Singleton):
 
     def ensure_logs_directory(self):
         """Create logs directory if it doesn't exist"""
-        logs_dir = os.path.join(fetch_fmofp_path(), 'logs')
+        logs_dir = resolve_data_dir('logs')
         if not os.path.exists(logs_dir):
             os.makedirs(logs_dir)
         return logs_dir
 
     def cleanup_old_logs(self):
         """Remove all existing log files"""
-        logs_dir = os.path.join(fetch_fmofp_path(), 'logs')
+        logs_dir = resolve_data_dir('logs')
         if os.path.exists(logs_dir):
             for file in os.listdir(logs_dir):
                 if file.endswith('.log'):
@@ -205,7 +205,7 @@ class SysLogger(metaclass=Singleton):
             self.root_logger.addHandler(file_handler)
             
             # Create and add TestLogHandler to root logger
-            test_log_handler = TestLogHandler(fetch_fmofp_path())
+            test_log_handler = TestLogHandler(data_root())
             test_log_handler.setLevel(logging.DEBUG)
             self.root_logger.addHandler(test_log_handler)
 

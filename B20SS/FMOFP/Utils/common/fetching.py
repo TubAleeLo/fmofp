@@ -64,23 +64,83 @@ def resolve_resource(path):
     return path
 
 
-def resolve_data_dir(*parts):
-    """Absolute path to a writable data location inside the package.
+_data_root_cache = None
 
-    Split out from resolve_resource() because the two have different futures:
-    resources are read-only and ship with the distribution, whereas data
-    (databases, logs) is written at runtime and should move out of the package
-    entirely -- that is story C13. Routing every writer through here now means
-    C13 changes one function instead of hunting call sites again.
+
+def _looks_installed(package_dir):
+    """True when the package lives in an installed location rather than a checkout."""
+    parts = package_dir.replace('\\', '/').lower().split('/')
+    return 'site-packages' in parts or 'dist-packages' in parts
+
+
+def _platform_data_dir():
+    """The conventional per-user writable data location for this OS."""
+    if sys.platform == 'win32':
+        base = os.environ.get('LOCALAPPDATA') or os.path.expanduser(r'~\AppData\Local')
+        return os.path.join(base, 'FMOFP')
+    if sys.platform == 'darwin':
+        return os.path.expanduser('~/Library/Application Support/FMOFP')
+    base = os.environ.get('XDG_STATE_HOME') or os.path.expanduser('~/.local/state')
+    return os.path.join(base, 'fmofp')
+
+
+def data_root():
+    """Root directory for everything this program WRITES (story C13).
+
+    Databases, logs, lock files and operation-tracking files all live under
+    here. Configuration and other read-only resources do not -- those ship with
+    the distribution and are resolved by resolve_resource().
+
+    Resolution order, highest first:
+
+      1. FMOFP_DATA_DIR, if set. An explicit answer always wins, which is what
+         makes the program deployable into a container or a service account's
+         state directory without patching it.
+
+      2. The platform's per-user data location, when the package is INSTALLED
+         (its path is under site-packages/dist-packages):
+             Windows  %LOCALAPPDATA%\FMOFP
+             macOS    ~/Library/Application Support/FMOFP
+             Linux    $XDG_STATE_HOME/fmofp, else ~/.local/state/fmofp
+         This is the case story C11a made visible: an installed run previously
+         created 11 SQLite databases and a log file inside site-packages,
+         because the data path was the package path. Writing runtime state into
+         an installed package is wrong even when the directory happens to be
+         writable -- it is lost on upgrade, shared between users of a system
+         install, and breaks a read-only deployment outright.
+
+      3. The package directory itself, for a source checkout. This is the
+         historical behaviour and is kept deliberately: a developer running
+         from a clone expects logs and databases next to the code, .gitignore
+         already covers both, and silently relocating them to a hidden
+         per-user directory would be a worse surprise than the one being fixed.
+
+    Cached, so the answer cannot change mid-run. Tests use reset_data_root().
     """
-    return os.path.join(fetch_fmofp_path(), *parts)
+    global _data_root_cache
+    if _data_root_cache is None:
+        override = os.environ.get('FMOFP_DATA_DIR')
+        if override:
+            _data_root_cache = os.path.abspath(os.path.expanduser(override))
+        else:
+            package_dir = fetch_fmofp_path()
+            _data_root_cache = (_platform_data_dir() if _looks_installed(package_dir)
+                                else package_dir)
+    return _data_root_cache
 
-# Add project paths immediately when this module is imported
-fetch()
+
+def reset_data_root():
+    """Drop the cached data root. For tests only."""
+    global _data_root_cache
+    _data_root_cache = None
 
 
+def resolve_data_dir(*parts):
+    """Absolute path to a writable location under data_root() (story C11b/C13).
 
-# For debugging purposes
-if __name__ == "__main__":
-    print(f"Project root: {fetch_project_root()}")
-    print(f"FMOFP path: {fetch_fmofp_path()}")
+    Split from resolve_resource() because the two have different lifecycles:
+    resources are read-only and ship with the distribution, data is written at
+    runtime. Every writer in the codebase goes through here, which is what made
+    C13 a change to one function rather than another hunt for call sites.
+    """
+    return os.path.join(data_root(), *parts)
