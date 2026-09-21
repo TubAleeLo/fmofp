@@ -456,34 +456,22 @@ class UserCLI:
             raise
 
     async def predefined_messages_test(self):
-        """Run the Comprehensive Predefined Messages Test"""
+        """Run the predefined-message assertions against the RUNNING system (C14.6)."""
         try:
-            # Import test module dynamically to avoid circular imports
-            test_module = _import_test_module('FMOFP.Tests.predefined_messages_test')
-            test_class = getattr(test_module, 'PredefinedMessagesTest')
+            from FMOFP.Tests.test_predefined_messages_live import body as pm_body
+            from FMOFP.core.system_manager import get_system_manager
 
-            # Setup test environment
-            logger.info("Setting up test environment")
-            test_suite = test_class()
+            logger.info("\nStarting Predefined Messages Test...")
+            failures = await pm_body(get_system_manager())
 
-
-            logger.info("\nStarting Comprehensive Predefined Messages Test...")
-            result = await test_suite.run_tests()
-
-            # Process test results
-            logger.info("\nTest completed!")
-
-
-            # Process test results
-            if result:
+            if failures == 0:
                 logger.info("\nPredefined Messages Test completed successfully!")
             else:
-                logger.error("\nPredefined Messages Test failed!")
-                raise RuntimeError("Predefined Messages Test failed")
+                logger.error(f"\nPredefined Messages Test failed: {failures} assertion(s)")
+                raise RuntimeError(f"Predefined Messages Test failed: {failures} assertion(s)")
 
         except Exception as e:
             logger.error(f"Test suite error: {str(e)}", exc_info=True)
-            # Re-raise to ensure failure is caught by caller
             raise
 
     async def weather_radar_all_modes_test(self):
