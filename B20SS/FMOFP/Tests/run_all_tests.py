@@ -16,24 +16,36 @@ Suites deliberately NOT run here, with reasons:
   - CLI-harness-only tests (exit 1 by design when run standalone, printing
     "This test should be run via the user CLI 'test' command"):
       fms_system_test, flight_control_system_test, predefined_messages_test,
-      combined_precipitation_vil_flow_test, weather_radar_surveillance_mode_test,
-      radar_tests/{weather,targeting,sar,tfr,aewc}_radar_test
+      radar_tests/{targeting,sar,tfr,aewc}_radar_test
 
-    Story C14 removed the BLOCKER for these: Tests/live_system.py boots the
+    Story C14.1 removed the BLOCKER for these: Tests/live_system.py boots the
     real application in-process (~1.2s to NORMAL) and runs a test body against
     it, so needing a live system is no longer a reason to skip a suite.
 
     They remain excluded for a different reason, found once they could be run:
-    all ten verify by regex-matching captured LOG PROSE rather than checking
-    state. Run live, radar_tests/weather_radar_test reports 17 tests with 14
-    failing, every failure a missing log phrase -- while the behaviour those
-    phrases were standing in for works. Assertions coupled to log wording break
-    on a reword and pass by coincidence, so wiring them in as-is would make CI
-    permanently red without testing anything.
+    they verify by regex-matching captured LOG PROSE rather than checking
+    state. Worse, several of those patterns cannot fail -- e.g.
+    `(f"Using request ID|request_id", ...)` matches the application's own debug
+    formatting, and `(f"Sending mode change completion notification|{mode.name}",
+    ...)` is satisfied by the bare mode name the test itself logs. Wiring them
+    in as-is would add CI time without adding verification.
 
-    test_weather_radar_live.py is the reference conversion: same subject,
-    assertions against real state. Converting the remaining nine to that
-    pattern is its own story.
+    test_weather_radar_live.py is the reference conversion: same subjects,
+    assertions against real state. Converting the remaining seven to that
+    pattern is scoped as stories C14.3 - C14.6.
+
+  - Three suites were DELETED rather than converted (stories C14.2, C14.7),
+    because test_weather_radar_live.py covers their subjects:
+      radar_tests/weather_radar_test.py          (superseded outright)
+      weather_radar_surveillance_mode_test.py    (orphaned -- nothing could
+                                                  run it; not in this list, not
+                                                  in the CLI menu)
+      combined_precipitation_vil_flow_test.py    (728 lines whose entire live
+                                                  assertion was that a send
+                                                  returned an ID; its VIL half
+                                                  was commented out from the
+                                                  initial commit onwards)
+
   - test_weather_radar_holographic_display: interactive GUI test — enters
     QApplication.exec() and never exits; visual inspection only.
   - performance_profile: a profiler, not a pass/fail test.

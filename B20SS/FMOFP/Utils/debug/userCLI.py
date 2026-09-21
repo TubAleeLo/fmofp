@@ -377,38 +377,41 @@ class UserCLI:
             # Ensure command is marked as processed
             self.command_processed.set()
 
-    async def combined_precipitation_vil_flow_test(self):
-        """Run the combined precipitation and VIL display flow test"""
+    async def _run_weather_radar_live(self, title: str):
+        """Run the weather radar state-assertion suite against the RUNNING system.
+
+        Stories C14.2 and C14.7 deleted three log-scraping suites that this menu
+        used to reach -- radar_tests/weather_radar_test.py,
+        weather_radar_surveillance_mode_test.py and
+        combined_precipitation_vil_flow_test.py. Their subjects are all covered
+        by Tests/test_weather_radar_live.py, which asserts state instead of
+        regex-matching log prose.
+
+        That suite's body takes a started SystemManager, so the CLI can run the
+        very same assertions in-place without booting a second system -- the CI
+        harness and this menu are now two entry points to one test body, rather
+        than two test bodies that drift apart.
+        """
         try:
-            # Import test module dynamically to avoid circular imports
-            test_module = _import_test_module('FMOFP.Tests.combined_precipitation_vil_flow_test')
-            test_class = getattr(test_module, 'TestCombinedPrecipitationVILFlow')
+            from FMOFP.Tests.test_weather_radar_live import body as weather_radar_live_body
+            from FMOFP.core.system_manager import get_system_manager
 
-            # Setup test environment
-            logger.info("Setting up test environment")
-            test_suite = test_class()
+            logger.info(f"\nStarting {title}...")
+            failures = await weather_radar_live_body(get_system_manager())
 
-            # Run the full test sequence
-            logger.info("\nStarting Combined Precipitation and VIL Display Flow Test...")
-            # NOTE (production readiness re-analysis, August 2026): this used to
-            # discard run_tests()'s return value entirely and unconditionally log
-            # "Test completed successfully!" even when the underlying test recorded
-            # a failure -- run_tests() in this module does compute a real pass/fail
-            # result internally, it just was never inspected here. Now checked, same
-            # pattern already used correctly by predefined_messages_test() below.
-            result = await test_suite.run_tests()
-
-            # Process test results
-            if result:
-                logger.info("\nTest completed successfully!")
+            if failures == 0:
+                logger.info(f"\n{title} completed successfully!")
             else:
-                logger.error("\nCombined Precipitation and VIL Display Flow Test failed!")
-                raise RuntimeError("Combined Precipitation and VIL Display Flow Test failed")
+                logger.error(f"\n{title} failed: {failures} assertion(s)")
+                raise RuntimeError(f"{title} failed: {failures} assertion(s)")
 
         except Exception as e:
             logger.error(f"Test suite error: {str(e)}", exc_info=True)
-            # Re-raise to ensure failure is caught by caller
             raise
+
+    async def combined_precipitation_vil_flow_test(self):
+        """Run the precipitation/VIL data-flow assertions (see _run_weather_radar_live)."""
+        await self._run_weather_radar_live("Weather Radar Data Flow Test")
 
     async def fms_system_test(self):
         """Run the Flight Management System test"""
@@ -509,31 +512,8 @@ class UserCLI:
             raise
 
     async def weather_radar_all_modes_test(self):
-        """Run the comprehensive Weather Radar modes test"""
-        try:
-            # Import test module dynamically to avoid circular imports
-            test_module = _import_test_module('FMOFP.Tests.radar_tests.weather_radar_test')
-            test_class = getattr(test_module, 'WeatherRadarTest')
-
-            # Setup test environment
-            logger.info("Setting up test environment")
-            test_suite = test_class()
-
-            # Run the full test sequence
-            logger.info("\nStarting Comprehensive Weather Radar Mode Test...")
-            result = await test_suite.run_tests()
-
-            # Process test results
-            if result:
-                logger.info("\nWeather Radar Test completed successfully!")
-            else:
-                logger.error("\nWeather Radar Test failed!")
-                raise RuntimeError("Weather Radar Test failed")
-
-        except Exception as e:
-            logger.error(f"Test suite error: {str(e)}", exc_info=True)
-            # Re-raise to ensure failure is caught by caller
-            raise
+        """Run the Weather Radar mode assertions (see _run_weather_radar_live)."""
+        await self._run_weather_radar_live("Weather Radar Mode Test")
 
     async def tfr_radar_all_modes_test(self):
         """Run the comprehensive TFR Radar modes test"""

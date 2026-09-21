@@ -10,6 +10,9 @@ them standalone printed "This test should be run via the user CLI 'test'
 command" and exited 1. That is two thirds of the project's test code never
 executing in CI, covering the largest and most-changed part of the codebase.
 
+(Three of those ten have since been deleted rather than converted -- see
+stories C14.2 and C14.7 and the note in run_all_tests.py. Seven remain.)
+
 They were not neglected. They genuinely need a live system: their subjects are
 components reached through SystemManager, and the message paths they exercise
 only work once the async handler, routing service and display tree are all
