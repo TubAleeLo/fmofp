@@ -414,36 +414,26 @@ class UserCLI:
         await self._run_weather_radar_live("Weather Radar Data Flow Test")
 
     async def fms_system_test(self):
-        """Run the Flight Management System test"""
+        """Run the FMS state assertions against the RUNNING system (story C14.4).
+
+        Replaces fms_system_test.py, which verified by regex over captured log
+        output. Same entry point the CI suite uses.
+        """
         try:
-            # Import test module dynamically to avoid circular imports
-            test_module = _import_test_module('FMOFP.Tests.fms_system_test')
-            test_class = getattr(test_module, 'TestFMSSystem')
+            from FMOFP.Tests.test_fms_live import body as fms_body
+            from FMOFP.core.system_manager import get_system_manager
 
-            # Setup test environment
-            logger.info("Setting up test environment")
-            test_suite = test_class()
+            logger.info("\nStarting Flight Management System Test...")
+            failures = await fms_body(get_system_manager())
 
-            # Run the full test sequence
-            logger.info("\nStarting FMS System Test...")
-            # NOTE (production readiness re-analysis, August 2026): this used to
-            # discard run_tests()'s return value entirely and unconditionally log
-            # "Test completed successfully!" even when the underlying test recorded
-            # a failure -- run_tests() in this module does compute a real pass/fail
-            # result internally, it just was never inspected here. Now checked, same
-            # pattern already used correctly by predefined_messages_test() below.
-            result = await test_suite.run_tests()
-
-            # Process test results
-            if result:
-                logger.info("\nTest completed successfully!")
+            if failures == 0:
+                logger.info("\nFMS Test completed successfully!")
             else:
-                logger.error("\nFMS System Test failed!")
-                raise RuntimeError("FMS System Test failed")
+                logger.error(f"\nFMS Test failed: {failures} assertion(s)")
+                raise RuntimeError(f"FMS Test failed: {failures} assertion(s)")
 
         except Exception as e:
             logger.error(f"Test suite error: {str(e)}", exc_info=True)
-            # Re-raise to ensure failure is caught by caller
             raise
 
     async def flight_control_system_test(self):
