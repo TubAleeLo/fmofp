@@ -55,6 +55,11 @@ from FMOFP.core.initializer import get_initializer
 logger = get_logger()
 logger.debug("Main.py execution started - This is a test debug message")
 
+# How long shutdown() waits for the SHUTDOWN transition before giving up and
+# finishing teardown anyway. Tests lower this; see test_blocker_lifecycle.
+_SHUTDOWN_WAIT_TIMEOUT = 5.0
+
+
 class Flight_Management_Operating_Flight_Program:
     def __init__(self):
         logger.info(f"Flight_Management_Operating_Flight_Program __init__ called. Thread ID: {threading.get_ident()}")
@@ -222,7 +227,28 @@ class Flight_Management_Operating_Flight_Program:
             # start stop_system() may never have reached its SHUTDOWN
             # transition, and this waits on the event that transition sets.
             if started:
-                self.system_manager.wait_for_shutdown()
+                # BLOCKER B1b: this was a bare self.system_manager.
+                # wait_for_shutdown() -- threading.Event.wait() with NO
+                # timeout -- called from inside the qasync event loop, since
+                # shutdown() is a coroutine. The event is only set by stop()'s
+                # SHUTDOWN transition, so whenever stop() raised before
+                # reaching it (caught just above, failed=True) nothing would
+                # ever set it: the process blocked forever, holding the event
+                # loop thread, after every test had already passed. Seen as
+                # test_fms_live timing out at 420s roughly one run in three,
+                # having already printed "63 passed, 0 failed".
+                #
+                # Bound the wait, and run it off the loop so the loop keeps
+                # servicing any component stops still queued on it.
+                loop = asyncio.get_running_loop()
+                completed = await loop.run_in_executor(
+                    None, self.system_manager.wait_for_shutdown,
+                    _SHUTDOWN_WAIT_TIMEOUT)
+                if not completed:
+                    logger.warning(
+                        "Shutdown transition did not complete within "
+                        f"{_SHUTDOWN_WAIT_TIMEOUT}s; continuing teardown")
+                    failed = True
             self.shutdown_event.set()
             # self._started was already set to False at the top of this
             # method (see comment there) -- not repeated here.

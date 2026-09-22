@@ -87,6 +87,7 @@ class _RecordingSystemManager:
     def __init__(self, raise_on_stop=False):
         self.stopped = False
         self.waited = False
+        self.wait_timeout = "not called"
         self._raise = raise_on_stop
 
     def stop(self):
@@ -94,10 +95,12 @@ class _RecordingSystemManager:
         if self._raise:
             raise RuntimeError("half-built system could not be stopped")
 
-    def wait_for_shutdown(self):
+    def wait_for_shutdown(self, timeout=None):
         # Blocks forever in the real implementation if stop_system() never
         # reached its SHUTDOWN transition, which is the failed-start case.
         self.waited = True
+        self.wait_timeout = timeout
+        return True
 
 
 class _RecordingEventBus:
@@ -155,6 +158,69 @@ check("a failure while stopping still stops the loop",
       str(app._initializer.stop_requests))
 check("a failure while stopping does not prevent the event bus stopping",
       app.event_bus.stopped)
+
+# ── B1b: a STARTED system whose SHUTDOWN transition never fired ──────────────
+#
+# stop() sets shutdown_event immediately after set_state(SystemState.SHUTDOWN).
+# Any path that raises before that line leaves the event unset forever, and
+# shutdown() catches that exception and carried on to wait on it anyway -- with
+# no timeout, from inside the qasync event loop. The process then blocked
+# forever holding the loop, AFTER every test had already passed. Observed as
+# test_fms_live timing out at 420s about one run in three having already
+# printed "63 passed, 0 failed" (September 2026).
+
+import FMOFP.Main as MAIN  # noqa: E402
+
+
+class _NeverTransitioningSystemManager(_RecordingSystemManager):
+    """stop() raises, so the real stop() would never set shutdown_event."""
+
+    def __init__(self):
+        super().__init__(raise_on_stop=True)
+
+    def wait_for_shutdown(self, timeout=None):
+        self.waited = True
+        self.wait_timeout = timeout
+        # An event nothing will ever set -- exactly the real failure shape.
+        return threading.Event().wait(timeout)
+
+
+def _started_app():
+    app = _never_started_app()
+    app._started = True
+    app.system_manager = _NeverTransitioningSystemManager()
+    return app
+
+
+_saved_timeout = MAIN._SHUTDOWN_WAIT_TIMEOUT
+MAIN._SHUTDOWN_WAIT_TIMEOUT = 0.2      # keep the suite fast
+try:
+    app = _started_app()
+    _t0 = time.time()
+    asyncio.run(app.shutdown())
+    _elapsed = time.time() - _t0
+finally:
+    MAIN._SHUTDOWN_WAIT_TIMEOUT = _saved_timeout
+
+check("a started system whose SHUTDOWN transition never fired still finishes",
+      _elapsed < 2.0, f"shutdown() took {_elapsed:.1f}s")
+check("the wait on the shutdown event is bounded, not unbounded",
+      app.system_manager.wait_timeout == 0.2,
+      repr(app.system_manager.wait_timeout))
+check("the loop is still stopped after the wait times out",
+      app._initializer.stop_requests != [],
+      "nothing requested a stop -- the process would hang in run_forever")
+check("a shutdown whose transition never fired is reported as a failure",
+      app._initializer.stop_requests == [True],
+      str(app._initializer.stop_requests))
+
+# NON-TAUTOLOGICAL: the pre-fix shape really does hang forever.
+_pre_fix = threading.Thread(target=threading.Event().wait, daemon=True)
+_pre_fix.start()
+_pre_fix.join(0.3)
+check("pre-fix an unbounded wait on an event nobody sets never returns "
+      "(proves the B1b assertion bites)", _pre_fix.is_alive())
+
 
 # Re-entrancy: two signals arriving together must not run the sequence twice.
 app = _never_started_app()

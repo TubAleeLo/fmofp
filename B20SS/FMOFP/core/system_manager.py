@@ -1755,8 +1755,15 @@ class SystemManager:
 
         return True
 
-    def wait_for_shutdown(self):
-        self.shutdown_event.wait()
+    def wait_for_shutdown(self, timeout=None):
+        """Block until the SHUTDOWN transition fires. True if it did.
+
+        shutdown_event is set by stop() immediately after
+        set_state(SystemState.SHUTDOWN). Every path that reaches stop() and
+        raises before that line leaves the event unset forever, so callers
+        must pass a timeout -- an unbounded wait here hangs the process (B1b).
+        """
+        return self.shutdown_event.wait(timeout)
 
 system_manager = SystemManager()
 
