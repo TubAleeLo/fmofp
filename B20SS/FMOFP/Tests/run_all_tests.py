@@ -133,6 +133,11 @@ def run_suite(as_module: bool, name: str, timeout_s: int):
         return "TIMEOUT", elapsed, out, err
 
 
+# How many trailing lines of each stream to show for a failing suite. 20 was
+# too few to reach the suite's own verdict past Qt's startup warnings.
+TAIL_LINES = 60
+
+
 def main() -> int:
     print(f"Running {len(SUITES)} test suites "
           "(subprocess-isolated, per-suite watchdog)\n" + "=" * 60)
@@ -150,10 +155,30 @@ def main() -> int:
             status = "TIMED OUT" if rc == "TIMEOUT" else f"exit {rc}"
             print(f"  ✗  {label:<45s} {elapsed:6.1f}s  ({status})")
             failures.append((name, rc))
-            tail = "\n".join((err or out).splitlines()[-20:])
+            # Show BOTH streams. This used to be `(err or out)`, which threw
+            # stdout away whenever stderr had any content at all -- and stderr
+            # is never empty here, because Qt's offscreen plugin warns and the
+            # shutdown path logs tracebacks. The result was that a failing
+            # suite reported 20 lines of Qt noise while the suite's own "FAIL"
+            # lines and verdict, which are on stdout, were discarded. That made
+            # a CI failure of test_weather_radar_live undiagnosable from the
+            # log (Sept 2026).
             print("     ┌─ last output " + "─" * 40)
-            for line in tail.splitlines():
-                print("     │ " + line)
+            shown = False
+            for stream_name, text in (("stdout", out), ("stderr", err)):
+                if not (text or "").strip():
+                    continue
+                shown = True
+                lines = text.splitlines()
+                clipped = len(lines) - TAIL_LINES
+                print(f"     │ ── {stream_name} "
+                      + (f"(last {TAIL_LINES} of {len(lines)} lines) "
+                         if clipped > 0 else "")
+                      + "─" * 10)
+                for line in lines[-TAIL_LINES:]:
+                    print("     │ " + line)
+            if not shown:
+                print("     │ (the suite produced no output)")
             print("     └" + "─" * 54)
     print("=" * 60)
     if failures:
