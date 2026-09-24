@@ -237,10 +237,20 @@ def test_rt_transfer_aggregator_integration():
         else:
             logger.error("❌ No message was processed by RT")
         
-        # Stop RT listener
-        rt.stop_listener()
-        logger.info("Stopped RT listener")
-        
+        # Stop RT listener.
+        #
+        # This used to sit here, inside the try, ahead of the return -- so any
+        # exception from teardown became `return False` and the test reported a
+        # failure it had not measured. That is exactly what happened on
+        # Windows: every assertion ran, then stop_listener() raised while
+        # closing a running Proactor loop. Teardown now cannot change the
+        # verdict; a failure to stop is logged and the measured result stands.
+        try:
+            rt.stop_listener()
+            logger.info("Stopped RT listener")
+        except Exception as e:
+            logger.error(f"Error stopping RT listener (not a test failure): {e}")
+
         return processed_message is not None
         
     except Exception as e:

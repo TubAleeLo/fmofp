@@ -769,11 +769,30 @@ class Remote_Terminal:
         if self.rt_listener is not None:
             self.rt_listener.stop_listening()
 
-        # Close event loop if it exists
+        # Close the event loop if it exists -- but only if it is not running.
+        #
+        # This loop is created in start_listener() and driven by the "RT
+        # Listening" thread, so by the time stop_listener() runs it is
+        # frequently still going. close() on a running loop raises
+        # RuntimeError("Cannot close a running event loop"). On Linux the
+        # selector loop had usually stopped by here so it went unnoticed; on
+        # Windows the Proactor loop raises every time, which failed
+        # test_precipitation_data_transfer from inside its teardown -- after
+        # the assertions had already run.
+        #
+        # A running loop belonging to another thread is stopped, not closed:
+        # that thread owns it and finishes its own cleanup.
         if self._event_loop is not None:
-            self._event_loop.close()
+            try:
+                if self._event_loop.is_running():
+                    self._event_loop.call_soon_threadsafe(self._event_loop.stop)
+                    logger.info("Requested event loop stop (it was still running)")
+                elif not self._event_loop.is_closed():
+                    self._event_loop.close()
+                    logger.info("Closed event loop")
+            except RuntimeError as e:
+                logger.warning(f"Could not close the RT event loop cleanly: {e}")
             self._event_loop = None
-            logger.info("Closed event loop")
             
         logger.info("Remote_Terminal.stop_listener: Listener stopped")
 
