@@ -32,11 +32,20 @@ def setup_logging():
     # setLevel'). Go through .root_logger, matching how the rest of the
     # codebase configures this same singleton.
     logger.root_logger.setLevel(logging.DEBUG)
-    handler = logging.StreamHandler()
-    handler.setLevel(logging.DEBUG)
-    formatter = logging.Formatter('%(asctime)s - %(name)s - %(levelname)s - %(message)s')
-    handler.setFormatter(formatter)
-    logger.root_logger.addHandler(handler)
+
+    # SysLogger has already attached a console StreamHandler to sys.stdout.
+    # This used to add a SECOND one -- and logging.StreamHandler() with no
+    # argument defaults to sys.stderr -- so every record was emitted to both
+    # streams. 301 of this suite's 623 log lines were immediate repeats, and
+    # stdout and stderr came out byte-identical, which is what made a failing
+    # run report the same 60 lines twice in the runner's output.
+    #
+    # All this ever needed was DEBUG visibility on the console handler that
+    # already exists, so lower that one instead of adding another. File
+    # handlers subclass StreamHandler too, hence the explicit stream check.
+    for _handler in logger.root_logger.handlers:
+        if getattr(_handler, 'stream', None) in (sys.stdout, sys.stderr):
+            _handler.setLevel(logging.DEBUG)
     logger.info("Detailed logging configured")
 
 def create_test_precipitation_data():

@@ -190,10 +190,15 @@ def main() -> int:
             # log (Sept 2026).
             print("     ┌─ last output " + "─" * 40)
             shown = False
-            # This project's logging registers a handler twice, so stderr is
-            # frequently byte-identical to stdout. Printing both then doubles
-            # every failure report -- 60 lines becomes 120 of the same thing.
-            # Show stderr only when it actually differs.
+            # A suite can end up emitting every record to both streams (for
+            # example by adding a console handler when SysLogger has already
+            # attached one), leaving stderr byte-identical to stdout. Printing
+            # both then doubles the failure report -- 60 lines becomes 120 of
+            # the same thing. Show stderr only when it actually differs.
+            # Measured per suite: test_precipitation_data_transfer had 301 of
+            # 623 lines repeated before its own handler was fixed, against
+            # 0.2% for test_weather_radar_live, so this is a per-suite hazard
+            # rather than a property of the logging setup.
             streams = [("stdout", out)]
             if (err or "").strip() and (err or "").strip() != (out or "").strip():
                 streams.append(("stderr", err))
