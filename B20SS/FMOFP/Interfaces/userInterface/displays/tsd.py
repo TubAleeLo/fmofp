@@ -233,8 +233,14 @@ class TacticalSituationDisplay(BaseDisplay):
         Each dict has the keys _draw_map() expects:
             bearing (deg true), range_nm, type (str), hostile (bool)
 
-        Falls back to _simulate_threats() when fusion is unavailable
-        or has not yet produced any tracks.
+        Returns an EMPTY list when fusion is unavailable or has produced no
+        tracks. It used to fall back to _simulate_threats(), which invented a
+        FIGHTER closing inside 20 nm and a SAM at ~32 nm, both moving smoothly
+        and rendered with the identical symbology used for real tracks -- red
+        hostile X, 10 nm dashed threat ring, history trail, range label. Nothing
+        distinguished them from genuine contacts, so clean airspace displayed as
+        two inbound hostiles. Removed rather than gated behind a demo flag: a
+        flag left on in a real build reintroduces the same hazard.
         """
         try:
             if self._fusion is not None:
@@ -243,19 +249,7 @@ class TacticalSituationDisplay(BaseDisplay):
                     return [t.to_tsd_dict() for t in tracks]
         except Exception as exc:
             logger.debug(f"[TSD] Fusion read error: {exc}")
-        return self._simulate_threats()
-
-    def _simulate_threats(self) -> List[Dict]:
-        """Return a small set of simulated threat vectors (relative nm, bearing)."""
-        t = time.time()
-        return [
-            {"bearing": (self._heading + 45 + 10 * math.sin(t * 0.2)) % 360,
-             "range_nm": 18 - 5 * abs(math.sin(t * 0.1)),
-             "type": "FIGHTER", "hostile": True},
-            {"bearing": (self._heading + 210 + 8 * math.sin(t * 0.15 + 1)) % 360,
-             "range_nm": 32 + 4 * math.sin(t * 0.08),
-             "type": "SAM", "hostile": True},
-        ]
+        return []
 
     def _oob_to_threat_vectors(
         self, oob_data: dict, own_lat: float, own_lon: float, own_hdg: float

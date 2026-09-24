@@ -1,6 +1,7 @@
 from PyQt6.QtCore import QRectF, QPointF, QLineF, Qt, QTimer
 from PyQt6.QtGui import QPainter, QPen, QColor, QBrush, QFont, QFontMetrics, QLinearGradient, QPainterPath
 from .base_display import BaseDisplay, DisplayType
+from .data_validity import FieldValidity, draw_invalid_overlay
 import math
 import threading
 import time
@@ -14,16 +15,29 @@ logger = get_logger()
 class PrimaryFlightDisplay(BaseDisplay):
     def __init__(self, parent=None):
         super().__init__(DisplayType.PFD, parent=parent)
+        # H9: these used to be seeded with plausible cruise values -- altitude
+        # 30,000, airspeed 450, heading 45, Mach 0.75 -- and update_flight_data
+        # keeps the previous value for any key the FMS does not publish. With no
+        # publisher, or after one stopped, the PFD therefore showed a complete
+        # and entirely fictitious level-flight picture that an operator could
+        # not distinguish from live data.
+        #
+        # They are now seeded to neutral values that are only ever used for tape
+        # geometry, and every field's validity is tracked separately. A tape
+        # whose field has no recent data draws an amber X instead of a readout,
+        # so "no data" can never be read as a number.
+        self.validity = FieldValidity()
+
         # Basic flight parameters
-        self.altitude = 30000
-        self.airspeed = 450
-        self.heading = 45
+        self.altitude = 0
+        self.airspeed = 0
+        self.heading = 0
         self.pitch = 0
         self.roll = 0
 
         # Extended flight parameters from FMS
         self.vertical_speed = 0     # feet per minute
-        self.mach = 0.75            # Mach number
+        self.mach = 0.0             # Mach number
         self.g_force = 1.0          # G-force
         self.aoa = 0                # Angle of attack in degrees
         self.sideslip = 0           # Sideslip angle in degrees
@@ -33,10 +47,11 @@ class PrimaryFlightDisplay(BaseDisplay):
         self.flight_mode = "NORMAL"  # Current FMS mode
         self.warnings = []           # Active warnings
 
-        # Autopilot target values
-        self.target_altitude = 30000
-        self.target_airspeed = 450
-        self.target_heading = 45
+        # Autopilot target values -- same reasoning as above; these are only
+        # drawn when the corresponding field is valid.
+        self.target_altitude = 0
+        self.target_airspeed = 0
+        self.target_heading = 0
         self.target_vertical_speed = 0
 
         # Envelope warnings
@@ -74,27 +89,42 @@ class PrimaryFlightDisplay(BaseDisplay):
                     # Get current flight data
                     flight_data = self.fms.get_flight_data()
 
-                    # Update attitude
+                    # Each group marks validity ONLY for the keys actually
+                    # present, so a field the FMS stops publishing ages out and
+                    # goes stale instead of being refreshed by its own last
+                    # value. That is the H9 defect: `.get(key, self.field)`
+                    # cannot tell "unchanged" from "never sent".
                     if 'attitude' in flight_data:
                         self.roll = flight_data['attitude'].get('roll', self.roll)
                         self.pitch = flight_data['attitude'].get('pitch', self.pitch)
+                        self.validity.mark_from(flight_data['attitude'],
+                                                {'roll': 'roll', 'pitch': 'pitch'})
 
                     # Update velocity
                     if 'velocity' in flight_data:
                         self.airspeed = flight_data['velocity'].get('airspeed', self.airspeed)
                         self.vertical_speed = flight_data['velocity'].get('vertical_speed', self.vertical_speed)
                         self.mach = flight_data['velocity'].get('mach', self.mach)
+                        self.validity.mark_from(flight_data['velocity'], {
+                            'airspeed': 'airspeed',
+                            'vertical_speed': 'vertical_speed',
+                            'mach': 'mach'})
 
                     # Update navigation
                     if 'navigation' in flight_data:
                         self.heading = flight_data['navigation'].get('heading', self.heading)
                         self.altitude = flight_data['navigation'].get('altitude', self.altitude)
+                        self.validity.mark_from(flight_data['navigation'],
+                                                {'heading': 'heading', 'altitude': 'altitude'})
 
                     # Update tactical
                     if 'tactical' in flight_data:
                         self.g_force = flight_data['tactical'].get('g_force', self.g_force)
                         self.aoa = flight_data['tactical'].get('aoa', self.aoa)
                         self.energy_state = flight_data['tactical'].get('energy_state', self.energy_state)
+                        self.validity.mark_from(flight_data['tactical'], {
+                            'g_force': 'g_force', 'aoa': 'aoa',
+                            'energy_state': 'energy_state'})
 
                     # Update status
                     if 'status' in flight_data:
@@ -149,6 +179,18 @@ class PrimaryFlightDisplay(BaseDisplay):
             # Calculate center point
             center_x = self.width() / 2
             center_y = self.height() / 2
+
+            # H9: the horizon IS pitch and roll, so an invalid attitude cannot
+            # be drawn at all -- a level horizon is itself a false reading.
+            # Flag the whole attitude area rather than painting one.
+            if self.validity.any_invalid('pitch', 'roll'):
+                draw_invalid_overlay(
+                    painter,
+                    QRectF(center_x - self.width() * 0.25,
+                           center_y - self.height() * 0.25,
+                           self.width() * 0.5, self.height() * 0.5),
+                    "ATT")
+                return
 
             # Get theme parameters
             use_gradients = self._theme_manager.get_style_param("use_gradients", False)
@@ -370,6 +412,17 @@ class PrimaryFlightDisplay(BaseDisplay):
             tape_x = self.width() - tape_width - 20
             tape_y = self.height() / 2
 
+            # H9: no valid altitude means no altitude readout. Draw the invalid
+            # flag over the whole tape area instead of a number that would be
+            # indistinguishable from a real one.
+            if not self.validity.is_valid('altitude'):
+                draw_invalid_overlay(
+                    painter,
+                    QRectF(tape_x - 10, self.height() * 0.15,
+                           tape_width + 10, self.height() * 0.70),
+                    "ALT")
+                return
+
             # Get theme parameters
             use_gradients = self._theme_manager.get_style_param("use_gradients", False)
             corner_radius = self._theme_manager.get_style_param("corner_radius", 0.0)
@@ -538,6 +591,15 @@ class PrimaryFlightDisplay(BaseDisplay):
             tape_x = 20
             tape_y = self.height() / 2
 
+            # H9: see draw_altitude_tape.
+            if not self.validity.is_valid('airspeed'):
+                draw_invalid_overlay(
+                    painter,
+                    QRectF(tape_x - 10, self.height() * 0.15,
+                           tape_width + 10, self.height() * 0.70),
+                    "IAS")
+                return
+
             # Get theme parameters
             use_gradients = self._theme_manager.get_style_param("use_gradients", False)
             corner_radius = self._theme_manager.get_style_param("corner_radius", 0.0)
@@ -674,6 +736,15 @@ class PrimaryFlightDisplay(BaseDisplay):
             heading_y = self.height() / 10
             box_width = min(self.width() / 16, 50)
             box_height = 30
+
+            # H9: see draw_altitude_tape.
+            if not self.validity.is_valid('heading'):
+                draw_invalid_overlay(
+                    painter,
+                    QRectF(center_x - box_width * 2, heading_y - box_height / 2,
+                           box_width * 4, box_height),
+                    "HDG")
+                return
 
             # Get theme parameters
             use_gradients = self._theme_manager.get_style_param("use_gradients", False)

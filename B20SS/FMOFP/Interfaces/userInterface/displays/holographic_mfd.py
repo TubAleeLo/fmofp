@@ -73,7 +73,7 @@ class HolographicMFD(HolographicDisplay):
         }
         
         # Generate sample targets for demo
-        self._generate_sample_targets()
+        self._clear_tactical_picture()
         
         # Create manual animation timer for scan line
         self._scan_timer = ManualAnimationTimer(update_interval=16)  # ~60 FPS
@@ -342,10 +342,13 @@ class HolographicMFD(HolographicDisplay):
         logger.info(f"Changed waypoint display to {display_mode}")
         self.update()
         
-        # Generate random waypoints based on display mode
+        # Waypoints came from random.uniform() distances under evenly spaced
+        # bearings -- fabricated positions rendered as route points. A route
+        # this display invents is worse than no route, so it shows none until a
+        # real flight plan is wired in.
         self.tactical_data["waypoints"] = []
-        num_waypoints = 4 if display_mode == "all" else 2 if display_mode == "route" else 0
-        
+        num_waypoints = 0
+
         for i in range(num_waypoints):
             # Random position (distance and angle)
             distance = random.uniform(30, 100)
@@ -422,85 +425,25 @@ class HolographicMFD(HolographicDisplay):
         
         return terrain
     
-    def _generate_sample_targets(self):
-        """Generate sample targets and friendlies for tactical display"""
-        # Clear existing data
+    def _clear_tactical_picture(self):
+        """Empty the tactical picture. There is no synthetic fallback.
+
+        This replaces the previous sample-target generator, which built five
+        hostile tracks and three friendlies from random.uniform() -- random
+        positions, altitudes 15,000-35,000 ft, speeds 400-800 kt, headings,
+        threat levels 3-9 and types drawn from FIGHTER/BOMBER/UAV/MISSILE --
+        and rendered them with full tactical symbology and a "TARGETS: 5" tile.
+        Nothing ever wrote real tracks into tactical_data, so every contact this
+        display has ever shown was invented. Removed rather than gated behind a
+        demo flag: a flag left on in a real build reintroduces the same hazard.
+
+        When a real track source is wired up it should write into
+        tactical_data["targets"/"friendlies"/"threats"] directly.
+        """
         self.tactical_data["targets"] = []
         self.tactical_data["friendlies"] = []
         self.tactical_data["threats"] = []
-        
-        # Generate random targets
-        for i in range(5):
-            # Random position (distance and angle)
-            distance = random.uniform(30, 90)
-            angle = random.uniform(0, 360)
-            
-            # Convert to x, y coordinates
-            x = distance * math.cos(math.radians(angle))
-            y = distance * math.sin(math.radians(angle))
-            
-            # Random altitude
-            altitude = random.uniform(15000, 35000)
-            
-            # Random speed
-            speed = random.uniform(400, 800)
-            
-            # Random heading
-            heading = random.uniform(0, 360)
-            
-            # Random threat level
-            threat_level = random.randint(3, 9)
-            
-            # Create target
-            target = {
-                "id": f"TGT-{i+1:03d}",
-                "x": x,
-                "y": y,
-                "altitude": altitude,
-                "speed": speed,
-                "heading": heading,
-                "threat_level": threat_level,
-                "type": random.choice(["FIGHTER", "BOMBER", "UAV", "MISSILE"])
-            }
-            
-            self.tactical_data["targets"].append(target)
-            
-            # Add high threat targets to threat list
-            if threat_level >= 7:
-                self.tactical_data["threats"].append(target)
-        
-        # Generate random friendlies
-        for i in range(3):
-            # Random position (distance and angle)
-            distance = random.uniform(20, 60)
-            angle = random.uniform(0, 360)
-            
-            # Convert to x, y coordinates
-            x = distance * math.cos(math.radians(angle))
-            y = distance * math.sin(math.radians(angle))
-            
-            # Random altitude
-            altitude = random.uniform(20000, 30000)
-            
-            # Random speed
-            speed = random.uniform(400, 800)
-            
-            # Random heading
-            heading = random.uniform(0, 360)
-            
-            # Create friendly
-            friendly = {
-                "id": f"FRD-{i+1:03d}",
-                "x": x,
-                "y": y,
-                "altitude": altitude,
-                "speed": speed,
-                "heading": heading,
-                "type": random.choice(["FIGHTER", "AWACS", "TANKER"])
-            }
-            
-            self.tactical_data["friendlies"].append(friendly)
-    
+
     def _update_scan_angle(self, animation_value: float):
         """Update scan angle based on animation value (0.0 to 1.0)"""
         # Convert animation value to angle (0-360 degrees)

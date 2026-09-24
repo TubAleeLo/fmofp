@@ -218,19 +218,54 @@ def test_tsd_paint_with_threats(r: _Results) -> None:
     disp.stop()
 
 
-def test_tsd_simulate_threats_fallback(r: _Results) -> None:
-    print("\n  ── TSD: _simulate_threats fallback ──")
+def test_tsd_no_synthetic_threats(r: _Results) -> None:
+    """No fusion must mean no contacts -- not invented ones.
+
+    This test previously asserted the OPPOSITE: that the fallback "produces at
+    least one threat". That locked in the defect. _simulate_threats() returned a
+    FIGHTER closing inside 20 nm and a SAM at ~32 nm, drawn with the same
+    hostile symbology, threat rings and history trails as real tracks, so clean
+    airspace displayed as two inbound hostiles with nothing to distinguish them.
+    """
+    print("\n  ── TSD: empty fusion yields NO contacts ──")
     _qt_app()
     from FMOFP.Interfaces.userInterface.displays.tsd import TacticalSituationDisplay
     disp = TacticalSituationDisplay()
-    # With _fusion = None, _get_fused_threats falls back to _simulate_threats
+
     disp._fusion = None
     threats = disp._get_fused_threats()
-    r.check("_get_fused_threats returns list",       isinstance(threats, list))
-    r.check("fallback produces at least one threat", len(threats) > 0,
-            f"got {len(threats)}")
-    r.check("threat has bearing key",  all("bearing"  in t for t in threats))
-    r.check("threat has range_nm key", all("range_nm" in t for t in threats))
+    r.check("_get_fused_threats returns a list", isinstance(threats, list))
+    r.check("no fusion -> no contacts", threats == [], f"got {len(threats)}")
+
+    class _EmptyFusion:
+        def get_fused_tracks(self):
+            return []
+
+    disp._fusion = _EmptyFusion()
+    r.check("fusion with zero tracks -> no contacts",
+            disp._get_fused_threats() == [])
+
+    class _BrokenFusion:
+        def get_fused_tracks(self):
+            raise RuntimeError("fusion unavailable")
+
+    disp._fusion = _BrokenFusion()
+    r.check("fusion that raises -> no contacts, no exception",
+            disp._get_fused_threats() == [])
+
+    r.check("the synthetic generator is gone",
+            not hasattr(disp, "_simulate_threats"))
+
+    # NON-TAUTOLOGICAL: the pre-fix shape really did invent contacts.
+    import math as _m, time as _t
+    pre_fix = [
+        {"bearing": (0 + 45 + 10 * _m.sin(_t.time() * 0.2)) % 360,
+         "range_nm": 18 - 5 * abs(_m.sin(_t.time() * 0.1)),
+         "type": "FIGHTER", "hostile": True},
+    ]
+    r.check("pre-fix fallback returned a hostile inside 20 nm "
+            "(proves this assertion bites)",
+            pre_fix and pre_fix[0]["hostile"] and pre_fix[0]["range_nm"] < 20)
     disp.stop()
 
 
@@ -361,7 +396,7 @@ def run_all() -> bool:
         test_tsd_instantiation,
         test_tsd_paint_normal,
         test_tsd_paint_with_threats,
-        test_tsd_simulate_threats_fallback,
+        test_tsd_no_synthetic_threats,
         test_tsd_paint_combat_mode,
         # SMS
         test_sms_instantiation,
