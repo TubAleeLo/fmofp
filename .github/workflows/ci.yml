@@ -81,6 +81,68 @@ jobs:
           cd B20SS
           python FMOFP/Tests/run_all_tests.py
 
+  test-windows:
+    name: Test Suite on Windows (Python ${{ matrix.python-version }})
+    runs-on: windows-latest
+
+    # Why this leg exists: B10 fixed the offline bundled-wheel install, and
+    # nothing in CI exercised it. The ubuntu legs cannot -- WHEEL_DIRS resolves
+    # empty there -- so install.py's Windows path had only ever been checked by
+    # hand. The suite itself was also unrunnable on Windows until Sept 2026
+    # (cp1252 console encoding, a hardcoded POSIX path in test_data_root, an
+    # unbounded shutdown wait, and a status-word race); it now passes 28/28, so
+    # this leg starts green and guards all of that from regressing.
+    #
+    # Two versions rather than the full five: 3.10 is install.py's MIN_PYTHON
+    # and what the project is developed against, 3.13 catches newer-asyncio
+    # differences. Windows runners are slower and the full suite takes ~6 min,
+    # so five would cost more than it tells us.
+    #
+    # Expect the occasional red from the live GUI suites -- they have a known
+    # nondeterministic failure rate around 1 in 6 full runs. Left as a real
+    # signal rather than hidden behind continue-on-error; re-run to confirm.
+    strategy:
+      fail-fast: false
+      matrix:
+        python-version: ["3.10", "3.13"]
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v5
+
+      - name: Set up Python ${{ matrix.python-version }}
+        uses: actions/setup-python@v6
+        with:
+          python-version: ${{ matrix.python-version }}
+
+      # No system-package step: on Windows the PyQt6 wheels carry their own Qt
+      # runtime, so there is no libgl1/xvfb equivalent to install.
+      - name: Install Python dependencies
+        shell: bash
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r B20SS/requirements.txt
+
+      # No PYTHONPATH step either: run_all_tests.run_suite and
+      # ci_test_boot_smoke.run_check both put the working directory on the
+      # child's PYTHONPATH themselves, verified with PYTHONPATH unset. The
+      # ubuntu legs set it anyway, which is harmless but not required.
+      - name: Boot smoke test (import real entry path under watchdog)
+        shell: bash
+        env:
+          QT_QPA_PLATFORM: offscreen
+        run: |
+          cd B20SS
+          python FMOFP/Tests/ci_test_boot_smoke.py
+
+      - name: Run full test suite
+        shell: bash
+        env:
+          QT_QPA_PLATFORM: offscreen
+        run: |
+          cd B20SS
+          python FMOFP/Tests/run_all_tests.py
+
   lint:
     name: Lint
     runs-on: ubuntu-latest
