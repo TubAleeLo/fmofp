@@ -8,6 +8,7 @@ import os
 import uuid
 import time
 import logging
+import threading
 import traceback
 
 # Add parent directory to path
@@ -135,7 +136,39 @@ def test_rt_transfer_aggregator_integration():
         # Initialize RT and BC
         bc = get_Bus_Controller()
         rt = get_Remote_Terminal()
-        
+
+        # Start BC's listener as well as RT's.
+        #
+        # RT acknowledges every processed frame with a status word sent to BC on
+        # port 5000, and that send happens BEFORE the reconstructed message is
+        # appended to rt_listener.processed_messages -- with three blocking
+        # retries. This test used to start only RT's listener, so nothing was on
+        # 5000 and all three attempts failed. Timings from a failing Windows run:
+        #
+        #   21:15:18.852  [RT_MSG] Starting frame processing
+        #   21:15:20.957  Connection refused to localhost:5000   (+2.1s)
+        #   21:15:23.019  Connection refused to localhost:5000   (+2.1s)
+        #   21:15:25.019  No message was processed by RT          <- gave up
+        #   21:15:25.080  Connection refused                      (too late)
+        #
+        # A refused loopback connect costs ~2s on Windows, so the append landed
+        # after this test's ~5s poll window. On Linux the same three failures
+        # take milliseconds, which is the only reason the test has been green
+        # there -- it was passing by platform luck, with the status-word path
+        # silently broken on every platform and never asserted.
+        #
+        # Bus_Controller.start_listener() runs its own processing loop inline
+        # (`while self.listening ...`), so it must be driven from its own
+        # thread rather than called directly.
+        bc_thread = threading.Thread(
+            target=bc.start_listener, name="BC Listener (test)", daemon=True)
+        bc_thread.start()
+        for _ in range(50):                      # up to 5s for the bind
+            if getattr(bc, 'listening', False):
+                break
+            time.sleep(0.1)
+        logger.info(f"Started BC listener (listening={getattr(bc, 'listening', False)})")
+
         # Start RT listener
         rt.start_listener()
         logger.info("Started RT listener")
@@ -250,6 +283,11 @@ def test_rt_transfer_aggregator_integration():
             logger.info("Stopped RT listener")
         except Exception as e:
             logger.error(f"Error stopping RT listener (not a test failure): {e}")
+        try:
+            bc.stop_listener()
+            logger.info("Stopped BC listener")
+        except Exception as e:
+            logger.error(f"Error stopping BC listener (not a test failure): {e}")
 
         return processed_message is not None
         
