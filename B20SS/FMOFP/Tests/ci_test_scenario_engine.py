@@ -1,6 +1,7 @@
 """CI test — ScenarioEngine parses both XML scenario files."""
 import sys
 sys.path.insert(0, '.')
+import FMOFP.Tests  # noqa: F401 -- forces UTF-8 stdio; this suite is run as a file, not with -m
 
 from FMOFP.Interfaces.scenarios.scenarioEngine import ScenarioEngine
 

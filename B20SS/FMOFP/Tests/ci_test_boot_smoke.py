@@ -19,6 +19,16 @@ import os
 import subprocess
 import sys
 
+# This suite is run as a file (both by run_all_tests.py and as its own CI step),
+# so FMOFP.Tests.__init__ -- which forces UTF-8 stdio -- is not imported for us.
+# Do the same thing inline rather than importing the package, because this
+# module deliberately avoids touching sys.path before the checks run.
+for _stream in (sys.stdout, sys.stderr):
+    try:
+        _stream.reconfigure(encoding="utf-8", errors="replace")
+    except (AttributeError, OSError, ValueError):
+        pass
+
 TIMEOUT_S = 120  # generous: CI runners are slow; a deadlock hangs forever anyway
 
 CHECKS = [
@@ -110,12 +120,21 @@ def run_check(name: str, code: str) -> bool:
     env["PYTHONPATH"] = os.pathsep.join(
         p for p in (cwd, os.path.join(cwd, "FMOFP"), env.get("PYTHONPATH", "")) if p
     )
+    # Pin the child's stdio encoding and decode its output explicitly, the same
+    # way run_all_tests.run_suite does. With text=True and no encoding, the
+    # child encodes with its locale codec while the parent decodes with its own
+    # -- and the boot path emits a degree sign, so a mismatch crashes the smoke
+    # test with UnicodeDecodeError before any check has been judged. Observed
+    # with PYTHONIOENCODING=cp1252: "'utf-8' codec can't decode byte 0xb0".
+    env.setdefault("PYTHONUTF8", "1")
+    env.setdefault("PYTHONIOENCODING", "utf-8")
     try:
         proc = subprocess.run(
             [sys.executable, "-c", code],
             timeout=TIMEOUT_S,
             capture_output=True,
-            text=True,
+            encoding="utf-8",
+            errors="replace",
             env=env,
             cwd=cwd,
         )

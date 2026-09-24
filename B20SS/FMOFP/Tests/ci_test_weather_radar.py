@@ -1,6 +1,7 @@
 """CI test — SimulatedWeatherRadar unit assertions."""
 import sys
 sys.path.insert(0, '.')
+import FMOFP.Tests  # noqa: F401 -- forces UTF-8 stdio; this suite is run as a file, not with -m
 
 config = {'azimuth_resolution_deg': 1.0, 'elevation_resolution_deg': 1.0}
 
