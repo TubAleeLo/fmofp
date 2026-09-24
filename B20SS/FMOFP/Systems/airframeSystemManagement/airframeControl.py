@@ -45,21 +45,62 @@ class AirframeSystemManager:
         self._thread = None
         self._start_lock = threading.Lock()
 
+        # Commanded gear position. UNKNOWN until something commands it -- the
+        # class has no way to sense the real position.
+        self.gear_state = "UNKNOWN"
+
+        # Real sensor readings keyed by sensor id. Empty means no source.
+        self.sensor_readings = {}
+        self._warned_no_sensor_source = False
+
     def monitor_airframe(self):
-        # Simulate getting sensor data
+        """Report airframe sensor state.
+
+        This used to log a hardcoded 25 for every sensor, once per second, in
+        the same format a real reading would use -- so the log filled with
+        invented measurements that nothing distinguished from live data. There
+        is no sensor source, so it now says that once instead.
+        """
+        if not self.sensor_readings:
+            if not self._warned_no_sensor_source:
+                logger.warning(
+                    f"[AIRFRAME] No sensor source configured -- {len(self.sensors)} "
+                    "sensors are UNKNOWN. No readings are being published.")
+                self._warned_no_sensor_source = True
+            return
+
         for sensor in self.sensors:
-            value = 25 # Replace with actual sensor reading
-            logger.info(f"Sensor {sensor['id']} ({sensor['location']}) - {sensor['type']}: {value}")
-            
-        # Check sensor values, update subsystem status
+            value = self.sensor_readings.get(sensor["id"])
+            if value is None:
+                continue
+            logger.info(
+                f"Sensor {sensor['id']} ({sensor['location']}) - "
+                f"{sensor['type']}: {value}")
+
+    def set_sensor_reading(self, sensor_id, value):
+        """Supply a real reading for one sensor."""
+        self.sensor_readings[sensor_id] = value
         
     def control_landing_gear(self, command):
-        if command == "deploy":
-            logger.info("Deploying landing gear")
-            # Activate landing gear deployment sequence
-        elif command == "retract":
-            logger.info("Retracting landing gear") 
-            # Activate landing gear retraction sequence
+        """Command the landing gear. Idempotent and state-tracking.
+
+        The deployment/retraction sequences are still unimplemented, but the
+        commanded state is now recorded, so a caller can see what was last
+        asked for and a repeat command is not logged as if it were new.
+        """
+        if command not in ("deploy", "retract"):
+            logger.warning(f"[AIRFRAME] Ignoring unknown gear command: {command!r}")
+            return self.gear_state
+
+        target = "DEPLOYED" if command == "deploy" else "RETRACTED"
+        if self.gear_state == target:
+            logger.debug(f"[AIRFRAME] Landing gear already {target}; no action")
+            return self.gear_state
+
+        logger.info(f"[AIRFRAME] Landing gear: {self.gear_state} -> {target}")
+        self.gear_state = target
+        # Activate the real deployment/retraction sequence here once it exists.
+        return self.gear_state
             
     def run(self):
         # NOTE: previously `while True:` with no sleep at all -- a 100%-CPU
@@ -83,14 +124,17 @@ class AirframeSystemManager:
             try:
                 self.monitor_airframe()
 
-                # NOTE: this was already calling control_landing_gear("deploy")
-                # unconditionally on every tick before this round -- that's the
-                # existing (pre-this-commit) demo behavior, left as-is since
-                # changing gear-deploy simulation logic is out of scope for
-                # wiring the class into the boot sequence. Landing gear being
-                # permanently commanded to "deploy" once per second is a
-                # pre-existing placeholder, not something introduced here.
-                self.control_landing_gear("deploy")
+                # The gear used to be commanded to "deploy" here, once per
+                # second, forever -- unconditionally, from a MONITOR loop. It
+                # was a placeholder that survived several rounds of work
+                # because the method body is only a log statement, so nothing
+                # visibly moved. That is exactly why it is dangerous: the day
+                # someone implements the deployment sequence, this loop starts
+                # commanding it every second in flight.
+                #
+                # Monitoring does not command. Gear commands come from
+                # control_landing_gear(), called by whatever actually decides
+                # to move the gear.
             except Exception as e:
                 logger.error(f"[AIRFRAME] Monitor error: {e}")
             time.sleep(1.0)

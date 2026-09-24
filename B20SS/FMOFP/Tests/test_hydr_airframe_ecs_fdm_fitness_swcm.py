@@ -168,16 +168,62 @@ def test_airframe_lifecycle(r: _Results) -> None:
 
 # ──────────────────────────── ECS tests ────────────────────────────────────
 
-def test_ecs_simulated_readings(r: _Results) -> None:
-    print("\n  ── ECSControl: simulated readings ──")
+def test_ecs_reports_unknown_without_sensors(r: _Results) -> None:
+    """No sensor source must read UNKNOWN, not a plausible cabin value.
+
+    This test previously asserted the opposite -- that the getters "return
+    documented constants" 22.5 C / 101.3 kPa / 98.5% -- which locked in the
+    defect. Those literals were also circular: monitor_ecs() fed 22.5 into
+    climate.adjust_temperature(), which stored it, and get_status()['climate']
+    reported it back as live state.
+    """
+    print("\n  ── ECSControl: unknown without a sensor source ──")
     from FMOFP.Systems.enviornmentalControlSystem.ecsControl import ECSControl
     ecs = ECSControl()
-    r.check("get_temperature() returns documented constant",
-            ecs.get_temperature() == 22.5, f"got {ecs.get_temperature()}")
-    r.check("get_pressure() returns documented constant",
-            ecs.get_pressure() == 101.3, f"got {ecs.get_pressure()}")
-    r.check("get_air_quality() returns documented constant",
-            ecs.get_air_quality() == 98.5, f"got {ecs.get_air_quality()}")
+    r.check("temperature is UNKNOWN without a sensor",
+            ecs.get_temperature() is None, f"got {ecs.get_temperature()}")
+    r.check("pressure is UNKNOWN without a sensor",
+            ecs.get_pressure() is None, f"got {ecs.get_pressure()}")
+    r.check("air quality is UNKNOWN without a sensor",
+            ecs.get_air_quality() is None, f"got {ecs.get_air_quality()}")
+    r.check("has_sensor_data() is False", not ecs.has_sensor_data())
+
+    # A real reading is reported as given.
+    ecs.set_sensor_readings(temperature_c=18.25, pressure_kpa=99.0,
+                            air_quality_pct=91.5)
+    r.check("a supplied temperature is reported", ecs.get_temperature() == 18.25)
+    r.check("a supplied pressure is reported",    ecs.get_pressure() == 99.0)
+    r.check("a supplied air quality is reported", ecs.get_air_quality() == 91.5)
+    r.check("has_sensor_data() is True once supplied", ecs.has_sensor_data())
+
+    # NON-TAUTOLOGICAL: the pre-fix values were plausible cabin readings, which
+    # is precisely why they could not be told from measurements.
+    r.check("pre-fix constants were plausible cabin values "
+            "(proves this assertion bites)",
+            20.0 <= 22.5 <= 25.0 and 95.0 <= 101.3 <= 105.0)
+
+
+def test_airframe_monitor_does_not_command_gear(r: _Results) -> None:
+    """The monitor loop must not command the landing gear."""
+    print("\n  ── AirframeSystemManager: monitoring does not command ──")
+    from FMOFP.Systems.airframeSystemManagement.airframeControl import (
+        AirframeSystemManager)
+    af = AirframeSystemManager()
+    r.check("gear starts UNKNOWN", af.gear_state == "UNKNOWN",
+            f"got {af.gear_state}")
+
+    af.monitor_airframe()
+    r.check("monitor_airframe() leaves the gear alone",
+            af.gear_state == "UNKNOWN", f"got {af.gear_state}")
+
+    r.check("deploy commands the gear",
+            af.control_landing_gear("deploy") == "DEPLOYED")
+    r.check("retract commands the gear",
+            af.control_landing_gear("retract") == "RETRACTED")
+    r.check("a repeat command is idempotent",
+            af.control_landing_gear("retract") == "RETRACTED")
+    r.check("an unknown command is ignored",
+            af.control_landing_gear("banana") == "RETRACTED")
 
 
 def test_ecs_monitor_no_raise(r: _Results) -> None:
@@ -429,7 +475,8 @@ def run_all() -> bool:
         test_airframe_config_load,
         test_airframe_landing_gear,
         test_airframe_lifecycle,
-        test_ecs_simulated_readings,
+        test_ecs_reports_unknown_without_sensors,
+        test_airframe_monitor_does_not_command_gear,
         test_ecs_monitor_no_raise,
         test_ecs_climate_oxygen_subcomponents,
         test_ecs_lifecycle,

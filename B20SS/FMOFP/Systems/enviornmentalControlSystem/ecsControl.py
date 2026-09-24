@@ -34,6 +34,13 @@ class ECSControl:
         # same way PowerManagementSystem owns its battery/cooling/HVAC
         # sub-components.
         self.climate = ClimateControl()
+
+        # No sensor source exists; these stay None until set_sensor_readings()
+        # is called with real values. See the getters below.
+        self._temperature_c = None
+        self._pressure_kpa = None
+        self._air_quality_pct = None
+        self._warned_no_sensors = False
         self.oxygen = OxygenControl()
 
     def initialize(self):
@@ -100,6 +107,17 @@ class ECSControl:
         pressure = self.get_pressure()
         air_quality = self.get_air_quality()
 
+        if not self.has_sensor_data():
+            # Once, not once per tick: a dead sensor feed should be visible in
+            # the log without burying everything else in it.
+            if not self._warned_no_sensors:
+                logger.warning(
+                    "[ECS] No sensor source configured -- temperature, pressure "
+                    "and air quality are UNKNOWN. Control loops are idle; they "
+                    "are not being driven by placeholder values.")
+                self._warned_no_sensors = True
+            return
+
         logger.info(f"ECS Status - Temp: {temperature}°C, Pressure: {pressure} kPa, Air Quality: {air_quality}%")
 
         # Adjust system based on readings
@@ -116,17 +134,41 @@ class ECSControl:
         self.oxygen.generate_oxygen()
         self.climate.adjust_temperature(temperature)
 
+    # These returned the literals 22.5 C / 101.3 kPa / 98.5% -- plausible cabin
+    # values indistinguishable from measurements. Worse, the loop was circular:
+    # get_temperature() returned 22.5, monitor_ecs() passed it to
+    # climate.adjust_temperature(22.5), which stored it, and
+    # get_status()['climate']['temperature'] then reported 22.5 back as live
+    # state. A constant echoed round and presented as a measurement.
+    #
+    # There is no sensor source in this project, so the honest answer is None.
+    # set_sensor_readings() exists for when one is wired up.
+
+    def set_sensor_readings(self, temperature_c=None, pressure_kpa=None,
+                            air_quality_pct=None):
+        """Supply real sensor readings. Any value left as None stays unknown."""
+        if temperature_c is not None:
+            self._temperature_c = float(temperature_c)
+        if pressure_kpa is not None:
+            self._pressure_kpa = float(pressure_kpa)
+        if air_quality_pct is not None:
+            self._air_quality_pct = float(air_quality_pct)
+
+    def has_sensor_data(self):
+        return None not in (self._temperature_c, self._pressure_kpa,
+                            self._air_quality_pct)
+
     def get_temperature(self):
-        # Simulate temperature reading
-        return 22.5  # 22.5°C
+        """Cabin temperature in C, or None when no sensor has reported."""
+        return self._temperature_c
 
     def get_pressure(self):
-        # Simulate pressure reading
-        return 101.3  # 101.3 kPa (standard atmospheric pressure)
+        """Cabin pressure in kPa, or None when no sensor has reported."""
+        return self._pressure_kpa
 
     def get_air_quality(self):
-        # Simulate air quality reading (percentage of clean air)
-        return 98.5  # 98.5% clean air
+        """Clean-air percentage, or None when no sensor has reported."""
+        return self._air_quality_pct
 
     def adjust_temperature(self, current_temp):
         target_temp = 22.0  # Target temperature in °C
