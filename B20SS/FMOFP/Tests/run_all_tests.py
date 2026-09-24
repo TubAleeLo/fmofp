@@ -190,7 +190,16 @@ def main() -> int:
             # log (Sept 2026).
             print("     ┌─ last output " + "─" * 40)
             shown = False
-            for stream_name, text in (("stdout", out), ("stderr", err)):
+            # This project's logging registers a handler twice, so stderr is
+            # frequently byte-identical to stdout. Printing both then doubles
+            # every failure report -- 60 lines becomes 120 of the same thing.
+            # Show stderr only when it actually differs.
+            streams = [("stdout", out)]
+            if (err or "").strip() and (err or "").strip() != (out or "").strip():
+                streams.append(("stderr", err))
+            elif (err or "").strip():
+                streams.append(("stderr", "(identical to stdout -- not repeated)"))
+            for stream_name, text in streams:
                 if not (text or "").strip():
                     continue
                 shown = True
