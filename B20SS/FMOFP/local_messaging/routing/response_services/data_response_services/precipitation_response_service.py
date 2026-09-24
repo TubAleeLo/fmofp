@@ -14,6 +14,7 @@ import time
 import traceback
 from typing import Dict, Any, Optional, List, Tuple
 from FMOFP.Utils.logger.sys_logger import get_logger
+from FMOFP.Utils.common.async_task import cancel_and_await
 from FMOFP.local_messaging.messageConfigurations.weather_radar_data import PrecipitationData
 from FMOFP.Utils.common.message_format_adapter import get_message_format_adapter
 from ...handlers.precipitation_data_handler import PrecipitationDataHandler
@@ -135,30 +136,7 @@ class PrecipitationResponseService:
         try:
             logger.info("Stopping precipitation response service")
             self._processing = False
-            if self._task:
-                self._task.cancel()
-                # Only await the task from the loop that owns it. start() binds
-                # self._task to whichever loop was running then, which is not
-                # necessarily the loop shutdown runs on -- and may no longer be
-                # running at all. Awaiting it from anywhere else raises
-                # "got Future <...> attached to a different loop", which used to
-                # surface as an error on every shutdown of this service.
-                task_loop = self._task.get_loop()
-                try:
-                    running = asyncio.get_running_loop()
-                except RuntimeError:
-                    running = None
-                if running is not None and task_loop is running:
-                    try:
-                        await self._task
-                    except asyncio.CancelledError:
-                        pass
-                else:
-                    logger.warning(
-                        "Precipitation task belongs to a different event loop "
-                        f"(running={running!r}, task={task_loop!r}); cancelled "
-                        "without awaiting"
-                    )
+            await cancel_and_await(self._task, "precipitation")
             logger.info("Precipitation response service stopped")
         except Exception as e:
             logger.error(f"Error stopping precipitation response service: {e}")

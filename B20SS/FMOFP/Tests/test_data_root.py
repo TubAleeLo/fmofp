@@ -109,12 +109,18 @@ try:
           os.path.realpath(checkout_root) == os.path.realpath(F.fetch_fmofp_path()),
           checkout_root)
 
-    with_env(FMOFP_DATA_DIR='/tmp/fmofp-state-test')
+    # data_root() returns os.path.abspath(os.path.expanduser(override)), so the
+    # expectation has to be normalised the same way. Comparing against the raw
+    # literal passed these on POSIX and could never pass on Windows, where
+    # abspath('/tmp/fmofp-state-test') is 'C:\\tmp\\fmofp-state-test'.
+    override = '/tmp/fmofp-state-test'
+    expected_root = os.path.abspath(os.path.expanduser(override))
+    with_env(FMOFP_DATA_DIR=override)
     check("FMOFP_DATA_DIR overrides everything",
-          F.data_root() == '/tmp/fmofp-state-test', F.data_root())
+          F.data_root() == expected_root, F.data_root())
     check("resolve_data_dir composes under the override",
           F.resolve_data_dir('storage', 'databases')
-          == os.path.join('/tmp/fmofp-state-test', 'storage', 'databases'))
+          == os.path.join(expected_root, 'storage', 'databases'))
 
     with_env(FMOFP_DATA_DIR='~/fmofp-tilde-test')
     check("~ in the override is expanded",

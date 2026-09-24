@@ -106,9 +106,32 @@ SUITES = [
 ]
 
 
+def _force_utf8_output():
+    """This runner prints glyphs too, and its own stdout may be a pipe.
+
+    Redirecting run_all_tests.py's output to a file or through a pager on
+    Windows would hit the same cp1252 failure the suites hit. Best effort: a
+    closed or exotic stream just keeps its current encoding.
+    """
+    for stream in (sys.stdout, sys.stderr):
+        try:
+            stream.reconfigure(encoding="utf-8", errors="replace")
+        except (AttributeError, OSError, ValueError):
+            pass
+
+
 def run_suite(as_module: bool, name: str, timeout_s: int):
     env = dict(os.environ)
     env.setdefault("QT_QPA_PLATFORM", "offscreen")
+    # Every suite prints box-drawing and check glyphs. A child's stdout here is
+    # a PIPE, so Python picks the locale encoding for it -- cp1252 on Windows --
+    # and the first such print() raises UnicodeEncodeError before the suite has
+    # tested anything. Nine of the 28 suites died that way, and the handler then
+    # raised again trying to print the failure marker. PYTHONIOENCODING takes
+    # precedence over PYTHONUTF8, so both are set; setdefault leaves an explicit
+    # choice by the caller alone.
+    env.setdefault("PYTHONUTF8", "1")
+    env.setdefault("PYTHONIOENCODING", "utf-8")
     cwd = os.getcwd()
     env["PYTHONPATH"] = os.pathsep.join(
         p for p in (cwd, env.get("PYTHONPATH", "")) if p
@@ -117,7 +140,8 @@ def run_suite(as_module: bool, name: str, timeout_s: int):
     start = time.monotonic()
     try:
         proc = subprocess.run(
-            cmd, timeout=timeout_s, capture_output=True, text=True,
+            cmd, timeout=timeout_s, capture_output=True,
+            encoding="utf-8", errors="replace",
             env=env, cwd=cwd,
         )
         elapsed = time.monotonic() - start
@@ -139,6 +163,7 @@ TAIL_LINES = 60
 
 
 def main() -> int:
+    _force_utf8_output()
     print(f"Running {len(SUITES)} test suites "
           "(subprocess-isolated, per-suite watchdog)\n" + "=" * 60)
     failures = []

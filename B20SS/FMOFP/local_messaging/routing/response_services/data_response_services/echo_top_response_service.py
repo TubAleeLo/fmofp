@@ -14,6 +14,7 @@ import time
 import traceback
 from typing import Dict, Any, Optional, List, Tuple
 from FMOFP.Utils.logger.sys_logger import get_logger
+from FMOFP.Utils.common.async_task import cancel_and_await
 from FMOFP.local_messaging.messageConfigurations.weather_radar_data_echo_top import WeatherRadarEchoTopData
 from FMOFP.Utils.common.message_format_adapter import get_message_format_adapter
 from ...handlers.echo_top_data_handler import EchoTopDataHandler
@@ -135,12 +136,7 @@ class EchoTopResponseService:
         try:
             logger.info("Stopping echo top response service")
             self._processing = False
-            if self._task:
-                self._task.cancel()
-                try:
-                    await self._task
-                except asyncio.CancelledError:
-                    pass
+            await cancel_and_await(self._task, "echo_top")
             logger.info("Echo top response service stopped")
         except Exception as e:
             logger.error(f"Error stopping echo top response service: {e}")

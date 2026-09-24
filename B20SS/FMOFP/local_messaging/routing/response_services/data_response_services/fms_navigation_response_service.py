@@ -13,6 +13,7 @@ import time
 import traceback
 from typing import Dict, Any, Optional, List, Tuple
 from FMOFP.Utils.logger.sys_logger import get_logger
+from FMOFP.Utils.common.async_task import cancel_and_await
 from FMOFP.local_messaging.messageConfigurations.fms_navigation_data import create_fms_navigation_data_message
 from FMOFP.Utils.common.message_format_adapter import get_message_format_adapter
 
@@ -248,12 +249,7 @@ class FMSNavigationResponseService:
         try:
             logger.info("Stopping FMS navigation response service")
             self._processing = False
-            if self._task:
-                self._task.cancel()
-                try:
-                    await self._task
-                except asyncio.CancelledError:
-                    pass
+            await cancel_and_await(self._task, "fms_navigation")
             logger.info("FMS navigation response service stopped")
         except Exception as e:
             logger.error(f"Error stopping FMS navigation response service: {e}")
