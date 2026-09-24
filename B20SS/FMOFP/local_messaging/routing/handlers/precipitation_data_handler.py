@@ -13,6 +13,10 @@ from FMOFP.local_messaging.message_types import WEATHER_RADAR_PRECIPITATION_RESP
 from FMOFP.local_messaging.address_utils import get_rt_address, get_subaddress
 from FMOFP.local_messaging.routing.handlers.base_message_handler import BaseMessageHandler
 
+from FMOFP.Utils.common.precipitation_scale import (
+    RATE_SCALE, INTENSITY_SCALE, TYPE_CODE_TO_NAME, DEFAULT_TYPE,
+)
+
 logger = get_logger()
 
 class PrecipitationDataHandler(BaseMessageHandler):
@@ -695,13 +699,13 @@ class PrecipitationDataHandler(BaseMessageHandler):
             scale_word = binary_data[1] if len(binary_data) > 1 else 0
             rate_scale_code      = (scale_word >> 8) & 0xFF
             intensity_scale_code = scale_word & 0xFF
-            # Use fixed constants that match DataResponseSender._encode_complex_objects.
-            # The log2-encoded scale_word in the header cannot represent these values
-            # exactly, so we hardcode them here. Both sides must stay in sync.
+            # B9: these were hardcoded here with a comment saying "both sides
+            # must stay in sync". They did -- and the other three decoders did
+            # not. The constants now live in Utils/common/precipitation_scale,
+            # imported at the top of this module, so there is exactly one
+            # definition to keep in sync with.
             #   RATE_SCALE=2      → rate_code = round(rate * 2),    max 31.5 mm/hr
             #   INTENSITY_SCALE=63 → intensity_code = round(int*63), range 0-1 exact
-            RATE_SCALE      = 2.0
-            INTENSITY_SCALE = 63.0
             logger.debug(f"[PRECIPITATION_FLOW_DEBUG] Using fixed scale factors: RATE={RATE_SCALE}, INTENSITY={INTENSITY_SCALE}")
 
             # Validate array size: 2 header words + 2 words per object
@@ -774,8 +778,7 @@ class PrecipitationDataHandler(BaseMessageHandler):
                         intensity_code = attr_word          & 0x3F  # bottom 6 bits
 
                         # Map type code to precipitation type
-                        type_map = {0: 'rain', 1: 'snow', 2: 'sleet', 3: 'hail', 4: 'mixed'}
-                        precip_type = type_map.get(type_code, 'rain')
+                        precip_type = TYPE_CODE_TO_NAME.get(type_code, DEFAULT_TYPE)
 
                         # Convert codes back using the scale factors read from the header word.
                         # Encoder used: rate_code = int(rate * RATE_SCALE)

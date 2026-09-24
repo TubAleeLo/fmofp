@@ -66,6 +66,27 @@ SUITES = [
     (True,  "FMOFP.Tests.test_listener_retry_and_ports", 300),
     (True,  "FMOFP.Tests.test_data_root", 300),
     (True,  "FMOFP.Tests.test_line_endings", 300),
+    # Production blockers B5/B11/B12: singleton re-initialisation leaking a
+    # thread pool per construction, run-once markers that outlived the process
+    # (so every boot after the first skipped database init and never re-read
+    # the message-rate config), and an import-time filesystem walk that indexed
+    # site-packages on an installed deployment.
+    (True,  "FMOFP.Tests.test_blocker_singleton_and_state", 300),
+    # Production blockers B6/B7/B8: FCS mode change calling a method that does
+    # not exist, FCS control input reading a bool as a dict (after the surface
+    # had already moved), and the radar mode-lookup tables being enum members
+    # rather than dicts, so every lookup by mode name fell back to STANDBY.
+    (True,  "FMOFP.Tests.test_blocker_command_paths", 300),
+    # Production blocker B9: one encoder, five decoders, four different sets of
+    # precipitation scale factors -- severe weather decoded ~79x low and
+    # rendered in the lightest colour band. Round-trip assertions.
+    (True,  "FMOFP.Tests.test_blocker_precip_scale", 300),
+    # Production blockers B1/B2/B3/B4: a boot failure that hung the process
+    # forever and an error shutdown that exited 0; initialization failures
+    # swallowed so boot continued on a half-built system; coroutine stops
+    # discarded when the loop was halted straight after scheduling them; and an
+    # unbounded EventBus join holding the shared lock.
+    (True,  "FMOFP.Tests.test_blocker_lifecycle", 300),
     # Story C14.3: four radars swept across every commandable mode against a
     # live system, plus phase-policy and request-dispatch assertions.
     (True,  "FMOFP.Tests.test_radar_modes_live", 420),
@@ -112,6 +133,11 @@ def run_suite(as_module: bool, name: str, timeout_s: int):
         return "TIMEOUT", elapsed, out, err
 
 
+# How many trailing lines of each stream to show for a failing suite. 20 was
+# too few to reach the suite's own verdict past Qt's startup warnings.
+TAIL_LINES = 60
+
+
 def main() -> int:
     print(f"Running {len(SUITES)} test suites "
           "(subprocess-isolated, per-suite watchdog)\n" + "=" * 60)
@@ -129,10 +155,30 @@ def main() -> int:
             status = "TIMED OUT" if rc == "TIMEOUT" else f"exit {rc}"
             print(f"  ✗  {label:<45s} {elapsed:6.1f}s  ({status})")
             failures.append((name, rc))
-            tail = "\n".join((err or out).splitlines()[-20:])
+            # Show BOTH streams. This used to be `(err or out)`, which threw
+            # stdout away whenever stderr had any content at all -- and stderr
+            # is never empty here, because Qt's offscreen plugin warns and the
+            # shutdown path logs tracebacks. The result was that a failing
+            # suite reported 20 lines of Qt noise while the suite's own "FAIL"
+            # lines and verdict, which are on stdout, were discarded. That made
+            # a CI failure of test_weather_radar_live undiagnosable from the
+            # log (Sept 2026).
             print("     ┌─ last output " + "─" * 40)
-            for line in tail.splitlines():
-                print("     │ " + line)
+            shown = False
+            for stream_name, text in (("stdout", out), ("stderr", err)):
+                if not (text or "").strip():
+                    continue
+                shown = True
+                lines = text.splitlines()
+                clipped = len(lines) - TAIL_LINES
+                print(f"     │ ── {stream_name} "
+                      + (f"(last {TAIL_LINES} of {len(lines)} lines) "
+                         if clipped > 0 else "")
+                      + "─" * 10)
+                for line in lines[-TAIL_LINES:]:
+                    print("     │ " + line)
+            if not shown:
+                print("     │ (the suite produced no output)")
             print("     └" + "─" * 54)
     print("=" * 60)
     if failures:

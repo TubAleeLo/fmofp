@@ -13,6 +13,11 @@ from typing import Dict, List, Optional, Any, Tuple
 
 # Get the same logger as the BC
 from FMOFP.Utils.logger.sys_logger import get_logger
+from FMOFP.Utils.common.precipitation_scale import (
+    RATE_SCALE, INTENSITY_SCALE, MAX_CODE, TYPE_MASK, TYPE_SHIFT,
+    decode_attribute_word,
+)
+
 logger = get_logger()
 
 class BlockTransferAggregator:
@@ -696,9 +701,14 @@ class BlockTransferAggregator:
                     # 2. Handle extracted values in a consistent way
                     # 3. Validate values against known bounds
                     
-                    # Extract precipitation type from the top bit (consistent with RT encoding)
-                    precip_type = (attribute_value >> 15) & 0x1  # First bit of type determines snow vs rain
-                    type_name = "snow" if precip_type == 1 else "rain"
+                    # BLOCKER B9: the type used to be read from the single top
+                    # bit, as "snow if that bit is set else rain". The encoder
+                    # writes a 4-bit type code in bits 15-12 taking values 0-4
+                    # (rain, snow, sleet, hail, mixed), none of which sets bit
+                    # 15 -- so every return decoded as rain regardless of what
+                    # was actually sent. Decode the whole field.
+                    type_name, _, _ = decode_attribute_word(attribute_value)
+                    precip_type = (attribute_value >> TYPE_SHIFT) & TYPE_MASK
                     
                     # Using exact same bit field positions as in RT encoding
                     # RT encoding: Bits 11-6 are for rate (6 bits)
@@ -722,35 +732,30 @@ class BlockTransferAggregator:
                     logger.debug(f"[BC_TRANSFER_AGG] Rate bits (6-11): extracted from attribute_value=0x{attribute_value:04X}, bits {bin(rate_bits)[2:].zfill(6)}")
                     logger.debug(f"[BC_TRANSFER_AGG] Intensity bits (0-5): extracted from attribute_value=0x{attribute_value:04X}, bits {bin(intensity_bits)[2:].zfill(6)}")
                     
-                    # Use same scaling as in precipitation_data_generator_sync.py
-                    
-                    # Apply rate scaling - match data generator values exactly
-                    # Rate represents mm/hr of precipitation
-                    if rate_bits == 63:  # Special case for maximum value
-                        # When at max value, use special scaling for larger values
-                        rate_scaled = rate_bits / 50.0  # Gives ~1.26 for max value
-                    else:
-                        # Standard scaling for normal rate values
-                        rate_scaled = rate_bits / 100.0
-                    
-                    # Apply intensity scaling - match data generator values exactly
-                    # Intensity is 0-1 normalized value
-                    if intensity_bits == 63:  # Special case for maximum value
-                        # When at max value, use special scaling for larger values
-                        intensity_scaled = intensity_bits / 2500.0  # Gives ~0.0252 for max value
-                    else:
-                        # Standard scaling for normal intensity values
-                        intensity_scaled = intensity_bits / 5000.0
-                    
+                    # BLOCKER B9: this used to scale with rate_bits / 100.0 and
+                    # intensity_bits / 5000.0, plus ad-hoc `== 63` special cases
+                    # bending the maximum towards yet another constant. The
+                    # encoder (DataResponseSender._encode_complex_objects) writes
+                    # rate * 2 and intensity * 63, so a 6-bit intensity code of
+                    # 63 -- meaning 1.0 -- arrived here as 0.0252, roughly 79x
+                    # low, and rate came out 50x low. weather_radar_display
+                    # classifies SEVERE above 0.8 and MODERATE above 0.6, so on
+                    # this path intensity could never leave the lowest band: a
+                    # mature thunderstorm cell painted green (25 mm/hr decoded
+                    # as 0.5 mm/hr). Both sides now read the same constants from
+                    # Utils/common/precipitation_scale.
+                    rate_scaled = float(rate_bits) / RATE_SCALE
+                    intensity_scaled = float(intensity_bits) / INTENSITY_SCALE
+
                     # Apply bounds checking to ensure valid ranges
-                    rate_scaled = max(0.01, min(50.0, rate_scaled))
-                    intensity_scaled = max(0.0001, min(1.0, intensity_scaled))
+                    rate_scaled = max(0.0, min(float(MAX_CODE) / RATE_SCALE, rate_scaled))
+                    intensity_scaled = max(0.0, min(1.0, intensity_scaled))
                         
-                    # The precipitation type is already determined from the top bit above
-                    # type_name = "snow" if precip_type == 1 else "rain"
+                    # The precipitation type comes from the 4-bit type field,
+                    # decoded by decode_attribute_word above.
                     
                     # Log decoded attribute components - AFTER type_name is defined
-                    logger.debug(f"[BC_TRANSFER_AGG] Type bits: {bin(type_bits)[2:].zfill(4)}, Precipitation type bit: {precip_type}, Type name: {type_name}")
+                    logger.debug(f"[BC_TRANSFER_AGG] Type bits: {bin(type_bits)[2:].zfill(4)}, Precipitation type code: {precip_type}, Type name: {type_name}")
                     
                     # Create precipitation data object with correct values
                     precip_obj = {

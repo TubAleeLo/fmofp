@@ -16,8 +16,13 @@ Tests
 8.  initialise_databases  — creates expected database files
 9.  initialise_databases  — creates tables from schema
 10. verify_installation   — module-import check passes for present module
-11. MIN_PYTHON constant    — value is (3, 9)
+11. MIN_PYTHON constant    — value is (3, 10), matching pyproject.toml
 12. REQUIRED_PACKAGES      — includes PyQt6 and numpy
+13. _find_wheel            — matches the distribution name, not a prefix (B10)
+14. _find_links_args       — one --find-links per existing wheel directory (B10)
+15. install_dependencies   — an offline bundled-wheel install passes
+                             --find-links so pip can resolve the wheel's own
+                             dependencies without an index (B10)
 """
 
 import os
@@ -294,8 +299,13 @@ def test_initialise_databases_creates_tables(r: _Results) -> None:
 
 def test_min_python_constant(r: _Results) -> None:
     print("\n  ── Constants: MIN_PYTHON ──")
-    r.check("MIN_PYTHON is (3, 9)",
-            _install.MIN_PYTHON == (3, 9), f"got {_install.MIN_PYTHON}")
+    # B10: was asserted as (3, 9), which locked in a contradiction --
+    # pyproject.toml requires >=3.10, CI tests 3.10+, and install.py's own
+    # `Path | None` annotation is a TypeError on 3.9 at module import, before
+    # check_python() can print its friendly message. The guard has to name a
+    # version the file can actually run on.
+    r.check("MIN_PYTHON is (3, 10), matching pyproject.toml requires-python",
+            _install.MIN_PYTHON == (3, 10), f"got {_install.MIN_PYTHON}")
 
 
 def test_required_packages(r: _Results) -> None:
@@ -307,6 +317,137 @@ def test_required_packages(r: _Results) -> None:
 
 
 # ──────────────────────────────────────────── runner ─────────────────────
+
+# ────────────────────── B10: offline bundled-wheel install ─────────────────
+#
+# The bundled-wheel path ran `pip install --no-index <wheel>` with no
+# --find-links. The bundled PyQt6 wheel declares Requires-Dist on PyQt6-sip and
+# PyQt6-Qt6, so with the index disabled and nothing local to resolve them from,
+# pip failed on the first package -- and --offline has no PyPI fallback, so the
+# documented primary Windows/air-gapped install could not work. CI runs only on
+# ubuntu-latest, where WHEEL_DIRS is empty, so the path was never exercised.
+
+
+def _fake_wheel_dir(tmp: Path) -> Path:
+    """A directory holding wheels named exactly as the repo's bundled ones."""
+    wheel_dir = tmp / "PyQt6"
+    wheel_dir.mkdir(parents=True, exist_ok=True)
+    for name in (
+        "PyQt6-6.8.1-cp39-abi3-win_amd64.whl",
+        "PyQt6_Qt6-6.8.2-py3-none-win_amd64.whl",
+        "PyQt6_sip-13.10.0-cp310-cp310-win_amd64.whl",
+    ):
+        (wheel_dir / name).write_bytes(b"")
+    return wheel_dir
+
+
+def test_find_wheel_matches_distribution_name(r):
+    with tempfile.TemporaryDirectory() as td:
+        wheel_dir = _fake_wheel_dir(Path(td))
+        original = _install.WHEEL_DIRS
+        _install.WHEEL_DIRS = [wheel_dir]
+        try:
+            # A prefix match makes "PyQt6" match all three of these, and
+            # Path.glob order is filesystem-dependent, so the wrong wheel could
+            # be returned and the install would then fail the import check.
+            for pip_name, expected_prefix in (
+                ("PyQt6", "PyQt6-6.8.1"),
+                ("PyQt6-Qt6", "PyQt6_Qt6-6.8.2"),
+                ("PyQt6-sip", "PyQt6_sip-13.10.0"),
+            ):
+                found = _install._find_wheel(pip_name)
+                r.check(f"_find_wheel({pip_name!r}) -> {expected_prefix}",
+                        found is not None and found.name.startswith(expected_prefix),
+                        f"got {found.name if found else None}")
+            r.check("_find_wheel returns None for a package with no bundled wheel",
+                    _install._find_wheel("numpy") is None)
+        finally:
+            _install.WHEEL_DIRS = original
+
+
+def test_find_links_args(r):
+    with tempfile.TemporaryDirectory() as td:
+        wheel_dir = _fake_wheel_dir(Path(td))
+        missing = Path(td) / "does not exist"
+        original = _install.WHEEL_DIRS
+        _install.WHEEL_DIRS = [wheel_dir, missing]
+        try:
+            args = _install._find_links_args()
+            r.check("--find-links is emitted for the existing wheel directory",
+                    args.count("--find-links") == 1 and str(wheel_dir) in args,
+                    str(args))
+            r.check("a non-existent wheel directory is skipped",
+                    str(missing) not in args, str(args))
+        finally:
+            _install.WHEEL_DIRS = original
+
+
+def test_offline_install_passes_find_links(r):
+    """The actual pip argv for a bundled-wheel install."""
+    with tempfile.TemporaryDirectory() as td:
+        wheel_dir = _fake_wheel_dir(Path(td))
+        original_dirs = _install.WHEEL_DIRS
+        original_pip = _install._pip_install
+        original_installed = _install._is_installed
+        calls = []
+
+        # Start with nothing installed; record each pip invocation and mark
+        # that package installed, so install_dependencies walks the whole
+        # REQUIRED_PACKAGES list exactly as it would on a clean machine.
+        installed = set()
+        import_to_pip = {imp: pip for imp, pip in _install.REQUIRED_PACKAGES}
+
+        def _record(args):
+            calls.append(list(args))
+            joined = " ".join(args).lower()
+            for pip_name in import_to_pip.values():
+                if pip_name.lower().replace("-", "_") in joined:
+                    installed.add(pip_name)
+            return 0, ""
+
+        _install.WHEEL_DIRS = [wheel_dir]
+        _install._pip_install = _record
+        _install._is_installed = lambda imp: import_to_pip.get(imp, imp) in installed
+        try:
+            _install.install_dependencies(offline=True, force_reinstall=False)
+        except SystemExit:
+            # fail() raises SystemExit for a package with no bundled wheel in
+            # offline mode; the PyQt6 calls we care about have already happened.
+            pass
+        finally:
+            _install.WHEEL_DIRS = original_dirs
+            _install._pip_install = original_pip
+            _install._is_installed = original_installed
+
+        wheel_calls = [c for c in calls if "--no-index" in c]
+        r.check("the offline path ran at least one bundled-wheel install",
+                wheel_calls != [], str(calls))
+        for call in wheel_calls:
+            r.check("every --no-index install also passes --find-links",
+                    "--find-links" in call,
+                    "pip cannot resolve the wheel's own dependencies (B10): "
+                    + " ".join(call))
+            r.check("--find-links points at the bundled wheel directory",
+                    str(wheel_dir) in call, " ".join(call))
+
+        # sip and Qt6 are PyQt6's own dependencies; an offline install has to
+        # install them explicitly, because there is no index to pull them from.
+        installed_names = " ".join(" ".join(c) for c in calls).lower()
+        r.check("the offline path installs PyQt6-sip",
+                "pyqt6_sip" in installed_names, installed_names)
+        r.check("the offline path installs PyQt6-Qt6",
+                "pyqt6_qt6" in installed_names, installed_names)
+
+
+def test_required_packages_covers_pyqt_dependencies(r):
+    names = [pip_name for _, pip_name in _install.REQUIRED_PACKAGES]
+    for needed in ("PyQt6", "PyQt6-sip", "PyQt6-Qt6"):
+        r.check(f"REQUIRED_PACKAGES lists {needed}", needed in names, str(names))
+    r.check("PyQt6-sip is installed before PyQt6",
+            names.index("PyQt6-sip") < names.index("PyQt6"), str(names))
+    r.check("PyQt6-Qt6 is installed before PyQt6",
+            names.index("PyQt6-Qt6") < names.index("PyQt6"), str(names))
+
 
 def run_all() -> bool:
     print("=" * 60)
@@ -327,6 +468,10 @@ def run_all() -> bool:
         test_initialise_databases_creates_tables,
         test_min_python_constant,
         test_required_packages,
+        test_find_wheel_matches_distribution_name,
+        test_find_links_args,
+        test_offline_install_passes_find_links,
+        test_required_packages_covers_pyqt_dependencies,
     ]
 
     for test_fn in tests:

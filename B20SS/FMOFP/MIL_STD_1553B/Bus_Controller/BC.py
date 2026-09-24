@@ -24,6 +24,11 @@ from FMOFP.MIL_STD_1553B.Bus_Controller.BC_transfer_aggregator import get_block_
 from FMOFP.MIL_STD_1553B.message_structure_normalizer import get_message_structure_normalizer
 from FMOFP.MIL_STD_1553B.Bus_Controller.radar_type_utils import determine_radar_type
 
+from FMOFP.Utils.common.precipitation_scale import (
+    TYPE_MASK, TYPE_SHIFT, RATE_MASK, RATE_SHIFT, INTENSITY_MASK,
+    decode_attribute_word,
+)
+
 logger = get_logger()
 
 class Bus_Controller:
@@ -116,20 +121,21 @@ class Bus_Controller:
             x_coordinate_adjusted = x_coordinate - 128
             y_coordinate_adjusted = y_coordinate - 128
 
-            # Extract precipitation characteristics using the correct bit positions from PrecipitationData.to_data_words()
-            # Format: [Type: 2 bits][Rate: 7 bits][Intensity: 6 bits][Show: 1 bit]
-            type_code = (binary_value >> 14) & 0x3  # Extract bits 15-14 (2 bits for type)
-            rate_val = (binary_value >> 7) & 0x7F   # Extract bits 13-7 (7 bits for rate)
-            intensity_val = (binary_value >> 1) & 0x3F  # Extract bits 6-1 (6 bits for intensity)
-            show_bit = binary_value & 0x1           # Extract bit 0 (1 bit for show_values)
-
-            # Convert to actual values - proper scaling factor inverse
-            rate = rate_val / 100.0  # Divide by RATE_SCALE (100.0)
-            intensity = intensity_val / 5000.0  # Divide by INTENSITY_SCALE (5000.0)
-
-            # Map type code to precipitation type
-            type_map = {0: 'rain', 1: 'snow', 2: 'hail', 3: 'mixed'}
-            precip_type = type_map.get(type_code, 'rain')
+            # BLOCKER B9: this decoded a [2 bits type][7 bits rate][6 bits
+            # intensity][1 bit show] layout with rate / 100 and
+            # intensity / 5000, and a four-entry type map in which hail decoded
+            # as sleet and mixed as hail. The encoder
+            # (DataResponseSender._encode_complex_objects) writes
+            # [4 type][6 rate][6 intensity] with rate * 2 and intensity * 63,
+            # so every field landed in the wrong bits AND was then scaled by
+            # the wrong constant. Layout, scale factors and type map now all
+            # come from Utils/common/precipitation_scale.
+            precip_type, rate, intensity = decode_attribute_word(binary_value)
+            type_code = (binary_value >> TYPE_SHIFT) & TYPE_MASK
+            rate_val = (binary_value >> RATE_SHIFT) & RATE_MASK
+            intensity_val = binary_value & INTENSITY_MASK
+            show_bit = 1  # not carried in the attribute word; the encoder has
+                          # no show bit for precipitation objects
 
             # Ensure intensity is never zero (for visibility)
             if intensity < 0.1:

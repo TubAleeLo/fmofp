@@ -56,6 +56,8 @@ class SystemManager:
         self.running = False
         self.health_check_interval = 5  # seconds
         self.shutdown_event = threading.Event()
+        # Handles for coroutine stop() calls scheduled during shutdown (B3).
+        self._stop_waiters = []
         self.event_bus = get_event_bus()
         self.system_started = False
         self._thread_lock = threading.Lock()
@@ -221,8 +223,12 @@ class SystemManager:
             self.components['UserCLI_Output'] = get_user_cli()
             self.components['user_cli'] = get_user_cli()
             self.components['schedule_message'] = get_schedule_message()
-            logger.info("All components initialized successfully")
-            self._initialization_complete = True
+            logger.info("All components constructed successfully")
+            # B2: this used to be `self._initialization_complete = True`, set
+            # here -- before initialize_system()'s loop had called
+            # initialize() on a single one of them. A component failing in that
+            # loop therefore left the flag reading "initialization complete".
+            # It is now set by initialize_system(), once the loop has finished.
         except Exception as e:
             logger.error(f"Error initializing components: {str(e)}")
             raise
@@ -298,9 +304,16 @@ class SystemManager:
                             component.initialize()
                     logger.info(f"Initialized {component_name}")
                 except Exception as e:
+                    # BLOCKER B2: this used to `return` here, silently leaving
+                    # every component after the failing one uninitialised --
+                    # while _initialization_complete had ALREADY been set True
+                    # by initialize_components() above, so the flag said boot
+                    # had finished. Raise instead: the caller sets ERROR and
+                    # the failure reaches Main.initialize(), which is the only
+                    # place that can decline to mark the system initialised.
                     logger.error(f"Error initializing {component_name}: {str(e)}")
-                    self.state_manager.set_state(SystemState.ERROR)
-                    return
+                    raise RuntimeError(
+                        f"Component {component_name} failed to initialize: {e}") from e
 
             # Initialize display system
             logger.info("Starting display system")
@@ -410,10 +423,22 @@ class SystemManager:
 
             self.state_manager.set_state(SystemState.INITIALIZED)
             self.running = True
+            # B2: set here, at the end of the real initialization sequence,
+            # rather than in initialize_components() before any component had
+            # been initialized at all.
+            self._initialization_complete = True
             logger.info("System initialization completed")
         except Exception as e:
+            # BLOCKER B2: this swallowed the failure. Main.initialize() awaits
+            # this method and then sets self._initialized = True
+            # unconditionally, so a config, database or display failure
+            # produced one ERROR line and boot carried straight on into
+            # start_FM_system() with an arbitrary subset of components missing
+            # -- and reported itself started. Re-raise so the one caller that
+            # can act on it gets the chance.
             logger.error(f"Error during system initialization: {str(e)}")
             self.state_manager.set_state(SystemState.ERROR)
+            raise
 
     async def start_async_component(self, component_name, component):
         """Start an async component and handle its coroutine properly."""
@@ -1242,6 +1267,112 @@ class SystemManager:
         """
         return self.health.snapshot()
 
+    # ── shutdown task scheduling (BLOCKER B3) ────────────────────────────
+    #
+    # Every coroutine stop() below used to be handled the same wrong way:
+    #
+    #     loop = asyncio.get_event_loop()
+    #     if not loop.is_closed():
+    #         loop.create_task(component.stop())
+    #
+    # Two defects in three lines.
+    #
+    # First, asyncio.get_event_loop() in a thread with no loop set is a
+    # DeprecationWarning on 3.10 and a RuntimeError on 3.12+. stop_system()
+    # runs on the "Main_Loop" background thread whenever shutdown is triggered
+    # by SystemState.ERROR, and the outer handler re-raises -- so on the error
+    # path everything after the first coroutine stop (radar management) never
+    # ran at all: display manager, every Phase 2/3/5 subsystem, routing, the
+    # async handler, the queue manager, the event bus, thread_manager's sweep,
+    # the DatabaseManager close, and the SHUTDOWN transition itself. The loop
+    # was therefore never stopped and the process hung with sockets and threads
+    # live.
+    #
+    # Second, even on the happy path these were fire-and-forget tasks, and
+    # stop_system() then transitioned to SHUTDOWN immediately -- which stops
+    # the loop synchronously -- so none of them had been given a chance to run.
+    # Sockets, executors and routing services were never actually shut down;
+    # the 5-second os._exit watchdog was doing the real work, which made
+    # "graceful shutdown" a hard kill with extra steps.
+    #
+    # Now: one loop, resolved from the Initializer that owns it; the right
+    # scheduling call for the calling thread; and every handle recorded so it
+    # can be drained before the loop goes away.
+
+    def _shutdown_loop(self):
+        """The application's event loop, or None if there isn't a usable one."""
+        loop = None
+        try:
+            from FMOFP.core.initializer import get_initializer
+            loop = get_initializer().get_loop()
+        except Exception:
+            loop = None
+        if loop is None:
+            try:
+                loop = asyncio.get_event_loop_policy().get_event_loop()
+            except Exception:
+                return None
+        if loop.is_closed():
+            return None
+        return loop
+
+    def _schedule_stop(self, component, label):
+        """Run a coroutine stop() and record a handle for the drain below.
+
+        Returns True if the stop was scheduled (or run), False if there was no
+        loop to run it on -- in which case the caller has already logged.
+        """
+        loop = self._shutdown_loop()
+        if loop is None:
+            logger.warning(f"No usable event loop to stop {label} on; skipping")
+            return False
+
+        coro = component.stop()
+        try:
+            running = asyncio.get_running_loop()
+        except RuntimeError:
+            running = None
+
+        if running is loop:
+            # On the loop thread: a task, drained by await_stop_tasks().
+            handle = loop.create_task(coro)
+            handle.add_done_callback(
+                lambda t, _l=label: self._log_fire_and_forget_task_exception(t, f"{_l}.stop()")
+            )
+        else:
+            # Off the loop thread (the ERROR path runs on "Main_Loop"):
+            # submit across threads and block on it in wait_for_stop_tasks().
+            handle = asyncio.run_coroutine_threadsafe(coro, loop)
+        self._stop_waiters.append((label, handle))
+        return True
+
+    def wait_for_stop_tasks(self, timeout=5.0):
+        """Block until the scheduled stops finish. NOT for the loop thread."""
+        import concurrent.futures
+        deadline = time.time() + timeout
+        for label, handle in list(self._stop_waiters):
+            if not isinstance(handle, concurrent.futures.Future):
+                continue
+            remaining = max(0.0, deadline - time.time())
+            try:
+                handle.result(timeout=remaining)
+            except concurrent.futures.TimeoutError:
+                logger.warning(f"Stop of {label} did not complete within the shutdown budget")
+            except Exception as e:
+                logger.error(f"Error stopping {label}: {e}")
+        self._stop_waiters = []
+
+    async def await_stop_tasks(self, timeout=5.0):
+        """Await the scheduled stops. For callers running ON the loop."""
+        tasks = [h for _, h in self._stop_waiters if isinstance(h, asyncio.Task)]
+        self._stop_waiters = []
+        if not tasks:
+            return
+        done, pending = await asyncio.wait(tasks, timeout=timeout)
+        for task in pending:
+            logger.warning("A component stop did not complete within the shutdown budget; cancelling")
+            task.cancel()
+
     def stop(self):
         logger.info(f"Stopping Flight Management Operating Flight Program. Thread ID: {threading.get_ident()}")
         self.running = False
@@ -1367,12 +1498,7 @@ class SystemManager:
                 # matching the same coroutine-handling pattern already used
                 # for the other components stopped later in this method.
                 if asyncio.iscoroutinefunction(radar_management.stop):
-                    loop = asyncio.get_event_loop()
-                    if not loop.is_closed():
-                        _rm_stop_task = loop.create_task(radar_management.stop())
-                        _rm_stop_task.add_done_callback(
-                            lambda t: self._log_fire_and_forget_task_exception(t, "radar_management.stop()")
-                        )
+                    self._schedule_stop(radar_management, "radar_management")
                 else:
                     radar_management.stop()
                 # Stop radar messaging components
@@ -1443,12 +1569,7 @@ class SystemManager:
             if display_response_service:
                 logger.info("Stopping display response service")
                 if asyncio.iscoroutinefunction(display_response_service.stop):
-                    loop = asyncio.get_event_loop()
-                    if not loop.is_closed():
-                        stop_task = loop.create_task(display_response_service.stop())
-                        stop_task.add_done_callback(
-                            lambda t: self._log_fire_and_forget_task_exception(t, "display_response_service.stop()")
-                        )
+                    self._schedule_stop(display_response_service, "display_response_service")
                 else:
                     display_response_service.stop()
 
@@ -1457,12 +1578,7 @@ class SystemManager:
             if vil_response_service:
                 logger.info("Stopping VIL response service")
                 if asyncio.iscoroutinefunction(vil_response_service.stop):
-                    loop = asyncio.get_event_loop()
-                    if not loop.is_closed():
-                        stop_task = loop.create_task(vil_response_service.stop())
-                        stop_task.add_done_callback(
-                            lambda t: self._log_fire_and_forget_task_exception(t, "vil_response_service.stop()")
-                        )
+                    self._schedule_stop(vil_response_service, "vil_response_service")
                 else:
                     vil_response_service.stop()
 
@@ -1471,12 +1587,7 @@ class SystemManager:
             if routing_service:
                 logger.info("Stopping message routing service")
                 if asyncio.iscoroutinefunction(routing_service.stop):
-                    loop = asyncio.get_event_loop()
-                    if not loop.is_closed():
-                        stop_task = loop.create_task(routing_service.stop())
-                        stop_task.add_done_callback(
-                            lambda t: self._log_fire_and_forget_task_exception(t, "routing_service.stop()")
-                        )
+                    self._schedule_stop(routing_service, "routing_service")
                 else:
                     routing_service.stop()
 
@@ -1485,12 +1596,7 @@ class SystemManager:
             if async_handler:
                 logger.info("Stopping async message handler")
                 if asyncio.iscoroutinefunction(async_handler.stop):
-                    loop = asyncio.get_event_loop()
-                    if not loop.is_closed():
-                        stop_task = loop.create_task(async_handler.stop())
-                        stop_task.add_done_callback(
-                            lambda t: self._log_fire_and_forget_task_exception(t, "async_handler.stop()")
-                        )
+                    self._schedule_stop(async_handler, "async_handler")
                 else:
                     async_handler.stop()
 
@@ -1512,12 +1618,7 @@ class SystemManager:
                     try:
                         if hasattr(component, 'stop'):
                             if asyncio.iscoroutinefunction(component.stop):
-                                loop = asyncio.get_event_loop()
-                                if not loop.is_closed():
-                                    stop_task = loop.create_task(component.stop())
-                                    stop_task.add_done_callback(
-                                        lambda t, _name=component_name: self._log_fire_and_forget_task_exception(t, f"{_name}.stop()")
-                                    )
+                                self._schedule_stop(component, component_name)
                             else:
                                 component.stop()
                         logger.info(f"Stopped {component_name}")
@@ -1543,6 +1644,23 @@ class SystemManager:
                 DatabaseManager('FMOFP/dbConfig.xml').shutdown()
             except Exception as e:
                 logger.warning(f"Error shutting down DatabaseManager: {e}")
+
+            # BLOCKER B3: drain the coroutine stops scheduled above BEFORE the
+            # SHUTDOWN transition, because that transition synchronously stops
+            # the event loop -- so anything still pending on it simply never
+            # runs. Off the loop thread (the ERROR path, which runs on
+            # "Main_Loop") the handles are cross-thread futures and can be
+            # waited on here with a bounded budget. On the loop thread they are
+            # asyncio Tasks that this synchronous method cannot await, so
+            # Initializer._initiate_shutdown drains them just before it stops
+            # the loop instead.
+            try:
+                asyncio.get_running_loop()
+                on_loop_thread = True
+            except RuntimeError:
+                on_loop_thread = False
+            if not on_loop_thread:
+                self.wait_for_stop_tasks(timeout=5.0)
 
             self.state_manager.set_state(SystemState.SHUTDOWN)
             logger.info("All system components stopped")
@@ -1637,8 +1755,15 @@ class SystemManager:
 
         return True
 
-    def wait_for_shutdown(self):
-        self.shutdown_event.wait()
+    def wait_for_shutdown(self, timeout=None):
+        """Block until the SHUTDOWN transition fires. True if it did.
+
+        shutdown_event is set by stop() immediately after
+        set_state(SystemState.SHUTDOWN). Every path that reaches stop() and
+        raises before that line leaves the event unset forever, so callers
+        must pass a timeout -- an unbounded wait here hangs the process (B1b).
+        """
+        return self.shutdown_event.wait(timeout)
 
 system_manager = SystemManager()
 

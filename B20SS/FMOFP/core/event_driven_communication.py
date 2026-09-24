@@ -158,18 +158,47 @@ class EventBus:
             self._health_status = False
             raise
 
+    # How long to wait for the processing thread to notice `running = False`.
+    # It polls at 0.1 s, so this is generous; the point is that it is bounded.
+    STOP_JOIN_TIMEOUT = 5.0
+
     def stop(self):
         """Stop the event bus."""
+        # BLOCKER B4: this whole body used to run inside `with self._lock:`,
+        # including a `self.thread.join()` with NO timeout. _lock is the
+        # class-level lock also used by subscribe(), unsubscribe(),
+        # check_health(), is_running() and get_metrics(); the processing thread
+        # invokes arbitrary subscriber callbacks synchronously, and callbacks in
+        # this codebase can block indefinitely (RT_send_message waits on
+        # future.result() with no timeout against a socket that has no timeout
+        # either). Main.shutdown() calls this directly on the Qt/asyncio main
+        # thread, so a blocked callback froze the GUI and the event loop -- and
+        # simultaneously wedged the health monitor, because is_system_ready()
+        # sweeps component health and check_health() wants the same lock. Only
+        # the os._exit watchdog ended it.
+        #
+        # Now: flip the flag under the lock, release it, then join with a
+        # bound. A thread that will not stop is reported, not waited on forever.
         try:
             with self._lock:
                 if not self.started:
                     logger.warning("EventBus is not running")
                     return
                 self.running = False
-                if self.thread and self.thread.is_alive():
-                    self.thread.join()
+                thread = self.thread
+
+            if thread and thread.is_alive():
+                thread.join(timeout=self.STOP_JOIN_TIMEOUT)
+                if thread.is_alive():
+                    logger.warning(
+                        "EventBus processing thread did not stop within "
+                        f"{self.STOP_JOIN_TIMEOUT}s; abandoning it. A subscriber "
+                        "callback is most likely blocked.")
+                    self._health_status = False
+
+            with self._lock:
                 self.started = False
-                logger.info("EventBus stopped successfully")
+            logger.info("EventBus stopped successfully")
         except Exception as e:
             logger.error(f"Error stopping EventBus: {e}")
             self._health_status = False
@@ -213,9 +242,21 @@ class EventBus:
 
     def _handle_event(self, event: Event):
         """Handle standard event."""
-        if event.topic in self.subscribers:
-            logger.info(f"Found {len(self.subscribers[event.topic])} subscribers for topic: {event.topic}")
-            for callback in self.subscribers[event.topic]:
+        # B4: this used to iterate self.subscribers[event.topic] directly while
+        # subscribe()/unsubscribe() mutated that same list under the lock from
+        # other threads. Display widgets are recreated at runtime -- which is
+        # what unsubscribe() exists for -- and each recreation could raise
+        # "RuntimeError: list changed size during iteration" from the iterator
+        # itself. The try/except below is INSIDE the loop, around the callback,
+        # so that error escaped to _process_events' generic handler, which
+        # logged "Error handling event", dropped the event, and skipped
+        # task_done(). Snapshot under the lock and iterate the copy.
+        with self._lock:
+            callbacks = list(self.subscribers.get(event.topic, ()))
+
+        if callbacks:
+            logger.info(f"Found {len(callbacks)} subscribers for topic: {event.topic}")
+            for callback in callbacks:
                 try:
                     callback(event.data)
                     logger.info(f"Successfully executed callback for topic: {event.topic}")

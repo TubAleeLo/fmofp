@@ -55,6 +55,11 @@ from FMOFP.core.initializer import get_initializer
 logger = get_logger()
 logger.debug("Main.py execution started - This is a test debug message")
 
+# How long shutdown() waits for the SHUTDOWN transition before giving up and
+# finishing teardown anyway. Tests lower this; see test_blocker_lifecycle.
+_SHUTDOWN_WAIT_TIMEOUT = 5.0
+
+
 class Flight_Management_Operating_Flight_Program:
     def __init__(self):
         logger.info(f"Flight_Management_Operating_Flight_Program __init__ called. Thread ID: {threading.get_ident()}")
@@ -64,6 +69,9 @@ class Flight_Management_Operating_Flight_Program:
         self._initialized = False
         self._started = False
         self.running = False
+        # True once shutdown() has begun, so a second signal does not
+        # re-run the stop sequence (B1).
+        self._shutdown_begun = False
         self.shutdown_event = threading.Event()
         self._keep_running = True
         self._check_timer = None
@@ -87,7 +95,7 @@ class Flight_Management_Operating_Flight_Program:
             logger.info(f"Flight Management Operating Flight Program initialized. Thread ID: {threading.get_ident()}")
         except Exception as e:
             logger.error(f"Error during initialization: {str(e)}. Thread ID: {threading.get_ident()}")
-            await self.shutdown()
+            await self.shutdown(failed=True)
 
     def start(self):
         if not self._initialized:
@@ -120,7 +128,7 @@ class Flight_Management_Operating_Flight_Program:
             
         except Exception as e:
             logger.error(f"Error during system start: {str(e)}. Thread ID: {threading.get_ident()}")
-            self._loop.call_soon_threadsafe(lambda: asyncio.create_task(self.shutdown()))
+            self._loop.call_soon_threadsafe(lambda: asyncio.create_task(self.shutdown(failed=True)))
 
     def _check_system_ready_slot(self):
         """Qt slot for checking system readiness"""
@@ -134,12 +142,35 @@ class Flight_Management_Operating_Flight_Program:
                 self._check_timer.stop()
         except Exception as e:
             logger.error(f"Error checking system readiness: {str(e)}")
-            self._loop.call_soon_threadsafe(lambda: asyncio.create_task(self.shutdown()))
+            self._loop.call_soon_threadsafe(lambda: asyncio.create_task(self.shutdown(failed=True)))
 
-    async def shutdown(self):
-        if not self._started:
-            logger.warning("Attempt to shut down a system that hasn't been started. Ignoring.")
+    async def shutdown(self, failed=False):
+        # BLOCKER B1: this used to open with
+        #     if not self._started: ... return
+        # and every early-failure path routes here BEFORE _started is ever set
+        # -- initialize()'s handler, start()'s handler, and
+        # _check_system_ready_slot's handler. All three hit that guard and
+        # returned immediately, so nothing tore anything down and, critically,
+        # nothing ever stopped the event loop: SystemState.SHUTDOWN is the only
+        # thing that reaches Initializer._initiate_shutdown, and that state is
+        # set at the very end of SystemManager.stop_system(), which was never
+        # reached. The process sat in run_forever() forever with two 60 FPS
+        # QTimers still firing -- no exit, no status, and a supervisor seeing a
+        # healthy long-running process. It needed SIGKILL.
+        #
+        # The guard that IS wanted here is re-entrancy, not "did we start":
+        # two signals arriving close together each schedule their own
+        # shutdown() task (see below), and the stop sequence must run once.
+        if self._shutdown_begun:
+            logger.debug("Shutdown already in progress or complete; ignoring.")
             return
+        self._shutdown_begun = True
+
+        started = self._started
+        if not started:
+            logger.warning(
+                "Shutting down a system that never finished starting; "
+                "tearing down whatever was built.")
 
         # Flip _started to False immediately, before any of the real
         # shutdown work below (not at the end, as this previously did).
@@ -173,24 +204,66 @@ class Flight_Management_Operating_Flight_Program:
             # Stop check timer
             if self._check_timer and self._check_timer.isActive():
                 self._check_timer.stop()
-            
-            # Stop system components
-            self.system_manager.stop()
-            self.event_bus.stop()
-            
+
+            # Stop system components. On a failed start this runs against a
+            # half-built system, which is the point -- whatever came up has to
+            # come back down -- so a failure here must not prevent the loop
+            # from being stopped in the finally block below.
+            try:
+                self.system_manager.stop()
+            except Exception as e:
+                logger.error(f"Error stopping system components: {str(e)}")
+                failed = True
+            try:
+                self.event_bus.stop()
+            except Exception as e:
+                logger.error(f"Error stopping the event bus: {str(e)}")
+                failed = True
+
             # Give components time to clean up
             await asyncio.sleep(0.1)
-            
-            self.system_manager.wait_for_shutdown()
+
+            # Only meaningful once the system actually started: on a failed
+            # start stop_system() may never have reached its SHUTDOWN
+            # transition, and this waits on the event that transition sets.
+            if started:
+                # BLOCKER B1b: this was a bare self.system_manager.
+                # wait_for_shutdown() -- threading.Event.wait() with NO
+                # timeout -- called from inside the qasync event loop, since
+                # shutdown() is a coroutine. The event is only set by stop()'s
+                # SHUTDOWN transition, so whenever stop() raised before
+                # reaching it (caught just above, failed=True) nothing would
+                # ever set it: the process blocked forever, holding the event
+                # loop thread, after every test had already passed. Seen as
+                # test_fms_live timing out at 420s roughly one run in three,
+                # having already printed "63 passed, 0 failed".
+                #
+                # Bound the wait, and run it off the loop so the loop keeps
+                # servicing any component stops still queued on it.
+                loop = asyncio.get_running_loop()
+                completed = await loop.run_in_executor(
+                    None, self.system_manager.wait_for_shutdown,
+                    _SHUTDOWN_WAIT_TIMEOUT)
+                if not completed:
+                    logger.warning(
+                        "Shutdown transition did not complete within "
+                        f"{_SHUTDOWN_WAIT_TIMEOUT}s; continuing teardown")
+                    failed = True
             self.shutdown_event.set()
             # self._started was already set to False at the top of this
             # method (see comment there) -- not repeated here.
             self._initialized = False
-            
+
             logger.info(f"Flight Management Operating Flight Program shut down. Thread ID: {threading.get_ident()}")
         except Exception as e:
             logger.error(f"Error during shutdown: {str(e)}")
+            failed = True
             raise
+        finally:
+            # BLOCKER B1: the loop must stop on every path out of here,
+            # including the ones where stop_system() never ran and therefore
+            # never transitioned to SHUTDOWN. request_stop() is idempotent.
+            self._initializer.request_stop(failed=failed or not started)
 
     def wait_for_shutdown(self):
         self.shutdown_event.wait()
@@ -234,7 +307,7 @@ async def start_fmofp():
             
     except Exception as e:
         logger.error(f"Error in FMOFP: {str(e)}")
-        await fmofp.shutdown()
+        await fmofp.shutdown(failed=True)
     finally:
         if fmofp.running:
             await fmofp.shutdown()
@@ -287,6 +360,12 @@ def main() -> int:
         # Let the initializer handle cleanup. Guarded: see docstring.
         if initializer is not None:
             initializer.cleanup()
+            # BLOCKER B1: a failure recorded during shutdown -- an ERROR state
+            # transition, a component that could not be stopped, a start that
+            # never completed -- has to reach the exit status too, not only the
+            # exceptions main() happens to catch itself.
+            if initializer.get_exit_status() != 0:
+                status = initializer.get_exit_status()
         else:
             logger.error("Initializer was never constructed; nothing to clean up")
 

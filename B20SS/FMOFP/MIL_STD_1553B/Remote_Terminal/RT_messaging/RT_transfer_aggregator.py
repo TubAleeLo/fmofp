@@ -14,6 +14,11 @@ from typing import Dict, List, Optional, Any, Tuple
 
 # Get the same logger as the RT
 from FMOFP.Utils.logger.sys_logger import get_logger
+from FMOFP.Utils.common.precipitation_scale import (
+    RATE_SCALE, INTENSITY_SCALE, MAX_CODE, TYPE_MASK, TYPE_SHIFT,
+    decode_attribute_word,
+)
+
 logger = get_logger()
 
 class RTTransferAggregator:
@@ -560,8 +565,13 @@ class RTTransferAggregator:
                     
                     # Extract precipitation type using BC's bit interpretation
                     # Type bit is at bit 15 (top bit of attribute value)
-                    precip_type = (attribute_value >> 15) & 0x1  # First bit determines snow vs rain
-                    type_name = "snow" if precip_type == 1 else "rain"  # ISSUE: not getting all types.
+                    # BLOCKER B9: the in-line "ISSUE: not getting all types"
+                    # note was right. The encoder writes a 4-bit type code in
+                    # bits 15-12 taking values 0-4 (rain, snow, sleet, hail,
+                    # mixed); none of them sets bit 15, so this always decoded
+                    # rain. Decode the whole field.
+                    type_name, _, _ = decode_attribute_word(attribute_value)
+                    precip_type = (attribute_value >> TYPE_SHIFT) & TYPE_MASK
                     
                     # Extract rate and intensity fields using BC's bit positions
                     # BC encoding: Bits 11-6 for rate (6 bits)
@@ -574,23 +584,21 @@ class RTTransferAggregator:
                     rate_bits = min(63, max(0, rate_bits))
                     intensity_bits = min(63, max(0, intensity_bits))
                     
-                    # EXACT SAME scaling as BC - crucial for consistent display
-                    
-                    # Rate scaling (mm/hr of precipitation)
-                    if rate_bits == 63:  # Special case for maximum value
-                        rate_scaled = rate_bits / 50.0  # Gives ~1.26 for max value
-                    else:
-                        rate_scaled = rate_bits / 100.0
-                    
-                    # Intensity scaling (0-1 normalized value)
-                    if intensity_bits == 63:  # Special case for maximum value
-                        intensity_scaled = intensity_bits / 2500.0  # Gives ~0.0252 for max value
-                    else:
-                        intensity_scaled = intensity_bits / 5000.0
+                    # BLOCKER B9: "EXACT SAME scaling as BC" was accurate and
+                    # was the problem -- BC and RT agreed with each other and
+                    # both disagreed with the encoder. rate_bits / 100.0 and
+                    # intensity_bits / 5000.0 (with ad-hoc `== 63` special
+                    # cases) against an encoder that writes rate * 2 and
+                    # intensity * 63 put intensity about 79x low and rate 50x
+                    # low, so severe weather could never reach the display's
+                    # SEVERE or MODERATE bands. Both sides now read the same
+                    # constants from Utils/common/precipitation_scale.
+                    rate_scaled = float(rate_bits) / RATE_SCALE
+                    intensity_scaled = float(intensity_bits) / INTENSITY_SCALE
                     
                     # Apply bounds checking to ensure valid ranges
-                    rate_scaled = max(0.01, min(50.0, rate_scaled))
-                    intensity_scaled = max(0.0001, min(1.0, intensity_scaled))
+                    rate_scaled = max(0.0, min(float(MAX_CODE) / RATE_SCALE, rate_scaled))
+                    intensity_scaled = max(0.0, min(1.0, intensity_scaled))
                     
                     # Create precipitation data object in BC's format
                     precip_obj = {

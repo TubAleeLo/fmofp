@@ -38,7 +38,10 @@ from pathlib import Path
 # Constants
 # ---------------------------------------------------------------------------
 
-MIN_PYTHON = (3, 9)
+MIN_PYTHON = (3, 10)   # B10: pyproject.toml requires >=3.10 and this file
+                      # itself uses PEP 604 syntax (Path | None) that 3.9
+                      # cannot even parse, so the friendly check below was
+                      # unreachable on exactly the versions it guarded.
 SCRIPT_DIR = Path(__file__).parent.resolve()
 FMOFP_DIR  = SCRIPT_DIR / "FMOFP"
 REQUIREMENTS_FILE = SCRIPT_DIR / "requirements.txt"
@@ -72,6 +75,15 @@ REQUIRED_CONFIGS = [
 # this exact gap is what let scipy go missing from actual installs even
 # after code started depending on it (see requirements.txt's scipy entry).
 REQUIRED_PACKAGES = [
+    # PyQt6-Qt6 and PyQt6-sip are PyQt6's own runtime dependencies and are
+    # bundled as wheels alongside it. They are listed explicitly (B10) because
+    # this list -- not requirements.txt -- is what install_dependencies()
+    # iterates, and because an offline install resolves each wheel from the
+    # local directories rather than from an index: naming them here means they
+    # are verified present rather than assumed to have come along for the ride.
+    # Order matters: PyQt6 depends on both, so they are installed first.
+    ("PyQt6.sip", "PyQt6-sip"),
+    ("PyQt6.QtCore", "PyQt6-Qt6"),
     ("PyQt6",    "PyQt6"),
     ("numpy",    "numpy"),
     ("qasync",   "qasync"),
@@ -199,15 +211,43 @@ def check_directories() -> None:
 # ---------------------------------------------------------------------------
 
 def _find_wheel(package_name: str) -> Path | None:
-    """Return the first matching .whl file in the bundled wheel directories."""
-    name_lower = package_name.lower().replace("-", "_")
+    """Return the matching .whl file in the bundled wheel directories.
+
+    Matches on the wheel's distribution name -- everything before the first
+    '-' -- rather than on a prefix. A prefix match made "PyQt6" match all three
+    bundled wheels (pyqt6-6.8.1, pyqt6_qt6-6.8.2, pyqt6_sip-13.10.0), and since
+    Path.glob order is filesystem-dependent, asking for PyQt6 could hand back
+    the Qt6 or sip wheel; the _is_installed("PyQt6") check afterwards then
+    failed the install with "installed without error but cannot be imported".
+    """
+    wanted = package_name.lower().replace("-", "_")
     for wheel_dir in WHEEL_DIRS:
         if not wheel_dir.is_dir():
             continue
         for whl in wheel_dir.glob("*.whl"):
-            if whl.name.lower().startswith(name_lower):
+            dist_name = whl.name.split("-", 1)[0].lower().replace("-", "_")
+            if dist_name == wanted:
                 return whl
     return None
+
+
+def _find_links_args() -> list:
+    """`--find-links` for every bundled wheel directory that exists.
+
+    BLOCKER B10: the bundled-wheel install ran
+    `pip install --no-index <wheel>` with no --find-links at all. The bundled
+    PyQt6 wheel declares Requires-Dist on PyQt6-sip and PyQt6-Qt6, so with the
+    index disabled and no local source to resolve them from, pip failed on the
+    very first package -- and in --offline mode there is no PyPI fallback, so
+    the documented primary Windows/air-gapped path could not work. CI has only
+    ever run on ubuntu-latest, where WHEEL_DIRS is empty, so this path was
+    never exercised.
+    """
+    args = []
+    for wheel_dir in WHEEL_DIRS:
+        if wheel_dir.is_dir():
+            args += ["--find-links", str(wheel_dir)]
+    return args
 
 
 def _is_installed(import_name: str) -> bool:
@@ -217,7 +257,9 @@ def _is_installed(import_name: str) -> bool:
     headless Linux) are not mistakenly reported as missing.
     """
     # Map import name to pip package name for packages that differ
-    pip_name_map = {"PyQt6": "PyQt6", "numpy": "numpy", "qasync": "qasync", "scipy": "scipy"}
+    pip_name_map = {"PyQt6": "PyQt6", "numpy": "numpy", "qasync": "qasync",
+                    "scipy": "scipy", "PyQt6.sip": "PyQt6-sip",
+                    "PyQt6.QtCore": "PyQt6-Qt6"}
     pip_name = pip_name_map.get(import_name, import_name)
     rc, _ = run(
         [sys.executable, "-m", "pip", "show", pip_name],
@@ -266,7 +308,8 @@ def install_dependencies(offline: bool, force_reinstall: bool) -> None:
 
         if wheel:
             info(f"Installing {pip_name} from bundled wheel: {wheel.name}")
-            rc, out = _pip_install(["--no-index", str(wheel)] + extra)
+            rc, out = _pip_install(
+                ["--no-index"] + _find_links_args() + [str(wheel)] + extra)
             if rc != 0:
                 warn(f"Bundled wheel install failed, trying PyPI:\n{out}")
                 wheel = None
