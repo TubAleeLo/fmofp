@@ -13,6 +13,11 @@ from FMOFP.Systems.flightManagementSys.fmsControl import get_fms_control
 logger = get_logger()
 
 class PrimaryFlightDisplay(BaseDisplay):
+    # Declares that this display actually polls the FMS and marks field
+    # validity, so PFDDisplayFactory will hand it to an operator. A variant
+    # that does not must set this False -- see HolographicPFD.
+    PROVIDES_FLIGHT_DATA = True
+
     def __init__(self, parent=None):
         super().__init__(DisplayType.PFD, parent=parent)
         # H9: these used to be seeded with plausible cruise values -- altitude

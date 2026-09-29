@@ -18,6 +18,8 @@ The EICAS polls at 10 Hz; individual caution/warning lines are colour-coded:
 import math
 import threading
 import time
+
+from .data_validity import FieldValidity
 import traceback
 from typing import Dict, List
 
@@ -64,6 +66,11 @@ class EICASDisplay(BaseDisplay):
         super().__init__(DisplayType.EICAS, parent=parent)
 
         # ── simulated / FMS-derived engine parameters ──────────────────────
+        # Which of these fields has actually had real data published to it.
+        # Everything starts UNKNOWN; the seeded numbers below exist only so the
+        # panel can lay out, and are not shown unless marked valid.
+        self._validity = FieldValidity()
+
         self._engine = {
             "thrust_pct": 70.0,       # 0-100 %
             "n1_pct":     78.5,       # fan speed  (%)
@@ -77,7 +84,10 @@ class EICASDisplay(BaseDisplay):
 
         # ── fuel state ─────────────────────────────────────────────────────
         self._fuel = {
-            "total_kg":   6800.0,
+            # Was 6800.0 -- a hardcoded starting quantity this display then
+            # integrated down, making it the aircraft's fuel authority. Now only
+            # a layout placeholder; validity decides whether it is shown.
+            "total_kg":   0.0,
             "flow_kgh":   2400.0,
             "balance_kg": 0.0,        # L-R imbalance
         }
@@ -140,6 +150,31 @@ class EICASDisplay(BaseDisplay):
 
     # ───────────────────────────────────────────────── data layer ──────────
 
+    def set_engine_readings(self, **readings):
+        """Supply real ECU readings, e.g. oil_psi=48.0, vib=0.9.
+
+        Oil pressure, oil temperature and vibration have no feed in this
+        project. They used to be generated as sine waves whose ranges could
+        never cross their own alarm thresholds, so ENG OIL PRESSURE LO, ENG OIL
+        TEMP HIGH and ENG VIBRATION HIGH were dead code while the panel read
+        nominal. Anything supplied here is marked valid and IS alarm-checked.
+        """
+        with self._lock:
+            for key, value in readings.items():
+                if value is None:
+                    continue
+                if key in self._engine:
+                    self._engine[key] = value
+                elif key in self._fuel:
+                    self._fuel[key] = value
+                else:
+                    continue
+                self._validity.mark(key)
+
+    def has_valid(self, field):
+        """True when `field` has had real data recently."""
+        return self._validity.is_valid(field)
+
     def _lazy_fms(self):
         """Lazy-import FMS handles (avoids circular imports at module load)."""
         if self._fms is None:
@@ -169,31 +204,54 @@ class EICASDisplay(BaseDisplay):
                 velocity = fd.get("velocity", {})
                 nav      = fd.get("navigation", {})
 
-                airspeed = velocity.get("airspeed", 300)   # knots
-                altitude = nav.get("altitude", 30000)      # feet
+                # No fabricated fallbacks. These used to default to 300 kt /
+                # 30,000 ft / 70% thrust, so with the FMS silent the display
+                # showed a complete engine picture derived from three constants.
+                airspeed = velocity.get("airspeed")
+                altitude = nav.get("altitude")
+                self._validity.mark_from(velocity, {'airspeed': 'airspeed'})
+                self._validity.mark_from(nav, {'altitude': 'altitude'})
 
-                # Thrust: derive from throttle via fmsControl if available
-                thrust = 70.0
+                # Thrust comes from fmsControl or not at all.
+                thrust = None
                 if self._fms_control:
-                    ts = self._fms_control.get_tactical_status()
+                    ts = self._fms_control.get_tactical_status() or {}
                     profile = ts.get("profile_limits", {})
-                    thrust = profile.get("engine_power", 0.7) * 100
+                    if "engine_power" in profile:
+                        thrust = profile["engine_power"] * 100
 
-                self._engine["thrust_pct"] = thrust
-                self._engine["n1_pct"]     = 0.8  * thrust + 18
-                self._engine["n2_pct"]     = 0.75 * thrust + 22
-                self._engine["egt_c"]      = 350  + thrust * 4.5
-                self._engine["ff_kgh"]     = thrust * 42
-                # Oil parameters slowly oscillate (simulated)
-                t = time.time()
-                self._engine["oil_psi"]    = 60 + 4 * math.sin(t * 0.1)
-                self._engine["oil_temp_c"] = 92 + 8 * math.sin(t * 0.05 + 1)
-                self._engine["vib"]        = 0.2 + 0.15 * abs(math.sin(t * 0.3))
+                if thrust is not None:
+                    # These four are a documented MODEL of the engine, derived
+                    # from commanded thrust -- not measurements. They are valid
+                    # only while a real thrust value is being published.
+                    self._engine["thrust_pct"] = thrust
+                    self._engine["n1_pct"]     = 0.8  * thrust + 18
+                    self._engine["n2_pct"]     = 0.75 * thrust + 22
+                    self._engine["egt_c"]      = 350  + thrust * 4.5
+                    self._engine["ff_kgh"]     = thrust * 42
+                    self._validity.mark('thrust_pct', 'n1_pct', 'n2_pct',
+                                        'egt_c', 'ff_kgh')
 
-                # Fuel: simple depletion model (100 kg/min at full power)
-                self._fuel["flow_kgh"]   = self._engine["ff_kgh"]
-                self._fuel["total_kg"]   = max(0, self._fuel["total_kg"]
-                                               - self._fuel["flow_kgh"] / 36000)
+                # Oil pressure, oil temperature and vibration were SINE WAVES
+                # presented as engine instruments, and their alarm thresholds
+                # were mathematically unreachable as a result:
+                #
+                #   oil_psi    60 + 4*sin()        -> [56, 64]   vs <50 caution
+                #   oil_temp_c 92 + 8*sin()        -> [84, 100]  vs >130 warning
+                #   vib        0.2 + 0.15*|sin()|  -> [0.20, 0.35] vs >0.8 caution
+                #
+                # So three alarm families could never fire, while the panel read
+                # reassuringly nominal. There is no ECU feed for these, so they
+                # stay UNKNOWN until set_engine_readings() supplies real values.
+
+                # Fuel is NOT owned by this display any more. It used to start
+                # at a hardcoded 6800 kg and integrate its own burn here, which
+                # made EICAS the sole authority on fuel quantity -- so closing
+                # and reopening the display reset the aircraft's fuel. Quantity
+                # now comes from a real source or reads UNKNOWN.
+                if thrust is not None:
+                    self._fuel["flow_kgh"] = self._engine["ff_kgh"]
+                    self._validity.mark('flow_kgh')
                 # Hydraulic: degrade slightly with G-load
                 g = tactical.get("g_force", 1.0)
                 self._hydraulic["sys_a_psi"] = 3000 - max(0, (g - 5) * 20)
@@ -314,24 +372,43 @@ class EICASDisplay(BaseDisplay):
             msgs.append({"text": text, "severity": sev, "ts": now})
 
         # Engine warnings
-        if self._engine["egt_c"] > 800:
-            add("ENG  EGT HIGH", _WARN)
-        elif self._engine["egt_c"] > 750:
-            add("ENG  EGT CAUTION", _CAUT)
+        # Each check runs only on a field that has real data. An UNKNOWN
+        # reading must not be silently treated as in-limits: it is reported as
+        # unknown instead, which is the honest state and is itself actionable.
+        v = self._validity
 
-        if self._engine["oil_psi"] < 40:
-            add("ENG  OIL PRESSURE LO", _WARN)
-        elif self._engine["oil_psi"] < 50:
-            add("ENG  OIL PRESS LOW", _CAUT)
+        if v.is_valid('egt_c'):
+            if self._engine["egt_c"] > 800:
+                add("ENG  EGT HIGH", _WARN)
+            elif self._engine["egt_c"] > 750:
+                add("ENG  EGT CAUTION", _CAUT)
+        else:
+            add("ENG  EGT UNKNOWN", _CAUT)
 
-        if self._engine["oil_temp_c"] > 130:
-            add("ENG  OIL TEMP HIGH", _WARN)
+        if v.is_valid('oil_psi'):
+            if self._engine["oil_psi"] < 40:
+                add("ENG  OIL PRESSURE LO", _WARN)
+            elif self._engine["oil_psi"] < 50:
+                add("ENG  OIL PRESS LOW", _CAUT)
+        else:
+            add("ENG  OIL PRESS UNKNOWN", _CAUT)
 
-        if self._engine["vib"] > 0.8:
-            add("ENG  VIBRATION HIGH", _CAUT)
+        if v.is_valid('oil_temp_c'):
+            if self._engine["oil_temp_c"] > 130:
+                add("ENG  OIL TEMP HIGH", _WARN)
+        else:
+            add("ENG  OIL TEMP UNKNOWN", _CAUT)
+
+        if v.is_valid('vib'):
+            if self._engine["vib"] > 0.8:
+                add("ENG  VIBRATION HIGH", _CAUT)
+        else:
+            add("ENG  VIB UNKNOWN", _CAUT)
 
         # Fuel warnings
-        if self._fuel["total_kg"] < 500:
+        if not v.is_valid('total_kg'):
+            add("FUEL QTY UNKNOWN", _CAUT)
+        elif self._fuel["total_kg"] < 500:
             add("FUEL  QUANTITY LOW", _WARN)
         elif self._fuel["total_kg"] < 1000:
             add("FUEL  QUANTITY CAUTION", _CAUT)

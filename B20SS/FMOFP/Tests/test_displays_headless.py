@@ -155,20 +155,58 @@ def test_eicas_compute_alerts(r: _Results) -> None:
     from FMOFP.Interfaces.userInterface.displays.eicas import EICASDisplay
     disp = EICASDisplay()
 
-    # All in-limits → no alerts
-    disp._engine["egt_c"]   = 600.0
-    disp._engine["oil_psi"] = 65.0
-    disp._fuel["total_kg"]  = 5000.0
+    # Readings must arrive through set_engine_readings(), which marks them
+    # valid. Writing straight into disp._engine leaves them UNKNOWN -- and an
+    # UNKNOWN reading is now reported as UNKNOWN rather than assumed in-limits,
+    # which is the point of the change: silence used to mean "nominal".
+    r.check("a fresh display reports UNKNOWN, not nominal",
+            any("UNKNOWN" in a["text"] for a in disp._compute_alerts(70.0)))
+
+    # All in-limits, supplied properly → no alerts
+    disp.set_engine_readings(egt_c=600.0, oil_psi=65.0, oil_temp_c=95.0,
+                             vib=0.3, total_kg=5000.0)
     alerts_ok = disp._compute_alerts(70.0)
     r.check("no alerts when all parameters in limits",
-            len(alerts_ok) == 0, f"got {len(alerts_ok)}")
+            len(alerts_ok) == 0, f"got {len(alerts_ok)}: "
+            f"{[a['text'] for a in alerts_ok]}")
 
     # EGT above warning threshold
-    disp._engine["egt_c"] = 820.0
+    disp.set_engine_readings(egt_c=820.0)
     alerts_egt = disp._compute_alerts(70.0)
     r.check("EGT > 800 → WARNING alert",
             any(a["severity"] == "WARNING" and "EGT" in a["text"]
                 for a in alerts_egt))
+
+    # The three alarms that were mathematically unreachable before, because
+    # their inputs were sine waves bounded inside their own limits:
+    #   oil_psi    60 + 4*sin()       -> [56, 64]     vs <50 caution
+    #   oil_temp_c 92 + 8*sin()       -> [84, 100]    vs >130 warning
+    #   vib        0.2 + 0.15*|sin()| -> [0.20, 0.35] vs >0.8 caution
+    disp.set_engine_readings(oil_psi=38.0, oil_temp_c=140.0, vib=0.95)
+    reachable = [a["text"] for a in disp._compute_alerts(70.0)]
+    r.check("oil-pressure alarm is reachable",
+            any("OIL PRESSURE LO" in t for t in reachable), str(reachable))
+    r.check("oil-temperature alarm is reachable",
+            any("OIL TEMP HIGH" in t for t in reachable), str(reachable))
+    r.check("vibration alarm is reachable",
+            any("VIBRATION HIGH" in t for t in reachable), str(reachable))
+
+    # NON-TAUTOLOGICAL: the pre-fix generators could not reach those limits.
+    import math as _m
+    psi_range  = (60 - 4, 60 + 4)
+    temp_range = (92 - 8, 92 + 8)
+    vib_range  = (0.2, 0.2 + 0.15)
+    r.check("pre-fix oil pressure could never fall below 50 "
+            "(proves these bite)", psi_range[0] > 50)
+    r.check("pre-fix oil temp could never exceed 130", temp_range[1] < 130)
+    r.check("pre-fix vibration could never exceed 0.8", vib_range[1] < 0.8)
+
+    # Fuel is no longer owned by the display: it must not start pre-loaded.
+    fresh = EICASDisplay()
+    r.check("fuel quantity is not seeded to 6800 kg",
+            fresh._fuel["total_kg"] == 0.0, f"got {fresh._fuel['total_kg']}")
+    r.check("fuel quantity starts UNKNOWN", not fresh.has_valid("total_kg"))
+    fresh.stop()
     disp.stop()
 
 
@@ -216,6 +254,81 @@ def test_tsd_paint_with_threats(r: _Results) -> None:
     ok = _paint_widget(disp)
     r.check("paint_display() succeeds with threat contacts", ok)
     disp.stop()
+
+
+def test_pfd_factory_refuses_unfed_display(r: _Results) -> None:
+    """A PFD with no flight-data feed must never be handed to an operator.
+
+    HolographicPFD inherits HolographicDisplay rather than PrimaryFlightDisplay,
+    so it never polls the FMS: its altitude/airspeed/mach/heading are assigned
+    only in __init__ and read everywhere else, while a scan-line animation makes
+    it look live. theme_config.json selects it for the "Modern" theme, so
+    choosing Modern silently replaced the PFD with a disconnected one showing a
+    fixed 30,000 ft / 450 kt picture.
+    """
+    print("\n  ── PFD factory: refuses a display with no feed ──")
+    _qt_app()
+    from FMOFP.Interfaces.userInterface.displays import pfd_display_factory as F
+    from FMOFP.Interfaces.userInterface.displays.holographic_pfd import HolographicPFD
+    from FMOFP.Interfaces.userInterface.displays.pfd import PrimaryFlightDisplay
+    from FMOFP.Interfaces.userInterface.displays.visual import theme_manager as TM
+
+    r.check("HolographicPFD declares it has no feed",
+            HolographicPFD.PROVIDES_FLIGHT_DATA is False)
+    r.check("PrimaryFlightDisplay declares it has one",
+            PrimaryFlightDisplay.PROVIDES_FLIGHT_DATA is True)
+
+    tm = TM.get_theme_manager()
+    original = tm.get_display_type
+    try:
+        tm.get_display_type = lambda kind, default="standard": "holographic"
+        F.PFDDisplayFactory._display_instance = None
+        F.PFDDisplayFactory._current_display_type = None
+        display = F.PFDDisplayFactory.create_display()
+        r.check("theme asking for holographic still yields a fed PFD",
+                getattr(type(display), "PROVIDES_FLIGHT_DATA", False),
+                f"got {type(display).__name__}")
+        r.check("the substitute polls the FMS", hasattr(display, "update_flight_data"))
+        r.check("the substitute tracks field validity", hasattr(display, "validity"))
+    finally:
+        tm.get_display_type = original
+        F.PFDDisplayFactory._display_instance = None
+        F.PFDDisplayFactory._current_display_type = None
+
+    # NON-TAUTOLOGICAL: the unfed display really does hold fixed values with no
+    # way to update them.
+    holo = HolographicPFD()
+    r.check("the unfed display has no FMS poll at all",
+            not hasattr(holo, "update_flight_data"))
+    r.check("its seeds are neutral, not a cruise picture "
+            "(proves this assertion bites)",
+            holo.altitude == 0 and holo.airspeed == 0,
+            f"alt={holo.altitude} ias={holo.airspeed}")
+
+
+def test_pfd_flags_invalid_fields(r: _Results) -> None:
+    """The PFD must flag missing data rather than showing seeded values (H9)."""
+    print("\n  ── PFD: invalid fields are flagged, not invented ──")
+    _qt_app()
+    from FMOFP.Interfaces.userInterface.displays.pfd import PrimaryFlightDisplay
+    disp = PrimaryFlightDisplay()
+
+    for field in ("altitude", "airspeed", "heading", "pitch", "roll"):
+        r.check(f"{field} starts INVALID", not disp.validity.is_valid(field))
+    r.check("no seeded cruise altitude", disp.altitude == 0, f"got {disp.altitude}")
+    r.check("no seeded cruise airspeed", disp.airspeed == 0, f"got {disp.airspeed}")
+
+    r.check("paints with nothing valid", _paint_widget(disp))
+
+    disp.validity.mark('altitude', 'airspeed', 'heading', 'pitch', 'roll')
+    r.check("paints with everything valid", _paint_widget(disp))
+
+    # a field the publisher omits must NOT be refreshed by its own last value
+    disp.validity.invalidate('altitude')
+    disp.validity.mark_from({'heading': 10}, {'heading': 'heading',
+                                              'altitude': 'altitude'})
+    r.check("an omitted key stays invalid", not disp.validity.is_valid('altitude'))
+    r.check("a present key is marked valid", disp.validity.is_valid('heading'))
 
 
 def test_tsd_no_synthetic_threats(r: _Results) -> None:
@@ -396,6 +509,8 @@ def run_all() -> bool:
         test_tsd_instantiation,
         test_tsd_paint_normal,
         test_tsd_paint_with_threats,
+        test_pfd_factory_refuses_unfed_display,
+        test_pfd_flags_invalid_fields,
         test_tsd_no_synthetic_threats,
         test_tsd_paint_combat_mode,
         # SMS
