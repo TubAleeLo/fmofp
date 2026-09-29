@@ -10,6 +10,15 @@ from FMOFP.Utils.logger.sys_logger import get_logger
 
 logger = get_logger()
 
+# Single source of truth for the clearance bands. tfr_processor's
+# ClearanceManager classifies against these, so the drawn bands and the issued
+# advisories cannot drift apart.
+from FMOFP.Systems.radarManagement.terrainFollowing.tfr_processor import (
+    CAUTION_M as _TFR_CAUTION_M,
+    LOW_M as _TFR_LOW_M,
+    CLEAR_M as _TFR_CLEAR_M,
+)
+
 class TFRModeHandler:
     """Handle TFR mode-specific visualizations"""
     
@@ -24,10 +33,15 @@ class TFRModeHandler:
     }
     
     # Warning zones (in meters)
+    # Taken from tfr_processor's thresholds rather than redefined here. Three
+    # different definitions of "terrain clearance warning" previously coexisted
+    # in one radar -- 150/300/500 here, 500/1000 in the dead handler copies and
+    # 150/300 in the status indicator -- so the bands, the advisories and the
+    # readout could disagree about the same aircraft.
     _warning_zones = {
-        'critical': 150,  # Meters above terrain
-        'warning': 300,
-        'caution': 500
+        'critical': _TFR_CAUTION_M,   # 150 m -- caution advisory threshold
+        'warning':  _TFR_LOW_M,       # 300 m -- low advisory threshold
+        'caution':  _TFR_CLEAR_M,     # 600 m -- comfortable, no advisory above
     }
 
     @staticmethod
@@ -113,9 +127,15 @@ class TFRModeHandler:
             
             for height, color in zones:
                 y = TFRModeHandler._elevation_to_y(height, rect)
+                # Was QRectF(left, rect.bottom(), width, rect.bottom() - y):
+                # the band's TOP was set to the display's BOTTOM edge, so every
+                # zone extended below the visible area and none was ever seen.
+                # For an 800x600 rect with max_elevation 2000, the critical band
+                # spanned y 600.0..645.0 on a display of 0..600. The band must
+                # run from the elevation line DOWN to the bottom edge.
                 zone_rect = QRectF(
                     rect.left(),
-                    rect.bottom(),
+                    y,
                     rect.width(),
                     rect.bottom() - y
                 )

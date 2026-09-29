@@ -256,6 +256,91 @@ def test_tsd_paint_with_threats(r: _Results) -> None:
     disp.stop()
 
 
+def test_tfr_warning_bands_are_on_screen(r: _Results) -> None:
+    """TFR clearance bands must render inside the display, not below it.
+
+    Every band was built as QRectF(left, rect.bottom(), width, rect.bottom()-y),
+    putting its TOP at the display's BOTTOM edge -- so all three extended below
+    the visible area and none was ever seen. For an 800x600 rect with
+    max_elevation 2000, the critical band spanned y 600.0..645.0 on a display of
+    0..600. These are the bands that make a terrain-following profile
+    actionable.
+    """
+    print("\n  ── TFR: warning bands land inside the display ──")
+    _qt_app()
+    from PyQt6.QtCore import QRectF
+    from FMOFP.Interfaces.userInterface.displays.radar.tfr_mode_handler import (
+        TFRModeHandler as T)
+    from FMOFP.Systems.radarManagement.terrainFollowing import tfr_processor as P
+
+    rect = QRectF(0, 0, 800, 600)
+    for name, elev in T._warning_zones.items():
+        y = T._elevation_to_y(elev, rect)
+        top, bottom_edge = y, y + (rect.bottom() - y)
+        r.check(f"{name} band top is on screen",
+                0 <= top <= rect.bottom(), f"top={top}")
+        r.check(f"{name} band bottom is on screen",
+                0 <= bottom_edge <= rect.bottom(), f"bottom={bottom_edge}")
+
+    # One definition of the thresholds, shared with the advisory logic.
+    r.check("critical band matches CAUTION_M", T._warning_zones['critical'] == P.CAUTION_M)
+    r.check("warning band matches LOW_M",      T._warning_zones['warning']  == P.LOW_M)
+    r.check("caution band matches CLEAR_M",    T._warning_zones['caution']  == P.CLEAR_M)
+
+    # NON-TAUTOLOGICAL: the pre-fix geometry really was off-screen.
+    y_crit = T._elevation_to_y(P.CAUTION_M, rect)
+    pre_fix_top = rect.bottom()
+    pre_fix_bottom = pre_fix_top + (rect.bottom() - y_crit)
+    r.check("pre-fix band started at the bottom edge and ran past it "
+            "(proves this assertion bites)",
+            pre_fix_top == 600.0 and pre_fix_bottom > 600.0,
+            f"spanned {pre_fix_top}..{pre_fix_bottom}")
+
+
+def test_mfd_terrain_clearance_not_invented(r: _Results) -> None:
+    """Terrain clearance must come from the ClearanceManager or read UNKNOWN.
+
+    It was the literal 500 with system_health 'NORMAL', carrying the author's
+    own comment that both should come from real data -- so the most
+    safety-relevant number on a terrain-following display showed a constant
+    500 m in green on every frame.
+    """
+    print("\n  ── MFD: terrain clearance is real or UNKNOWN ──")
+    _qt_app()
+    from FMOFP.Interfaces.userInterface.displays.mfd import MultiFunctionDisplay
+    disp = MultiFunctionDisplay()
+
+    clearance, health = disp._read_tfr_clearance()
+    r.check("no TFR radar -> clearance is None, not 500",
+            clearance is None, f"got {clearance}")
+    r.check("no TFR radar -> health is UNKNOWN, not NORMAL",
+            health == "UNKNOWN", f"got {health}")
+
+    # A real manager is read faithfully, including its level.
+    class _FakeMgr:
+        min_clearance_m = 120.0
+        master_level = "CAUTION"
+
+    class _FakeRadar:
+        clearance_manager = _FakeMgr()
+
+    import FMOFP.Systems.radarManagement.terrainFollowing.tfr_radar as TR
+    original = TR.tfr_radar
+    try:
+        TR.tfr_radar = _FakeRadar          # make isinstance match the fake
+        from FMOFP.Systems.radarManagement import radarControl as RC
+        rms = RC.get_radar_management_system()
+        saved = getattr(rms, "radars", None)
+        rms.radars = {"tfr": _FakeRadar()}
+        clearance, health = disp._read_tfr_clearance()
+        r.check("a real clearance is reported", clearance == 120.0, f"got {clearance}")
+        r.check("its level is reported", health == "CAUTION", f"got {health}")
+        if saved is not None:
+            rms.radars = saved
+    finally:
+        TR.tfr_radar = original
+
+
 def test_pfd_factory_refuses_unfed_display(r: _Results) -> None:
     """A PFD with no flight-data feed must never be handed to an operator.
 
@@ -509,6 +594,8 @@ def run_all() -> bool:
         test_tsd_instantiation,
         test_tsd_paint_normal,
         test_tsd_paint_with_threats,
+        test_tfr_warning_bands_are_on_screen,
+        test_mfd_terrain_clearance_not_invented,
         test_pfd_factory_refuses_unfed_display,
         test_pfd_flags_invalid_fields,
         test_tsd_no_synthetic_threats,
