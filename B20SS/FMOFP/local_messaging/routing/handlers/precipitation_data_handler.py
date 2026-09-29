@@ -12,6 +12,7 @@ from FMOFP.local_messaging.messageConfigurations.weather_radar_data import Preci
 from FMOFP.local_messaging.message_types import WEATHER_RADAR_PRECIPITATION_RESPONSE, WEATHER_RADAR_PRECIPITATION_REQUEST
 from FMOFP.local_messaging.address_utils import get_rt_address, get_subaddress
 from FMOFP.local_messaging.routing.handlers.base_message_handler import BaseMessageHandler
+from FMOFP.Utils.common.radar_records import COLLECTION_RECORD_TYPE
 
 from FMOFP.Utils.common.precipitation_scale import (
     RATE_SCALE, INTENSITY_SCALE, TYPE_CODE_TO_NAME, DEFAULT_TYPE,
@@ -181,21 +182,39 @@ class PrecipitationDataHandler(BaseMessageHandler):
             logger.debug(f"[LOC_PRECIP_DATA_HDLR_PRECIP_FLOW] Starting storage of precipitation data with request_id: {getattr(precipitation_data, 'request_id', None)}")
             logger.debug(f"[LOC_PRECIP_DATA_HDLR_PRECIP_FLOW] Input PrecipitationData object: {precipitation_data.__dict__}")
 
-            # Verify required fields are present and add defaults if missing
-            required_fields = ['request_id', 'position', 'type', 'rate', 'intensity']
-            for field in required_fields:
-                if not hasattr(precipitation_data, field):
-                    logger.warning(f"[PRECIP_DATA_HNDLR_STORE] Missing required field: {field} - adding default value")
-                    if field == 'request_id':
-                        setattr(precipitation_data, field, str(time.time()))
-                    elif field == 'position':
-                        setattr(precipitation_data, field, (0.0, 0.0))
-                    elif field == 'type':
-                        setattr(precipitation_data, field, 'rain')
-                    elif field == 'rate':
-                        setattr(precipitation_data, field, 0.0)
-                    elif field == 'intensity':
-                        setattr(precipitation_data, field, 0.0)
+            # Verify required fields are present.
+            #
+            # 'request_id' is an identifier rather than a measurement, so one can be
+            # minted here when it is absent. The other four cannot: this block used
+            # to fill a missing position with (0.0, 0.0), a missing type with 'rain'
+            # and a missing rate or intensity with 0.0, and then write the result to
+            # disk. Every column in precipitation_data is NOT NULL, so there is no
+            # way to record "this field did not arrive" -- which means an invented
+            # value is indistinguishable from a measured one for the rest of the
+            # record's life. It is read back by precipitation_response_service,
+            # turned into a PrecipitationData object and rendered as a measurement
+            # the radar never took: rain, at ownship, with nothing to mark it out.
+            #
+            # An incomplete record is therefore refused rather than completed. The
+            # caller sees False and the reason is logged; nothing is written.
+            if not hasattr(precipitation_data, 'request_id'):
+                logger.warning(
+                    "[PRECIP_DATA_HNDLR_STORE] No request_id supplied - minting one "
+                    "(an identifier, unlike the fields below, can be generated here)"
+                )
+                setattr(precipitation_data, 'request_id', str(time.time()))
+
+            measured_fields = ['position', 'type', 'rate', 'intensity']
+            missing = [f for f in measured_fields if not hasattr(precipitation_data, f)]
+            if missing:
+                logger.error(
+                    f"[PRECIP_DATA_HNDLR_STORE] Refusing to store precipitation "
+                    f"record {getattr(precipitation_data, 'request_id', None)}: "
+                    f"missing measured field(s) {missing}. The schema cannot record "
+                    f"an absent reading, and substituting one would make it "
+                    f"indistinguishable from a real measurement downstream."
+                )
+                return False
 
             # Prepare data for storage with timestamp validation
             try:
@@ -876,14 +895,19 @@ class PrecipitationDataHandler(BaseMessageHandler):
             # Also create a link record in the main request table using the original request_id
             # This makes it possible to find all related objects by the original request ID
             try:
+                # This row is a link record, not a measurement: it exists so the
+                # whole batch can be found again by the original request_id, and its
+                # numeric columns are zero only because the schema forbids NULLs
+                # there. Readers must exclude it -- see FMOFP.Utils.common.radar_records
+                # for why, and for the predicate they use to do it.
                 link_record = {
                     'request_id': request_id,
                     'timestamp': time.time(),
-                    'position_x': 0.0,
+                    'position_x': 0.0,   # not a position; see above
                     'position_y': 0.0,
-                    'type': 'collection',
-                    'rate': 0.0,
-                    'intensity': 0.0,
+                    'type': COLLECTION_RECORD_TYPE,
+                    'rate': 0.0,         # not a rate; see above
+                    'intensity': 0.0,    # not an intensity; see above
                     'show_values': 1,
                     'additional_info': json.dumps({
                         'is_collection_record': True,

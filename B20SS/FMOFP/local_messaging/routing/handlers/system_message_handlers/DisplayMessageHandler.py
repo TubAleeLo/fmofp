@@ -21,6 +21,7 @@ from FMOFP.MIL_STD_1553B.Bus_Controller.BC_messaging.BC_msg import BC_construct
 from FMOFP.local_messaging.routing.response_services.data_response_services.vil_response_service import VILResponseService
 from FMOFP.local_messaging.routing.response_services.data_response_services.echo_top_response_service import EchoTopResponseService
 from FMOFP.Utils.logger.sys_logger import get_logger
+from FMOFP.Utils.common.radar_records import MEASUREMENT_ONLY_SQL
 # Import centralized message type definitions
 from FMOFP.local_messaging.message_types import (
     WEATHER_RADAR_VIL_REQUEST, WEATHER_RADAR_VIL_RESPONSE,
@@ -1625,9 +1626,10 @@ class DisplayMessageHandler:
                 precip_db_data = radar_db.execute_query(
                     """
                     SELECT * FROM precipitation_data
+                    WHERE {measurement_only}
                     ORDER BY timestamp DESC
                     LIMIT 10
-                    """,
+                    """.format(measurement_only=MEASUREMENT_ONLY_SQL),
                     (),
                     query_type='select'
                 )
