@@ -138,7 +138,7 @@ def _captured_particle_colors(display):
         captured.append({"kind": "cells", "color": color, "intensity": intensity,
                          "radius": radius, "id": cell_id})
         display._particles.setdefault("cells", {})[cell_id] = []
-        display._cell_particle_colors[cell_id] = color
+        display._particle_colors["cells"][cell_id] = color
 
     display._generate_particles = fake_generate
     display._generate_cell_particles = fake_generate_cell
@@ -305,51 +305,99 @@ def test_storm_cell_unknown_intensity():
         display.cleanup()
 
 
-def test_storm_cell_particles_use_their_own_colour():
-    """_draw_particles had no 'cells' branch, so cells came out VIL-yellow."""
+def test_particles_keep_the_colour_their_draw_method_chose():
+    """The particle colour lookup in _draw_particles could never succeed.
+
+    It asked ``self._data_coordinator._data_store[data_type]['data']`` for the
+    item behind each particle. That store holds 'current', 'backup', 'ttl' and
+    'backup_timestamps' -- there is no 'data' key and never has been. So every
+    lookup missed and every particle took the fallback: precipitation was
+    painted rain-blue whatever its type, and VIL and storm cells VIL-'LOW'
+    yellow whatever their strength. Colours are now recorded by the draw method
+    that computed them and read back by id.
+
+    Found by rendering the display to a PNG and looking at it -- the test suite
+    was green throughout, because nothing asserted on the colour that actually
+    reached the painter.
+    """
     from FMOFP.Interfaces.userInterface.displays.radar.weather_radar_display import (
         UNKNOWN_SEVERITY_COLOR,
     )
+    from FMOFP.Interfaces.userInterface.displays.radar.radar_display_data_coordinator import (
+        get_radar_display_data_coordinator,
+    )
     from PyQt6.QtCore import QPointF
 
-    R.section("Storm cell particles are coloured by the cell's own severity")
+    R.section("Particles keep the colour their draw method chose")
+
+    coordinator = get_radar_display_data_coordinator()
+    coordinator.store_data(
+        "precipitation",
+        [{"position": (5.0, 5.0), "id": "p_probe", "type": "hail",
+          "intensity": 0.9, "rate": 30.0}],
+        "req_probe")
+    store = coordinator._data_store.get("precipitation", {})
+    R.check("NON-TAUTOLOGICAL: the store has no 'data' key for the old lookup",
+            "data" not in store, f"keys={sorted(store.keys())}")
+    R.check("so the pre-fix lookup returned an empty mapping every time",
+            store.get("data", {}) == {})
+    R.check("while the item really is in the store, under 'current'",
+            any(i.get("id") == "p_probe" for i in store.get("current", [])))
 
     display, painter, raw, _pixmap = _display_and_painter()
+    captured = _captured_particle_colors(display)
     try:
-        severe = display._get_intensity_color(0.95)
-        display._particles["cells"]["c_severe"] = []
-        display._cell_particle_colors["c_severe"] = severe
+        R.check("NON-TAUTOLOGICAL: the pre-fix precipitation fallback was rain blue",
+                _rgb(display._precipitation_colors["rain"]) == (0, 0, 255))
+        R.check("and the pre-fix fallback for everything else was VIL 'LOW' yellow",
+                _rgb(display._vil_colors["LOW"]) == (255, 255, 0))
 
-        # Reproduce the pre-fix colour choice for a 'cells' data_type: the old
-        # branch structure was `if data_type == 'precipitation': ... else: # vil`,
-        # so 'cells' fell into the VIL arm, missed the VIL store and took the
-        # 'LOW' fallback.
-        pre_fix_color = display._vil_colors["LOW"]
-        R.check("NON-TAUTOLOGICAL: the pre-fix fallback really was VIL 'LOW' yellow",
-                _rgb(pre_fix_color) == (255, 255, 0))
-        R.check("and a severe cell's own colour differs from it, so the bug was visible",
-                _rgb(severe) != _rgb(pre_fix_color),
-                f"severe={_rgb(severe)} pre_fix={_rgb(pre_fix_color)}")
-        R.check("the cell's classified colour is now recorded for the draw pass",
-                _rgb(display._cell_particle_colors["c_severe"]) == _rgb(severe))
-        R.check("a cell with no recorded colour falls back to neutral, not yellow",
-                _rgb(display._cell_particle_colors.get(
-                    "c_missing", UNKNOWN_SEVERITY_COLOR)) == _rgb(UNKNOWN_SEVERITY_COLOR))
+        display._draw_precipitation(
+            painter, QPointF(400, 300), 250.0,
+            {"position": (9.0, 3.0), "id": "p_hail", "type": "hail",
+             "intensity": 0.85, "rate": 30.0},
+        )
+        R.check("a hail echo is recorded as hail magenta, not rain blue",
+                _rgb(display._particle_colors["precipitation"]["p_hail"])
+                == _rgb(display._precipitation_colors["hail"]),
+                f"got {_rgb(display._particle_colors['precipitation'].get('p_hail'))}")
 
-        # The generator is handed a colour and must keep it rather than drop it.
-        captured = _captured_particle_colors(display)
+        display._draw_vil(
+            painter, QPointF(400, 300), 250.0,
+            {"position": (-6.0, 9.0), "id": "v_high", "value": 34.0},
+        )
+        R.check("a high VIL column is recorded as HIGH, not 'LOW'",
+                _rgb(display._particle_colors["vil"]["v_high"])
+                == _rgb(display._vil_colors["HIGH"]),
+                f"got {_rgb(display._particle_colors['vil'].get('v_high'))}")
+
         display._draw_storm_cell(
             painter, QPointF(400, 300), 250.0,
             {"position": (1.0, 1.0), "cell_id": "c_new", "intensity": 0.95},
         )
-        R.check("drawing a severe cell records the SEVERE colour against its id",
-                display._cell_particle_colors.get("c_new") is not None
-                and _rgb(display._cell_particle_colors["c_new"])
+        R.check("a severe cell is recorded as SEVERE, not yellow",
+                _rgb(display._particle_colors["cells"]["c_new"])
                 == _rgb(display._intensity_colors["SEVERE"]),
-                f"recorded={display._cell_particle_colors.get('c_new')}")
-        R.check("and the same colour reaches the generator",
+                f"got {_rgb(display._particle_colors['cells'].get('c_new'))}")
+        R.check("and that colour is what reaches the generator",
                 captured and _rgb(captured[-1]["color"])
                 == _rgb(display._intensity_colors["SEVERE"]))
+
+        R.check("an id with no recorded colour falls back to neutral, not a band",
+                _rgb(display._particle_colors["cells"].get(
+                    "c_missing", UNKNOWN_SEVERITY_COLOR))
+                == _rgb(UNKNOWN_SEVERITY_COLOR))
+
+        # An unreported severity must still be recorded as neutral, so the
+        # fallback above is not the only thing keeping it grey.
+        display._draw_precipitation(
+            painter, QPointF(400, 300), 250.0,
+            {"position": (-11.0, -7.0), "id": "p_unknown", "type": "rain"},
+        )
+        R.check("an echo with no severity is recorded neutral, not rain blue",
+                _rgb(display._particle_colors["precipitation"]["p_unknown"])
+                == _rgb(UNKNOWN_SEVERITY_COLOR),
+                f"got {_rgb(display._particle_colors['precipitation'].get('p_unknown'))}")
     finally:
         raw.end()
         display.cleanup()
@@ -777,7 +825,7 @@ def main():
         test_optional_reads,
         test_precipitation_unknown_severity,
         test_storm_cell_unknown_intensity,
-        test_storm_cell_particles_use_their_own_colour,
+        test_particles_keep_the_colour_their_draw_method_chose,
         test_vil_unknown_value,
         test_turbulence_unknown_category,
         test_coordinator_leaves_unmeasured_fields_absent,

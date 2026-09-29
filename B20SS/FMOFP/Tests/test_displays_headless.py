@@ -149,6 +149,104 @@ def test_eicas_paint_warnings(r: _Results) -> None:
     disp.stop()
 
 
+class _TextRecordingPainter:
+    """Forwards to a real QPainter, recording every string drawn."""
+
+    def __init__(self, painter):
+        self._painter = painter
+        self.texts = []
+
+    def drawText(self, *args):
+        for a in args:
+            if isinstance(a, str):
+                self.texts.append(a)
+        return self._painter.drawText(*args)
+
+    def __getattr__(self, name):
+        return getattr(self._painter, name)
+
+
+def _painted_texts(widget):
+    """Paint the widget once and return every string it drew."""
+    from PyQt6.QtGui import QPainter, QPixmap
+    from PyQt6.QtCore import Qt
+
+    for attr in ("_poll_timer", "_update_timer"):
+        t = getattr(widget, attr, None)
+        if t is not None and hasattr(t, "stop"):
+            try:
+                t.stop()
+            except Exception:
+                pass
+
+    pixmap = QPixmap(900, 700)
+    pixmap.fill(Qt.GlobalColor.black)
+    raw = QPainter(pixmap)
+    rec = _TextRecordingPainter(raw)
+    try:
+        widget._running = True
+        widget.resize(900, 700)
+        widget.paint_display(rec)
+    finally:
+        raw.end()
+    return rec.texts
+
+
+def test_eicas_unread_parameters_show_as_unknown(r: _Results) -> None:
+    """With nothing feeding it, EICAS must not draw engine or fuel numbers.
+
+    This was found by rendering the display to a PNG and looking at it, not by
+    a failing test: the suite was green while the panel showed THRUST 70.0 %,
+    N1 78.5 %, EGT 620 °C and the rest -- the seed values from __init__ --
+    in normal green, and FUEL TOTAL as `0 kg`, which is drawn RED and reads as
+    a fuel emergency rather than as an absent reading.
+    """
+    from FMOFP.Interfaces.userInterface.displays.eicas import (
+        EICASDisplay, _UNKNOWN_TEXT,
+    )
+
+    print("\n  \u2500\u2500 EICAS: unread parameters \u2500\u2500")
+
+    disp = EICASDisplay()
+    texts = _painted_texts(disp)
+    joined = " ".join(texts)
+
+    # The eight engine rows plus FUEL TOTAL and FLOW.
+    r.check("every unread parameter is drawn as dashes",
+            texts.count(_UNKNOWN_TEXT) >= 10,
+            f"count={texts.count(_UNKNOWN_TEXT)}")
+
+    for seed in ("70.0 %", "78.5 %", "84.2 %", "620 \u00b0C", "2400 kg/h",
+                 "62.0", "95.0", "0.30"):
+        r.check(f"the seed value {seed!r} is not presented as a reading",
+                seed not in joined, f"texts={texts[:40]}")
+
+    r.check("FUEL TOTAL does not read 0 kg (which draws red, i.e. an emergency)",
+            "     0 kg" not in joined, f"texts={texts[:40]}")
+
+    # NON-TAUTOLOGICAL: the seeds really are still in place, so the assertions
+    # above are about the *rendering* and not about an empty object.
+    r.check("NON-TAUTOLOGICAL: the engine seeds really are still there",
+            disp._engine["thrust_pct"] == 70.0 and disp._engine["n1_pct"] == 78.5)
+    r.check("NON-TAUTOLOGICAL: the pre-fix format really did produce '70.0 %'",
+            f"{disp._engine['thrust_pct']:5.1f} %".strip() == "70.0 %")
+    r.check("NON-TAUTOLOGICAL: fuel total really is 0.0, which is < 500 (red)",
+            disp._fuel["total_kg"] == 0.0 and disp._fuel["total_kg"] < 500)
+
+    # A supplied reading must appear, so "unknown" is not simply always drawn.
+    disp.set_engine_readings(oil_psi=48.0, vib=0.9, total_kg=4200.0)
+    texts2 = " ".join(_painted_texts(disp))
+    r.check("a supplied oil pressure is shown as a number", "48.0" in texts2)
+    r.check("a supplied vibration is shown as a number", "0.90" in texts2)
+    r.check("a supplied fuel quantity is shown as a number", "4200 kg" in texts2)
+    r.check("parameters still unread stay as dashes", _UNKNOWN_TEXT in texts2)
+
+    try:
+        disp.cleanup()
+    except Exception:
+        pass
+
+
 def test_eicas_compute_alerts(r: _Results) -> None:
     print("\n  ── EICAS: _compute_alerts logic ──")
     _qt_app()
@@ -589,6 +687,7 @@ def run_all() -> bool:
         test_eicas_instantiation,
         test_eicas_paint_normal,
         test_eicas_paint_warnings,
+        test_eicas_unread_parameters_show_as_unknown,
         test_eicas_compute_alerts,
         # TSD
         test_tsd_instantiation,

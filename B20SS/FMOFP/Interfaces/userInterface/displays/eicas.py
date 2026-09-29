@@ -38,6 +38,13 @@ _RED    = QColor(255,  60,  60)
 _CYAN   = QColor(0,   220, 255)
 _WHITE  = QColor(240, 240, 240)
 _DIM    = QColor(100, 100, 100)
+
+# Shown in place of a number for a parameter that has no current reading.
+# Dashes rather than a value, because every alternative is a measurement the
+# aircraft did not make: leaving the seed in place reads as nominal, and
+# substituting zero reads as an emergency -- FUEL TOTAL 0 kg renders red and
+# would send a crew looking for a fuel leak that does not exist.
+_UNKNOWN_TEXT = "----" 
 _BG     = QColor(10,   12,  16)
 _PANEL  = QColor(22,   26,  32)
 
@@ -591,21 +598,32 @@ class EICASDisplay(BaseDisplay):
         f_label = QFont("Monospace", 8)
         f_value = QFont("Monospace", 10, QFont.Weight.Bold)
 
+        # Each row names the validity field behind it. A parameter with no
+        # current reading is drawn as dashes in amber, and its threshold colour
+        # is not evaluated at all -- the numbers in self._engine are layout
+        # seeds, and colouring them green was the display asserting a nominal
+        # engine while nothing was feeding it.
+        def reading(field, fmt, colour_fn=None):
+            if not self._validity.is_valid(field):
+                return (_UNKNOWN_TEXT, _AMBER)
+            value = self._engine[field]
+            return (fmt(value), colour_fn(value) if colour_fn else _GREEN)
+
         params = [
-            ("THRUST",   f"{self._engine['thrust_pct']:5.1f} %",   _GREEN),
-            ("N1",       f"{self._engine['n1_pct']:5.1f} %",        _GREEN),
-            ("N2",       f"{self._engine['n2_pct']:5.1f} %",        _GREEN),
-            ("EGT",      f"{self._engine['egt_c']:5.0f} °C",
-             _RED if self._engine["egt_c"] > 800 else
-             _AMBER if self._engine["egt_c"] > 750 else _GREEN),
-            ("FF",       f"{self._engine['ff_kgh']:5.0f} kg/h",     _GREEN),
-            ("OIL PSI",  f"{self._engine['oil_psi']:5.1f}",
-             _RED if self._engine["oil_psi"] < 40 else
-             _AMBER if self._engine["oil_psi"] < 50 else _GREEN),
-            ("OIL °C",   f"{self._engine['oil_temp_c']:5.1f}",
-             _RED if self._engine["oil_temp_c"] > 130 else _GREEN),
-            ("VIB",      f"{self._engine['vib']:5.2f}",
-             _AMBER if self._engine["vib"] > 0.8 else _GREEN),
+            ("THRUST",  *reading('thrust_pct', lambda v: f"{v:5.1f} %")),
+            ("N1",      *reading('n1_pct',     lambda v: f"{v:5.1f} %")),
+            ("N2",      *reading('n2_pct',     lambda v: f"{v:5.1f} %")),
+            ("EGT",     *reading('egt_c',      lambda v: f"{v:5.0f} °C",
+                                 lambda v: _RED if v > 800 else
+                                           _AMBER if v > 750 else _GREEN)),
+            ("FF",      *reading('ff_kgh',     lambda v: f"{v:5.0f} kg/h")),
+            ("OIL PSI", *reading('oil_psi',    lambda v: f"{v:5.1f}",
+                                 lambda v: _RED if v < 40 else
+                                           _AMBER if v < 50 else _GREEN)),
+            ("OIL °C",  *reading('oil_temp_c', lambda v: f"{v:5.1f}",
+                                 lambda v: _RED if v > 130 else _GREEN)),
+            ("VIB",     *reading('vib',        lambda v: f"{v:5.2f}",
+                                 lambda v: _AMBER if v > 0.8 else _GREEN)),
         ]
 
         row_h = r.height() / (len(params) + 1)
@@ -665,10 +683,23 @@ class EICASDisplay(BaseDisplay):
 
         # ── Fuel ────────────────────────────────────────────────────────────
         section("─── FUEL ────────────")
-        fuel_col = (_RED   if self._fuel["total_kg"] < 500  else
-                    _AMBER if self._fuel["total_kg"] < 1000 else _GREEN)
-        row("TOTAL",   f"{self._fuel['total_kg']:6.0f} kg",  fuel_col)
-        row("FLOW",    f"{self._fuel['flow_kgh']:6.0f} kg/h", _GREEN)
+        # Quantity is not owned by this display any more, and nothing currently
+        # publishes it, so TOTAL reads as unknown rather than as the 0 kg the
+        # layout placeholder holds -- 0 would be drawn red, i.e. as a fuel
+        # emergency, which is the opposite of "no reading".
+        if self._validity.is_valid('total_kg'):
+            total = self._fuel["total_kg"]
+            fuel_col = (_RED   if total < 500  else
+                        _AMBER if total < 1000 else _GREEN)
+            row("TOTAL", f"{total:6.0f} kg", fuel_col)
+        else:
+            row("TOTAL", _UNKNOWN_TEXT, _AMBER)
+
+        if self._validity.is_valid('flow_kgh'):
+            row("FLOW", f"{self._fuel['flow_kgh']:6.0f} kg/h", _GREEN)
+        else:
+            row("FLOW", _UNKNOWN_TEXT, _AMBER)
+
         bal = self._fuel["balance_kg"]
         bal_col = _AMBER if abs(bal) > 200 else _GREEN
         row("BALANCE", f"{bal:+6.0f} kg", bal_col)

@@ -152,10 +152,24 @@ class WeatherRadarDisplay(BaseRadarDisplay):
             'vil': {},           # Dict of vil_id -> list of particles
             'cells': {}          # Dict of cell_id -> list of particles
         }
-        # cell_id -> the QColor _get_intensity_color assigned that cell, so
-        # _draw_particles can paint its particles with the severity the cell was
-        # actually classified as.  Kept in step with self._particles['cells'].
-        self._cell_particle_colors = {}
+        # data_id -> the QColor the draw method classified that echo as, so
+        # _draw_particles can paint its particles with the severity that was
+        # actually decided.  Kept in step with self._particles.
+        #
+        # _draw_particles used to re-derive the colour instead, by looking the id
+        # up in self._data_coordinator._data_store[data_type]['data'] -- a key
+        # that has never existed (the store holds 'current', 'backup', 'ttl' and
+        # 'backup_timestamps'). So the lookup always missed and every particle
+        # took the fallback: precipitation was painted rain-blue whatever its
+        # type, and VIL and storm cells were painted VIL-'LOW' yellow whatever
+        # their strength. Recording the colour at the point it is computed, and
+        # reading it back by id, removes both the dead lookup and the reach into
+        # another object's private state.
+        self._particle_colors = {
+            'precipitation': {},
+            'vil': {},
+            'cells': {},
+        }
         self._last_particle_update = time.time()
 
         # Connect animation controller signals
@@ -2194,6 +2208,7 @@ class WeatherRadarDisplay(BaseRadarDisplay):
 
             # Get or create unique ID for this precipitation data point
             precip_id = precip.get('id', f"precip_{str(uuid.uuid4())[:8]}")
+            self._particle_colors['precipitation'][precip_id] = QColor(base_color)
 
             # Calculate particle radius based on intensity and rate.  With neither
             # reading, fall back to the smallest footprint the system draws rather
@@ -2517,7 +2532,7 @@ class WeatherRadarDisplay(BaseRadarDisplay):
                     # Remove empty particle lists
                     if not self._particles['cells'][cell_id]:
                         del self._particles['cells'][cell_id]
-                        self._cell_particle_colors.pop(cell_id, None)
+                        self._particle_colors['cells'].pop(cell_id, None)
 
         except Exception as e:
             logger.error(f"[WEATHER_DISPLAY] Error updating particles with animation: {str(e)}")
@@ -2662,7 +2677,7 @@ class WeatherRadarDisplay(BaseRadarDisplay):
             # particles were coloured by the VIL fallback (yellow, "low VIL")
             # regardless of the severity _get_intensity_color had just computed.
             self._particles['cells'][cell_id] = particles
-            self._cell_particle_colors[cell_id] = QColor(color)
+            self._particle_colors['cells'][cell_id] = QColor(color)
 
             # Add frame to animation controller's temporal buffer
             if hasattr(self._animation_controller, 'add_frame'):
@@ -2934,43 +2949,14 @@ class WeatherRadarDisplay(BaseRadarDisplay):
                 data_id = particle['data_id']
 
                 # Get base color based on data type
-                # In each branch below, "the data is no longer in the store" means the
-                # particles have outlived their reading.  That is not a licence to pick
-                # a plausible colour: the previous code answered it with blue (rain)
-                # for precipitation and yellow (low VIL) for everything else, so a
-                # stale particle cloud was indistinguishable from a live measurement.
-                if data_type == 'precipitation':
-                    # Use color from the original precipitation data if available
-                    if data_id in self._data_coordinator._data_store.get('precipitation', {}).get('data', {}):
-                        precip_data = self._data_coordinator._data_store['precipitation']['data'][data_id]
-                        precip_type = precip_data.get('type')
-                        base_color = self._precipitation_colors.get(precip_type, self._precipitation_colors[None])
-                    else:
-                        base_color = UNKNOWN_SEVERITY_COLOR
-                elif data_type == 'cells':
-                    # Colour the cell as _draw_storm_cell classified it, rather than
-                    # falling through to the VIL fallback below.
-                    base_color = self._cell_particle_colors.get(
-                        data_id, UNKNOWN_SEVERITY_COLOR)
-                else:  # vil
-                    # Use color based on VIL level if available
-                    vil_store = self._data_coordinator._data_store.get('vil', {}).get('data', {})
-                    value = optional_float(vil_store.get(data_id, {}), 'value', minimum=0.0)
-                    if value is UNKNOWN:
-                        # Either the reading is gone or it never carried a value.  The
-                        # default used to be 20.0 kg/m2, which lands in a real band.
-                        base_color = UNKNOWN_SEVERITY_COLOR
-                    else:
-                        # Determine VIL level based on value
-                        vil_level = 'MINIMAL'
-                        if value > 30:
-                            vil_level = 'HIGH'
-                        elif value > 20:
-                            vil_level = 'MEDIUM'
-                        elif value > 10:
-                            vil_level = 'LOW'
-
-                        base_color = self._vil_colors.get(vil_level, self._vil_colors['MINIMAL'])
+                # Paint each particle in the colour its own draw method decided on
+                # (see self._particle_colors). A particle whose id is no longer
+                # recorded has outlived its reading, and that is not a licence to
+                # pick a plausible colour -- it falls back to neutral rather than to
+                # a band, so a stale cloud cannot be mistaken for a live
+                # measurement.
+                base_color = self._particle_colors.get(data_type, {}).get(
+                    data_id, UNKNOWN_SEVERITY_COLOR)
 
                 # Create color with proper opacity
                 color = QColor(base_color)
@@ -3086,6 +3072,7 @@ class WeatherRadarDisplay(BaseRadarDisplay):
 
             # Get or create unique ID for this VIL data point
             vil_id = vil_dict.get('id', f"vil_{str(uuid.uuid4())[:8]}")
+            self._particle_colors['vil'][vil_id] = QColor(color)
 
             # Calculate particle radius based on value and intensity
             if value is UNKNOWN:
@@ -3245,7 +3232,7 @@ class WeatherRadarDisplay(BaseRadarDisplay):
                     if cell_id in self._particles.get('cells', {}):
                         particles_cleaned += len(self._particles['cells'][cell_id])
                         del self._particles['cells'][cell_id]
-                        self._cell_particle_colors.pop(cell_id, None)
+                        self._particle_colors['cells'].pop(cell_id, None)
 
             if particles_cleaned > 0:
                 logger.warning(f"[WEATHER_DISPLAY] Removed {particles_cleaned} expired particles from memory")
