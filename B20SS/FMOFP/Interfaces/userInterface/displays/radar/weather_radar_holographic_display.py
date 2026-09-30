@@ -1937,7 +1937,10 @@ class WeatherRadarHolographicDisplay(HolographicRadarDisplay):
         """
         try:
             # Get the rectangle for the entire widget
-            rect = QRectF(0, 0, self.width(), self.height())
+            # self.width()/self.height() do not exist on this class; see the note
+            # on viewport_rect in BaseRadarDisplay.  Every draw method below used
+            # them, so this display painted nothing at all.
+            rect = self.viewport_rect(painter)
             
             # Prepare data for drawing
             data = {
@@ -2019,8 +2022,9 @@ class WeatherRadarHolographicDisplay(HolographicRadarDisplay):
         """
         try:
             # Get center of display
-            center_x = self.width() / 2
-            center_y = self.height() / 2
+            viewport = self.viewport_rect(painter)
+            center_x = viewport.width() / 2
+            center_y = viewport.height() / 2
             
             # Draw each precipitation data point
             for precip_data in self._precipitation_data:
@@ -2107,8 +2111,9 @@ class WeatherRadarHolographicDisplay(HolographicRadarDisplay):
         """
         try:
             # Get center of display
-            center_x = self.width() / 2
-            center_y = self.height() / 2
+            viewport = self.viewport_rect(painter)
+            center_x = viewport.width() / 2
+            center_y = viewport.height() / 2
             
             # Update VIL stats
             self._vil_data_stats['drawn_count'] = len(self._vil_data)
@@ -2208,8 +2213,9 @@ class WeatherRadarHolographicDisplay(HolographicRadarDisplay):
         """
         try:
             # Get center of display
-            center_x = self.width() / 2
-            center_y = self.height() / 2
+            viewport = self.viewport_rect(painter)
+            center_x = viewport.width() / 2
+            center_y = viewport.height() / 2
             
             # Draw each cell data point
             for cell_data in self._cell_data:
@@ -2979,8 +2985,9 @@ class WeatherRadarHolographicDisplay(HolographicRadarDisplay):
         """
         try:
             # Get center of display
-            center_x = self.width() / 2
-            center_y = self.height() / 2
+            viewport = self.viewport_rect(painter)
+            center_x = viewport.width() / 2
+            center_y = viewport.height() / 2
             
             # Collect all particles for depth sorting
             all_particles = []
@@ -3106,8 +3113,9 @@ class WeatherRadarHolographicDisplay(HolographicRadarDisplay):
         """
         try:
             # Get center of display
-            center_x = self.width() / 2
-            center_y = self.height() / 2
+            viewport = self.viewport_rect(painter)
+            center_x = viewport.width() / 2
+            center_y = viewport.height() / 2
             
             # Draw each precipitation data point
             for precip_data in self._precipitation_data:
@@ -3208,8 +3216,9 @@ class WeatherRadarHolographicDisplay(HolographicRadarDisplay):
         """
         try:
             # Get center of display
-            center_x = self.width() / 2
-            center_y = self.height() / 2
+            viewport = self.viewport_rect(painter)
+            center_x = viewport.width() / 2
+            center_y = viewport.height() / 2
             
             # Update VIL stats
             self._vil_data_stats['drawn_count'] = len(self._vil_data)
@@ -3711,10 +3720,20 @@ class WeatherRadarHolographicDisplay(HolographicRadarDisplay):
                 logger.info("[WEATHER_HOLO] Options button clicked")
                 
                 # Position settings panel properly
+                # Centre the panel on the surface last painted. self.width() /
+                # self.height() were used here and do not exist on this class; see
+                # the note on viewport_rect in BaseRadarDisplay.
                 if hasattr(self, '_settings_panel'):
-                    panel_x = self.width() / 2 - 150
-                    panel_y = self.height() / 2 - 200
-                    self._settings_panel.show((panel_x, panel_y))
+                    surface = self.last_viewport_rect()
+                    if surface.isNull():
+                        logger.warning(
+                            "[WEATHER_HOLO] Cannot place the settings panel: nothing "
+                            "has been painted yet, so the surface size is not known"
+                        )
+                    else:
+                        panel_x = surface.width() / 2 - 150
+                        panel_y = surface.height() / 2 - 200
+                        self._settings_panel.show((panel_x, panel_y))
                     
                 event.accept()
                 self.update()
@@ -3794,8 +3813,12 @@ class WeatherRadarHolographicDisplay(HolographicRadarDisplay):
                 # Make sure menu is fully visible within the display
                 if menu_pos.x() < 10:
                     menu_pos.setX(10)
-                if menu_pos.x() + 300 > self.width() - 10:  # Assuming menu width of 300
-                    menu_pos.setX(self.width() - 310)
+                # Keep the menu inside the surface last painted. self.width() was
+                # used here and does not exist on this class; see the note on
+                # viewport_rect in BaseRadarDisplay.
+                surface_width = self.last_viewport_rect().width()
+                if surface_width > 0 and menu_pos.x() + 300 > surface_width - 10:
+                    menu_pos.setX(surface_width - 310)
                 
                 # Update the radar system options before showing
                 if hasattr(self._radar_selection_menu, '_radar_options'):

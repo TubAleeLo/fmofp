@@ -517,11 +517,15 @@ class RadarDisplayDataCoordinator:
                         'id': f"{data_type}_{str(uuid.uuid4())[:8]}"
                     }
 
-                    # Set default values that will be overridden if available in binary
-                    item_dict['type'] = 'rain'  # Default type
-                    item_dict['precip_type'] = 'rain'  # Default type (duplicate field)
-                    item_dict['rate'] = 0.5  # Default rate
-                    item_dict['intensity'] = 0.5  # Default intensity
+                    # Only 'show_values' is a display preference and so has a
+                    # sensible default.  type, rate and intensity are measurements:
+                    # this block used to pre-seed them with 'rain', 0.5 mm/h and
+                    # intensity 0.5, and those seeds survived whenever the binary was
+                    # too short to carry the real fields (rate needs >= 26 bits,
+                    # intensity >= 32).  0.5 intensity sits mid-scale, so a truncated
+                    # message rendered as a measured moderate rain cell.  Leaving the
+                    # keys absent lets the display draw the echo as unknown severity,
+                    # which is what it is.
                     item_dict['show_values'] = True  # Default to showing values
 
                     # Extract precipitation type, rate, and other fields if enough data
@@ -645,19 +649,22 @@ class RadarDisplayDataCoordinator:
             else:
                 item_dict['show_values'] = True  # Default to showing values
 
-            # Ensure required fields have default values if missing
+            # Fill in the fields that are display *preferences*.  Measurements are
+            # deliberately left absent when they did not arrive -- see the note below
+            # the numeric handling for why the old defaults here were a problem.
             if data_type == DATA_TYPE_VIL or is_vil_message(item_dict):
-                if 'value' not in item_dict:
-                    item_dict['value'] = 10.0  # Default value
-                if 'intensity' not in item_dict:
-                    item_dict['intensity'] = 0.5  # Default intensity
-                if 'layer_count' not in item_dict:
-                    item_dict['layer_count'] = 1  # Default layer count
+                # These used to default to value 10.0 kg/m2, intensity 0.5 and one
+                # layer.  10.0 is inside the MINIMAL/LOW boundary and 0.5 is
+                # mid-scale, so a VIL point that arrived without readings was handed
+                # to the display as a measured low column.  The display now renders
+                # an absent value as unknown, so there is nothing to substitute.
+                pass
             elif data_type == DATA_TYPE_PRECIPITATION or is_precipitation_message(item_dict):
-                # ENHANCED FIELD MAPPING: Ensure both 'type' and 'precip_type' fields always exist
-                # and contain the same value to fix display rendering issues
-
-                # Determine the actual precipitation type from either field
+                # ENHANCED FIELD MAPPING: keep 'type' and 'precip_type' in step with
+                # each other, because the display reads both spellings.  Neither is
+                # invented: an item with no type at all keeps no type, and the
+                # display draws an unclassified echo in its neutral colour.  The old
+                # default was 'rain', which made every unclassified return blue.
                 precip_type_value = None
                 if 'precip_type' in item_dict:
                     precip_type_value = item_dict['precip_type']
@@ -666,12 +673,16 @@ class RadarDisplayDataCoordinator:
                     precip_type_value = item_dict['type']
                     logger.info(f"[RADAR_DATA_COORD] Found type field with value: {precip_type_value}")
                 else:
-                    precip_type_value = 'rain'  # Default if neither field exists
-                    logger.warning(f"[RADAR_DATA_COORD] No type field found, using default: {precip_type_value}")
+                    logger.warning(
+                        "[RADAR_DATA_COORD] No type field found; leaving the "
+                        "precipitation type unset so the display shows it as "
+                        "unclassified"
+                    )
 
                 # Set both fields to the same value to ensure consistency
-                item_dict['type'] = precip_type_value
-                item_dict['precip_type'] = precip_type_value
+                if precip_type_value is not None:
+                    item_dict['type'] = precip_type_value
+                    item_dict['precip_type'] = precip_type_value
 
                 # Handle numeric values with minimal defaults - only if it's actually precipitation data
                 if isinstance(item, (int, float)) and data_type == DATA_TYPE_PRECIPITATION:
@@ -685,51 +696,51 @@ class RadarDisplayDataCoordinator:
                     logger.warning(f"[RADAR_DATA_COORD] Extracted rate {item_dict['rate']} from numeric value")
 
                 # Log the field mapping for debugging
-                logger.info(f"[RADAR_DATA_COORD] Synchronized precipitation type fields: type={item_dict['type']}, precip_type={item_dict['precip_type']}")
+                logger.info(
+                    f"[RADAR_DATA_COORD] Synchronized precipitation type fields: "
+                    f"type={item_dict.get('type')}, precip_type={item_dict.get('precip_type')}"
+                )
 
-                # NOTE: previously flagged with "check if this is necessary
-                # or if this is cheating". Investigated: PrecipitationAnalyzer
+                # NOTE: previously flagged with "check if this is necessary or if
+                # this is cheating". Investigated: PrecipitationAnalyzer
                 # (radar_messaging/precipitation_analysis.py) computes a real
                 # Marshall-Palmer rate and a real intensity for every point it
-                # successfully analyzes, so under normal operation these two
-                # fields are already present by the time an item reaches here
-                # and this fallback doesn't fire. It previously fired far more
-                # than intended because of a real bug: weather_radar.py was
-                # passing a 3D reflectivity array into PrecipitationAnalyzer
-                # (which requires 2D), causing analysis to fail and return no
-                # points at all - fixed separately (see weather_radar.py
-                # _process_mapping_data). With that fixed, this remains as
-                # what it always should have been: a display-layer safety net
-                # for genuinely incomplete/degraded upstream data, not a
-                # substitute for real analysis. Keeping it - a display item
-                # missing rate/intensity should still render rather than be
-                # dropped or crash the paint path.
-                if 'rate' not in item_dict:
-                    item_dict['rate'] = 20.0  # Default rate in mm/hr
-                if 'intensity' not in item_dict:
-                    item_dict['intensity'] = 0.5  # Default intensity
+                # successfully analyzes, so under normal operation these fields are
+                # already present by the time an item reaches here. They were absent
+                # far more often than intended because of a real bug: weather_radar.py
+                # was passing a 3D reflectivity array into PrecipitationAnalyzer
+                # (which requires 2D), causing analysis to fail and return no points
+                # at all - fixed separately (see weather_radar.py
+                # _process_mapping_data).
+                #
+                # What sat here was a block that guaranteed 'rate' and 'intensity'
+                # existed by writing 20.0 mm/h and 0.5/0.7 into them, on the
+                # reasoning that "a display item missing rate/intensity should still
+                # render rather than be dropped or crash the paint path". The first
+                # half of that is right and the second half is a false choice: the
+                # display now draws an echo with no severity reading in its neutral
+                # colour with an "UNKN" label, so such an item renders without
+                # claiming a strength it never measured. Those defaults were not
+                # neutral values either -- 20 mm/h is heavy rain and 0.7 is inside
+                # the second-highest intensity band -- and because they were applied
+                # here, upstream of the display, the display's own defaults never
+                # even got a chance to fire. A degraded return now looks degraded.
+                #
+                # 'show_values' is a display preference rather than a measurement, so
+                # it keeps its default. 'position' is not defaulted: (0.0, 0.0) is
+                # ownship on a plan-position display, and _process_items already
+                # filters items that carry it.
+                if 'show_values' not in item_dict:
+                    item_dict['show_values'] = True
 
-                # Ensure all precipitation data points have the required fields
-                # This ensures consistency in the display rendering
-                required_fields = ['position', 'type', 'precip_type', 'rate', 'intensity', 'show_values']
-                for field in required_fields:
-                    if field not in item_dict:
-                        if field == 'position':
-                            item_dict[field] = (0.0, 0.0)
-                        elif field in ['type', 'precip_type']:
-                            item_dict[field] = 'rain'
-                        elif field == 'rate':
-                            item_dict[field] = 20.0
-                        elif field == 'intensity':
-                            item_dict[field] = 0.7
-                        elif field == 'show_values':
-                            item_dict[field] = True
-                        logger.warning(f"[RADAR_DATA_COORD] Added missing required field {field} to precipitation data")
-
-            # Ensure position is never None at this point
+            # A missing position is written as (0.0, 0.0) here, which reads like a
+            # fabricated default but is in fact how this function marks an item for
+            # removal: the FINAL VALIDATION PASS below filters every (0.0, 0.0)
+            # position out. It is spelt this way so the intermediate validation below
+            # has a tuple to work on rather than a None.
             if 'position' not in item_dict or item_dict['position'] is None:
-                logger.error(f"[RADAR_DATA_COORD] Position still None or missing after processing, setting default")
-                item_dict['position'] = (0.0, 0.0)  # Default position as fallback
+                logger.error(f"[RADAR_DATA_COORD] Position still None or missing after processing; marking item for removal")
+                item_dict['position'] = (0.0, 0.0)  # filtered out by the final pass
 
             # Validate tuple format - ensure it can be unpacked as x,y
             try:

@@ -81,6 +81,15 @@ SUITES = [
     # precipitation scale factors -- severe weather decoded ~79x low and
     # rendered in the lightest colour band. Round-trip assertions.
     (True,  "FMOFP.Tests.test_blocker_precip_scale", 300),
+    # The weather radar must not invent severity: precipitation, VIL, storm-cell
+    # and turbulence readings that never arrived used to be substituted with
+    # literals inside real colour bands (intensity 0.7 / rate 20 mm/h, VIL 20.0,
+    # category LIGHT, cell intensity 0), so a degraded return looked measured.
+    # Also covers two defects that made the whole thing moot: the particle draw
+    # path raised AttributeError on self.width() and painted nothing, and the
+    # 'collection' link row shadowed every real point on an exact request_id
+    # lookup.
+    (True,  "FMOFP.Tests.test_weather_radar_truthfulness", 300),
     # Production blockers B1/B2/B3/B4: a boot failure that hung the process
     # forever and an error shutdown that exited 0; initialization failures
     # swallowed so boot continued on a half-built system; coroutine stops

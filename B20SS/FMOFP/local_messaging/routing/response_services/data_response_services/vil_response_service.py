@@ -18,6 +18,7 @@ from FMOFP.Utils.logger.sys_logger import get_logger
 from FMOFP.Utils.common.async_task import cancel_and_await
 from FMOFP.local_messaging.messageConfigurations.weather_radar_data import WeatherRadarVILData
 from FMOFP.Utils.common.message_format_adapter import get_message_format_adapter
+from FMOFP.Utils.common.radar_records import MEASUREMENT_ONLY_SQL
 from ...handlers.vil_data_handler import VILDataHandler
 
 logger = get_logger()
@@ -866,9 +867,10 @@ class VILResponseService:
                         """
                         SELECT * FROM precipitation_data
                         WHERE timestamp > ?
+                          AND {measurement_only}
                         ORDER BY timestamp DESC
                         LIMIT 10
-                        """,
+                        """.format(measurement_only=MEASUREMENT_ONLY_SQL),
                         (staleness_threshold_time,),
                         query_type='select'
                     )

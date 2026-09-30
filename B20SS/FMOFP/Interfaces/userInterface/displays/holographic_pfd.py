@@ -17,6 +17,24 @@ from FMOFP.Utils.logger.sys_logger import get_logger
 logger = get_logger()
 
 class HolographicPFD(HolographicDisplay):
+    # NOT WIRED TO THE AIRCRAFT.
+    #
+    # This class inherits HolographicDisplay, not PrimaryFlightDisplay, so it
+    # gets no FMS poll: grepping the file finds assignments to altitude,
+    # airspeed, mach, heading and g_force only in __init__, and reads
+    # everywhere else. Its one timer drives the scan-line animation, so the
+    # display looks live while being permanently disconnected.
+    #
+    # theme_config.json selects it for the "Modern" theme, which meant choosing
+    # Modern in the settings panel silently replaced the PFD with one that
+    # could never show the aircraft's real state. PFDDisplayFactory now refuses
+    # to build a PFD whose PROVIDES_FLIGHT_DATA is False and falls back to the
+    # standard PFD instead.
+    #
+    # Set this True once a real feed is wired in -- ideally by marking field
+    # validity the way PrimaryFlightDisplay does, so missing data draws a flag.
+    PROVIDES_FLIGHT_DATA = False
+
     """Advanced holographic primary flight display with 3D visualization and tactical overlays"""
     
     def __init__(self, parent=None):
@@ -27,13 +45,16 @@ class HolographicPFD(HolographicDisplay):
         self._theme_manager.set_theme(EnhancedDisplayTheme.HOLOGRAPHIC)
         
         # Initialize flight data
-        self.altitude = 30000
+        # Neutral, not plausible: if this display is ever instantiated directly
+        # (tests, performance_profile) it must not render a convincing cruise
+        # picture out of constants.
+        self.altitude = 0
         self.target_altitude = 30000
         self.vertical_speed = 0
-        self.airspeed = 450
+        self.airspeed = 0
         self.target_airspeed = 450
-        self.mach = 0.85
-        self.heading = 45
+        self.mach = 0.0
+        self.heading = 0
         self.pitch = 0
         self.roll = 0
         self.g_force = 1.0

@@ -19,8 +19,26 @@ from FMOFP.Utils.logger.sys_logger import get_logger
 from FMOFP.core.event_driven_communication import get_event_bus, Event
 from .radar_display_data_coordinator import get_radar_display_data_coordinator
 from ..log_throttler import get_log_throttler
+from FMOFP.Utils.common.optional_reads import (
+    UNKNOWN,
+    optional_float,
+    optional_position,
+)
 
 logger = get_logger()
+
+# Rendering constants for echoes whose severity the sensor did not report.
+#
+# The particle system needs *some* number to decide how many particles to
+# scatter and how wide to scatter them.  These constants supply that, and
+# nothing else: an echo rendered with them is painted in
+# UNKNOWN_SEVERITY_COLOR and labelled with UNKNOWN_VALUE_TEXT, so the density
+# on screen never reads as a severity.  Do not reuse them as stand-in
+# measurements.
+UNKNOWN_RENDER_INTENSITY = 0.5   # particle count/opacity only, not a severity
+UNKNOWN_RENDER_RADIUS = 25.0     # pixels; the smallest footprint the system draws
+UNKNOWN_VALUE_TEXT = "UNKN"      # shown in place of a numeric label
+UNKNOWN_SEVERITY_COLOR = QColor(150, 150, 150, 140)  # neutral grey, no band
 
 class WeatherRadarDisplay(BaseRadarDisplay):
     """Weather radar display with node-based state management"""
@@ -133,6 +151,24 @@ class WeatherRadarDisplay(BaseRadarDisplay):
             'precipitation': {},  # Dict of precipitation_id -> list of particles
             'vil': {},           # Dict of vil_id -> list of particles
             'cells': {}          # Dict of cell_id -> list of particles
+        }
+        # data_id -> the QColor the draw method classified that echo as, so
+        # _draw_particles can paint its particles with the severity that was
+        # actually decided.  Kept in step with self._particles.
+        #
+        # _draw_particles used to re-derive the colour instead, by looking the id
+        # up in self._data_coordinator._data_store[data_type]['data'] -- a key
+        # that has never existed (the store holds 'current', 'backup', 'ttl' and
+        # 'backup_timestamps'). So the lookup always missed and every particle
+        # took the fallback: precipitation was painted rain-blue whatever its
+        # type, and VIL and storm cells were painted VIL-'LOW' yellow whatever
+        # their strength. Recording the colour at the point it is computed, and
+        # reading it back by id, removes both the dead lookup and the reach into
+        # another object's private state.
+        self._particle_colors = {
+            'precipitation': {},
+            'vil': {},
+            'cells': {},
         }
         self._last_particle_update = time.time()
 
@@ -1797,20 +1833,45 @@ class WeatherRadarDisplay(BaseRadarDisplay):
         try:
             # Get cell position — supports both 'position':(x,y) tuple (bridge/push format)
             # and legacy flat 'x'/'y' keys
-            if 'position' in cell:
-                pos = cell['position']
-                x = float(pos[0]) if pos else 0.0
-                y = float(pos[1]) if pos and len(pos) > 1 else 0.0
-            else:
-                x = float(cell.get('x', 0))
-                y = float(cell.get('y', 0))
+            # A cell with no usable position is skipped rather than drawn at the
+            # origin: on a plan-position display the origin is ownship, so an
+            # unpositioned cell used to appear as a storm directly overhead.
+            position = optional_position(cell)
+            if position is None:
+                position = optional_position({'position': (cell.get('x'), cell.get('y'))})
+            if position is None:
+                should_log, count = self._log_throttler.should_log(
+                    "cell_missing_position", 30.0)
+                if should_log:
+                    logger.warning(
+                        f"[WEATHER_DISPLAY] Storm cell with no usable position "
+                        f"({count} since last report) -- skipping rather than "
+                        f"drawing it at ownship"
+                    )
+                return
+            x, y = position
 
             # Convert from nautical miles to screen coordinates
             screen_x = center.x() + (x / self.range_scale) * radius
             screen_y = center.y() - (y / self.range_scale) * radius
 
-            intensity = cell.get('intensity', 0)
-            rotation = cell.get('rotation', 0.0)  # Rotation speed in radians/sec
+            # An absent intensity used to read as 0, which _get_intensity_color maps
+            # to VERY_LIGHT green -- a cell of unknown strength was painted as the
+            # mildest thing the scale can show.  Unknown now stays unknown.
+            intensity = optional_float(cell, 'intensity', minimum=0.0, maximum=1.0)
+            rotation = optional_float(cell, 'rotation')
+            if rotation is UNKNOWN:
+                rotation = 0.0
+            if intensity is UNKNOWN:
+                should_log, count = self._log_throttler.should_log(
+                    "cell_intensity_unknown", 30.0)
+                if should_log:
+                    logger.warning(
+                        f"[WEATHER_DISPLAY] Storm cell at ({x},{y}) carries no "
+                        f"intensity reading ({count} since last report) -- drawing "
+                        f"it as unknown severity"
+                    )
+            render_intensity = intensity if intensity is not UNKNOWN else UNKNOWN_RENDER_INTENSITY
 
             # Set cell color based on intensity
             color = self._get_intensity_color(intensity)
@@ -1819,7 +1880,10 @@ class WeatherRadarDisplay(BaseRadarDisplay):
             cell_id = cell.get('cell_id', cell.get('id', f"cell_{str(uuid.uuid4())[:8]}"))
 
             # Calculate particle radius based on intensity
-            particle_radius = 15 + intensity * 15
+            if intensity is UNKNOWN:
+                particle_radius = UNKNOWN_RENDER_RADIUS
+            else:
+                particle_radius = 15 + intensity * 15
 
             # Check if we need to generate new particles for this cell
             if (cell_id not in self._particles.get('cells', {}) or
@@ -1828,7 +1892,7 @@ class WeatherRadarDisplay(BaseRadarDisplay):
                 self._generate_cell_particles(
                     screen_x,
                     screen_y,
-                    intensity,
+                    render_intensity,
                     color,
                     cell_id,
                     particle_radius,
@@ -1864,7 +1928,7 @@ class WeatherRadarDisplay(BaseRadarDisplay):
                 painter.setFont(QFont("Arial", 10, QFont.Weight.Bold))
 
                 # Format the intensity string with proper decimal places
-                intensity_str = f"{intensity:.1f}"
+                intensity_str = UNKNOWN_VALUE_TEXT if intensity is UNKNOWN else f"{intensity:.1f}"
 
                 painter.drawText(
                     text_rect,
@@ -1970,21 +2034,49 @@ class WeatherRadarDisplay(BaseRadarDisplay):
             }
 
             for cell in cells:
-                pos = cell.get("position", (0.0, 0.0))
-                if not isinstance(pos, (list, tuple)) or len(pos) < 2:
+                # No usable position means no place to draw it.  The old default of
+                # (0.0, 0.0) only looked like a guard: a cell with no 'position' key
+                # at all got the default tuple, passed the isinstance check below and
+                # was drawn at ownship.
+                position = optional_position(cell)
+                if position is None:
                     continue
                 scale = radius / 100.0
-                px = center.x() + float(pos[0]) * scale
-                py = center.y() - float(pos[1]) * scale
+                px = center.x() + position[0] * scale
+                py = center.y() - position[1] * scale
 
-                category = str(cell.get("category", "LIGHT")).upper()
-                color = CATEGORY_COLORS.get(category, CATEGORY_COLORS["LIGHT"])
-                intensity = max(0.0, min(1.0, float(cell.get("intensity", 0.3))))
-                cell_r = 6 + intensity * 12   # 6–18 px radius
+                # An absent or unrecognised category used to render as LIGHT: green
+                # blob, "LGT" label.  Unreported turbulence is not light turbulence,
+                # and the colour also disagreed with the label whenever the category
+                # string was one this map does not know.
+                raw_category = cell.get("category")
+                category = str(raw_category).upper() if raw_category is not None else None
+                if category in CATEGORY_COLORS:
+                    color = CATEGORY_COLORS[category]
+                    label = category[:3]
+                else:
+                    color = UNKNOWN_SEVERITY_COLOR
+                    label = "UNK"
+                    should_log, count = self._log_throttler.should_log(
+                        "turbulence_category_unknown", 30.0)
+                    if should_log:
+                        logger.warning(
+                            f"[WEATHER_DISPLAY] Turbulence cell with category "
+                            f"{raw_category!r} ({count} since last report) -- drawing "
+                            f"it as unknown rather than LIGHT"
+                        )
+
+                intensity = optional_float(cell, "intensity", minimum=0.0, maximum=1.0)
+                if intensity is UNKNOWN:
+                    cell_r = 6.0          # smallest blob; the extent is not known
+                    fill_alpha = 120      # visible, but no intensity is implied
+                else:
+                    cell_r = 6 + intensity * 12   # 6–18 px radius
+                    fill_alpha = max(60, int(intensity * 180))
 
                 # Filled cell blob
                 fill = QColor(color)
-                fill.setAlpha(max(60, int(intensity * 180)))
+                fill.setAlpha(fill_alpha)
                 painter.setBrush(fill)
                 painter.setPen(QPen(color, 1))
                 painter.drawEllipse(QPointF(px, py), cell_r, cell_r)
@@ -1999,7 +2091,7 @@ class WeatherRadarDisplay(BaseRadarDisplay):
                     int(px + cell_r + 2), int(py - 6),
                     60, 20,
                     int(Qt.AlignmentFlag.AlignLeft),
-                    category[:3],
+                    label,
                 )
 
         except Exception as exc:
@@ -2057,13 +2149,23 @@ class WeatherRadarDisplay(BaseRadarDisplay):
             if precip_type == 'unknown':
                 logger.warning("[WEATHER_DISPLAY] Warning: Precipitation type not specified")
 
-            # Extract numeric values with validation
-            try:
-                intensity = float(precip.get('intensity', 0.7))
-                rate = float(precip.get('rate', 20.0))
-            except (TypeError, ValueError) as e:
-                logger.error(f"[WEATHER_DISPLAY] CRITICAL: Invalid numeric values: {e}")
-                return  # Reject invalid data
+            # Extract numeric values.  These used to default to intensity 0.7 and
+            # rate 20.0 mm/h, so an echo that arrived without a severity reading was
+            # painted as moderate-to-heavy rain and labelled "20.0mm/h" -- identical
+            # on screen to a measured cell of that strength.  An absent reading now
+            # reads back as UNKNOWN and is rendered as unknown.
+            intensity = optional_float(precip, 'intensity', minimum=0.0, maximum=1.0)
+            rate = optional_float(precip, 'rate', minimum=0.0)
+            severity_known = intensity is not UNKNOWN or rate is not UNKNOWN
+            if not severity_known:
+                should_log, count = self._log_throttler.should_log(
+                    "precip_severity_unknown", 30.0)
+                if should_log:
+                    logger.warning(
+                        f"[WEATHER_DISPLAY] Precipitation at ({x},{y}) carries no "
+                        f"intensity or rate reading ({count} since last report) -- "
+                        f"drawing it as unknown severity"
+                    )
 
             # Extract display options
             show_values = bool(precip.get('show_values', True))
@@ -2072,8 +2174,13 @@ class WeatherRadarDisplay(BaseRadarDisplay):
             screen_x = center.x() + (x / self.range_scale) * radius
             screen_y = center.y() - (y / self.range_scale) * radius
 
-            # Apply appropriate visualization
-            base_color = self._precipitation_colors.get(precip_type, self._precipitation_colors[None])
+            # Apply appropriate visualization.  With no severity reading there is no
+            # colour band to pick, so the echo is painted neutral grey whatever its
+            # reported type -- the position is real, the strength is not known.
+            if severity_known:
+                base_color = self._precipitation_colors.get(precip_type, self._precipitation_colors[None])
+            else:
+                base_color = UNKNOWN_SEVERITY_COLOR
             color = QColor(base_color)
 
             # Apply fade effect if ID and timestamp are available
@@ -2092,7 +2199,8 @@ class WeatherRadarDisplay(BaseRadarDisplay):
                         logger.debug(f"[WEATHER_DISPLAY] Precipitation fading: age={item_age:.1f}s, multiplier={alpha_multiplier:.2f}")
 
             # Set final color with appropriate opacity
-            color.setAlpha(int(255 * max(0.3, min(0.75, intensity)) * alpha_multiplier))
+            render_intensity = intensity if intensity is not UNKNOWN else UNKNOWN_RENDER_INTENSITY
+            color.setAlpha(int(255 * max(0.3, min(0.75, render_intensity)) * alpha_multiplier))
 
             # Ensure particle system is initialized
             if not hasattr(self, '_particles'):
@@ -2100,9 +2208,17 @@ class WeatherRadarDisplay(BaseRadarDisplay):
 
             # Get or create unique ID for this precipitation data point
             precip_id = precip.get('id', f"precip_{str(uuid.uuid4())[:8]}")
+            self._particle_colors['precipitation'][precip_id] = QColor(base_color)
 
-            # Calculate particle radius based on intensity and rate
-            particle_radius = 25 + intensity * 15 + min(rate / 5, 10)
+            # Calculate particle radius based on intensity and rate.  With neither
+            # reading, fall back to the smallest footprint the system draws rather
+            # than an average-looking one: the extent is not known either.
+            if severity_known:
+                particle_radius = 25 + render_intensity * 15
+                if rate is not UNKNOWN:
+                    particle_radius += min(rate / 5, 10)
+            else:
+                particle_radius = UNKNOWN_RENDER_RADIUS
 
             # Check if we need to generate new particles for this precipitation point
             if (precip_id not in self._particles.get('precipitation', {}) or
@@ -2111,7 +2227,7 @@ class WeatherRadarDisplay(BaseRadarDisplay):
                 self._generate_particles(
                     screen_x,
                     screen_y,
-                    intensity,
+                    render_intensity,
                     color,
                     'precipitation',
                     precip_id,
@@ -2146,11 +2262,16 @@ class WeatherRadarDisplay(BaseRadarDisplay):
                 painter.setPen(QColor(255, 255, 0))  # Bright yellow
                 painter.setFont(QFont("Arial", 10, QFont.Weight.Bold))
 
-                # Format the rate string with proper decimal places
-                rate_str = f"{rate:.1f}mm/h"
-                # Ensure we never display just ".0" (force decimal point display)
-                if rate_str.endswith(".0mm/h"):
-                    rate_str = f"{rate:g}mm/h"  # Use general format for whole numbers
+                # Format the rate string with proper decimal places.  An unmeasured
+                # rate is labelled, not guessed -- a number here is a claim that the
+                # radar returned that rate.
+                if rate is UNKNOWN:
+                    rate_str = f"{UNKNOWN_VALUE_TEXT}mm/h"
+                else:
+                    rate_str = f"{rate:.1f}mm/h"
+                    # Ensure we never display just ".0" (force decimal point display)
+                    if rate_str.endswith(".0mm/h"):
+                        rate_str = f"{rate:g}mm/h"  # Use general format for whole numbers
 
                 painter.drawText(
                     text_rect,
@@ -2173,9 +2294,15 @@ class WeatherRadarDisplay(BaseRadarDisplay):
         try:
             # Initialize particle storage if it doesn't exist
             if not hasattr(self, '_particles'):
+                # 'cells' belongs here as much as the other two: _generate_cell_particles
+                # assigns self._particles['cells'][cell_id] unconditionally, so a dict
+                # built without the key would raise KeyError on the first storm cell.
+                # __init__ does build all three, which is the only reason this has never
+                # fired -- this branch only runs if _particles went missing.
                 self._particles = {
                     'precipitation': {},  # Dict of precipitation_id -> list of particles
-                    'vil': {}            # Dict of vil_id -> list of particles
+                    'vil': {},           # Dict of vil_id -> list of particles
+                    'cells': {}          # Dict of cell_id -> list of particles
                 }
 
             # Use animation controller instead of direct timer
@@ -2405,6 +2532,7 @@ class WeatherRadarDisplay(BaseRadarDisplay):
                     # Remove empty particle lists
                     if not self._particles['cells'][cell_id]:
                         del self._particles['cells'][cell_id]
+                        self._particle_colors['cells'].pop(cell_id, None)
 
         except Exception as e:
             logger.error(f"[WEATHER_DISPLAY] Error updating particles with animation: {str(e)}")
@@ -2543,8 +2671,13 @@ class WeatherRadarDisplay(BaseRadarDisplay):
                 if self._use_dirty_regions:
                     self._dirty_region_tracker.mark_point_dirty(px, py, size/2)
 
-            # Store particles
+            # Store particles, and record the colour this cell was classified with.
+            # The `color` argument used to be accepted, documented and then dropped on
+            # the floor: _draw_particles had no 'cells' branch, so every cell's
+            # particles were coloured by the VIL fallback (yellow, "low VIL")
+            # regardless of the severity _get_intensity_color had just computed.
             self._particles['cells'][cell_id] = particles
+            self._particle_colors['cells'][cell_id] = QColor(color)
 
             # Add frame to animation controller's temporal buffer
             if hasattr(self._animation_controller, 'add_frame'):
@@ -2722,7 +2855,7 @@ class WeatherRadarDisplay(BaseRadarDisplay):
 
         Args:
             painter: QPainter to render with
-            data_type: 'precipitation' or 'vil'
+            data_type: 'precipitation', 'vil' or 'cells'
         """
         try:
             # Skip if no particles
@@ -2735,8 +2868,11 @@ class WeatherRadarDisplay(BaseRadarDisplay):
             # Set pen to none (particles are just filled circles)
             painter.setPen(Qt.PenStyle.NoPen)
 
-            # Get viewport rect for culling
-            viewport_rect = QRectF(0, 0, self.width(), self.height())
+            # Get viewport rect for culling.  This read self.width()/self.height(),
+            # which this class does not have: the AttributeError was swallowed by the
+            # handler at the bottom of this method, so no weather particles were ever
+            # drawn.  See the note on viewport_rect in BaseRadarDisplay.
+            viewport_rect = self.viewport_rect(painter)
 
             # First pass: Sort particles by size (larger ones first for better layering)
             all_particles = []
@@ -2745,6 +2881,12 @@ class WeatherRadarDisplay(BaseRadarDisplay):
                     # Add data_id to particle for color lookup
                     particle_copy = particle.copy()
                     particle_copy['data_id'] = data_id
+                    # The spatial grid is keyed on the identity of the *stored*
+                    # particle dict, so the key has to be built here, from the
+                    # original -- the filter below used to build it from this copy,
+                    # whose id() is a different object, so no particle ever matched
+                    # a visible id and the grid culled all of them.
+                    particle_copy['grid_id'] = f"{data_type}_{data_id}_{id(particle)}"
                     all_particles.append(particle_copy)
 
             # Sort particles by size (descending) for better layering
@@ -2769,8 +2911,7 @@ class WeatherRadarDisplay(BaseRadarDisplay):
                 # Filter particles by visibility
                 visible_particles = []
                 for particle in all_particles:
-                    particle_id = f"{data_type}_{particle['data_id']}_{id(particle)}"
-                    if particle_id in visible_ids:
+                    if particle['grid_id'] in visible_ids:
                         visible_particles.append(particle)
 
                 all_particles = visible_particles
@@ -2808,34 +2949,14 @@ class WeatherRadarDisplay(BaseRadarDisplay):
                 data_id = particle['data_id']
 
                 # Get base color based on data type
-                if data_type == 'precipitation':
-                    # Use color from the original precipitation data if available
-                    if data_id in self._data_coordinator._data_store.get('precipitation', {}).get('data', {}):
-                        precip_data = self._data_coordinator._data_store['precipitation']['data'][data_id]
-                        precip_type = precip_data.get('type', 'rain')
-                        base_color = self._precipitation_colors.get(precip_type, self._precipitation_colors[None])
-                    else:
-                        # Default to blue for rain if data not found
-                        base_color = self._precipitation_colors['rain']
-                else:  # vil
-                    # Use color based on VIL level if available
-                    if data_id in self._data_coordinator._data_store.get('vil', {}).get('data', {}):
-                        vil_data = self._data_coordinator._data_store['vil']['data'][data_id]
-                        value = vil_data.get('value', 20.0)
-
-                        # Determine VIL level based on value
-                        vil_level = 'MINIMAL'
-                        if value > 30:
-                            vil_level = 'HIGH'
-                        elif value > 20:
-                            vil_level = 'MEDIUM'
-                        elif value > 10:
-                            vil_level = 'LOW'
-
-                        base_color = self._vil_colors.get(vil_level, self._vil_colors['MINIMAL'])
-                    else:
-                        # Default to yellow for VIL if data not found
-                        base_color = self._vil_colors['LOW']
+                # Paint each particle in the colour its own draw method decided on
+                # (see self._particle_colors). A particle whose id is no longer
+                # recorded has outlived its reading, and that is not a licence to
+                # pick a plausible colour -- it falls back to neutral rather than to
+                # a band, so a stale cloud cannot be mistaken for a live
+                # measurement.
+                base_color = self._particle_colors.get(data_type, {}).get(
+                    data_id, UNKNOWN_SEVERITY_COLOR)
 
                 # Create color with proper opacity
                 color = QColor(base_color)
@@ -2892,26 +3013,36 @@ class WeatherRadarDisplay(BaseRadarDisplay):
             else:
                 vil_dict = vil
 
-            # Extract position - should be a tuple of (x, y)
-            pos = vil_dict.get('position', (0.0, 0.0))
-
-            # Ensure position is a tuple of two values
-            if not isinstance(pos, (list, tuple)) or len(pos) < 2:
+            # Extract position.  An unusable position is skipped, not moved to the
+            # origin -- the same reasoning the unrecognised-type branch above already
+            # applies, and (0,0) on this display is ownship, not "unknown".
+            position = optional_position(vil_dict)
+            if position is None:
                 should_log, count = self._log_throttler.should_log("vil_invalid_position", 30.0)
                 if should_log:
-                    if count > 1:
-                        logger.warning(f"[WEATHER_DISPLAY] {count} invalid VIL positions detected, using default (0,0)")
-                    else:
-                        logger.warning(f"[WEATHER_DISPLAY] Invalid position format: {pos}, using default (0,0)")
-                x, y = 0.0, 0.0
-            else:
-                x, y = pos[0], pos[1]
+                    logger.warning(
+                        f"[WEATHER_DISPLAY] VIL point with unusable position "
+                        f"{vil_dict.get('position')!r} ({count} since last report) -- "
+                        f"skipping rather than drawing it at ownship"
+                    )
+                return
+            x, y = position
 
-            # Extract other values with defaults
-            value = vil_dict.get('value', 20.0)  # kg/m²
-            layer_count = vil_dict.get('layer_count', 1)
-            intensity = vil_dict.get('intensity', 0.7)
+            # Extract other values.  The defaults here were 20.0 kg/m2 and intensity
+            # 0.7, both of which land inside a real colour band, so a VIL point with
+            # no reading was painted as a measured low-to-medium column.
+            value = optional_float(vil_dict, 'value', minimum=0.0)
+            layer_count = vil_dict.get('layer_count')
+            intensity = optional_float(vil_dict, 'intensity', minimum=0.0, maximum=1.0)
             show_values = vil_dict.get('show_values', True)
+            if value is UNKNOWN:
+                should_log, count = self._log_throttler.should_log("vil_value_unknown", 30.0)
+                if should_log:
+                    logger.warning(
+                        f"[WEATHER_DISPLAY] VIL point at ({x},{y}) carries no value "
+                        f"reading ({count} since last report) -- drawing it as unknown"
+                    )
+            render_intensity = intensity if intensity is not UNKNOWN else UNKNOWN_RENDER_INTENSITY
 
             # Get current time for animation effects
             current_time = time.time()
@@ -2921,26 +3052,33 @@ class WeatherRadarDisplay(BaseRadarDisplay):
             screen_y = center.y() - (y / self.range_scale) * radius
 
             # Determine VIL level based on value
-            vil_level = 'MINIMAL'
-            if value > 30:
-                vil_level = 'HIGH'
-            elif value > 20:
-                vil_level = 'MEDIUM'
-            elif value > 10:
-                vil_level = 'LOW'
+            if value is UNKNOWN:
+                color = UNKNOWN_SEVERITY_COLOR
+            else:
+                vil_level = 'MINIMAL'
+                if value > 30:
+                    vil_level = 'HIGH'
+                elif value > 20:
+                    vil_level = 'MEDIUM'
+                elif value > 10:
+                    vil_level = 'LOW'
 
-            # Get color based on VIL level
-            color = self._vil_colors.get(vil_level, self._vil_colors['MINIMAL'])
+                # Get color based on VIL level
+                color = self._vil_colors.get(vil_level, self._vil_colors['MINIMAL'])
 
             # Adjust opacity based on intensity
             adjusted_color = QColor(color)
-            adjusted_color.setAlpha(int(255 * min(1.0, max(0.3, intensity))))
+            adjusted_color.setAlpha(int(255 * min(1.0, max(0.3, render_intensity))))
 
             # Get or create unique ID for this VIL data point
             vil_id = vil_dict.get('id', f"vil_{str(uuid.uuid4())[:8]}")
+            self._particle_colors['vil'][vil_id] = QColor(color)
 
             # Calculate particle radius based on value and intensity
-            particle_radius = 20 + (value / 5) + (intensity * 10)
+            if value is UNKNOWN:
+                particle_radius = UNKNOWN_RENDER_RADIUS
+            else:
+                particle_radius = 20 + (value / 5) + (render_intensity * 10)
 
             # Check if we need to generate new particles for this VIL point
             if (vil_id not in self._particles.get('vil', {}) or
@@ -2949,7 +3087,7 @@ class WeatherRadarDisplay(BaseRadarDisplay):
                 self._generate_particles(
                     screen_x,
                     screen_y,
-                    intensity,
+                    render_intensity,
                     adjusted_color,
                     'vil',
                     vil_id,
@@ -2985,7 +3123,7 @@ class WeatherRadarDisplay(BaseRadarDisplay):
                 painter.setFont(QFont("Arial", 10, QFont.Weight.Bold))
 
                 # Format the value string with proper decimal places
-                value_str = f"{value:.1f}"
+                value_str = UNKNOWN_VALUE_TEXT if value is UNKNOWN else f"{value:.1f}"
 
                 painter.drawText(
                     text_rect,
@@ -3008,9 +3146,17 @@ class WeatherRadarDisplay(BaseRadarDisplay):
             # Continue with other items rather than crashing the entire display
             # This ensures that some data can still be displayed even if one point fails
 
-    def _get_intensity_color(self, intensity: float) -> QColor:
-        """Get color based on intensity value."""
+    def _get_intensity_color(self, intensity) -> QColor:
+        """Get color based on intensity value.
+
+        Args:
+            intensity: the reading, or UNKNOWN when the sensor did not report one.
+                UNKNOWN maps to the neutral colour rather than to VERY_LIGHT, which
+                is what a 0 default used to produce.
+        """
         try:
+            if intensity is UNKNOWN:
+                return UNKNOWN_SEVERITY_COLOR
             if intensity > 0.8:
                 return self._intensity_colors['SEVERE']
             elif intensity > 0.6:
@@ -3086,6 +3232,7 @@ class WeatherRadarDisplay(BaseRadarDisplay):
                     if cell_id in self._particles.get('cells', {}):
                         particles_cleaned += len(self._particles['cells'][cell_id])
                         del self._particles['cells'][cell_id]
+                        self._particle_colors['cells'].pop(cell_id, None)
 
             if particles_cleaned > 0:
                 logger.warning(f"[WEATHER_DISPLAY] Removed {particles_cleaned} expired particles from memory")

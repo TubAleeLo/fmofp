@@ -18,6 +18,8 @@ The EICAS polls at 10 Hz; individual caution/warning lines are colour-coded:
 import math
 import threading
 import time
+
+from .data_validity import FieldValidity
 import traceback
 from typing import Dict, List
 
@@ -36,6 +38,13 @@ _RED    = QColor(255,  60,  60)
 _CYAN   = QColor(0,   220, 255)
 _WHITE  = QColor(240, 240, 240)
 _DIM    = QColor(100, 100, 100)
+
+# Shown in place of a number for a parameter that has no current reading.
+# Dashes rather than a value, because every alternative is a measurement the
+# aircraft did not make: leaving the seed in place reads as nominal, and
+# substituting zero reads as an emergency -- FUEL TOTAL 0 kg renders red and
+# would send a crew looking for a fuel leak that does not exist.
+_UNKNOWN_TEXT = "----" 
 _BG     = QColor(10,   12,  16)
 _PANEL  = QColor(22,   26,  32)
 
@@ -64,6 +73,11 @@ class EICASDisplay(BaseDisplay):
         super().__init__(DisplayType.EICAS, parent=parent)
 
         # ── simulated / FMS-derived engine parameters ──────────────────────
+        # Which of these fields has actually had real data published to it.
+        # Everything starts UNKNOWN; the seeded numbers below exist only so the
+        # panel can lay out, and are not shown unless marked valid.
+        self._validity = FieldValidity()
+
         self._engine = {
             "thrust_pct": 70.0,       # 0-100 %
             "n1_pct":     78.5,       # fan speed  (%)
@@ -77,12 +91,26 @@ class EICASDisplay(BaseDisplay):
 
         # ── fuel state ─────────────────────────────────────────────────────
         self._fuel = {
-            "total_kg":   6800.0,
+            # Was 6800.0 -- a hardcoded starting quantity this display then
+            # integrated down, making it the aircraft's fuel authority. Now only
+            # a layout placeholder; validity decides whether it is shown.
+            "total_kg":   0.0,
             "flow_kgh":   2400.0,
+            # Never written by anything: a constant 0.0, which also made the
+            # "FUEL IMBALANCE" alarm below (abs(balance) > 200) unreachable.
+            # Supply it through set_engine_readings() when a source exists.
             "balance_kg": 0.0,        # L-R imbalance
         }
 
         # ── systems health ──────────────────────────────────────────────────
+        # Layout placeholders, not readings. Nothing in this project publishes
+        # hydraulic system C, any electrical value, or the generator states:
+        # _electrical was written once here and thereafter only read, so
+        # MAIN BUS 115.0 V and GEN 1/2 NORM were constants on the panel and the
+        # "ELEC MAIN BUS LO" alarm below could never fire -- the same dead-alarm
+        # shape as the oil-pressure sine waves. Systems A and B are modelled
+        # from g-load in _poll_data and are valid only while a real g_force is
+        # published. Supply anything real through set_system_readings().
         self._hydraulic = {
             "sys_a_psi": 3000,
             "sys_b_psi": 3000,
@@ -140,6 +168,52 @@ class EICASDisplay(BaseDisplay):
 
     # ───────────────────────────────────────────────── data layer ──────────
 
+    def set_engine_readings(self, **readings):
+        """Supply real ECU readings, e.g. oil_psi=48.0, vib=0.9.
+
+        Oil pressure, oil temperature and vibration have no feed in this
+        project. They used to be generated as sine waves whose ranges could
+        never cross their own alarm thresholds, so ENG OIL PRESSURE LO, ENG OIL
+        TEMP HIGH and ENG VIBRATION HIGH were dead code while the panel read
+        nominal. Anything supplied here is marked valid and IS alarm-checked.
+        """
+        with self._lock:
+            for key, value in readings.items():
+                if value is None:
+                    continue
+                if key in self._engine:
+                    self._engine[key] = value
+                elif key in self._fuel:
+                    self._fuel[key] = value
+                else:
+                    continue
+                self._validity.mark(key)
+
+    def set_system_readings(self, **readings):
+        """Supply real hydraulic, electrical or ECS values.
+
+        Mirrors set_engine_readings for the system panels. Anything supplied
+        here is marked valid and IS alarm-checked; anything never supplied
+        reads as unknown rather than as its placeholder.
+        """
+        with self._lock:
+            for key, value in readings.items():
+                if value is None:
+                    continue
+                if key in self._hydraulic:
+                    self._hydraulic[key] = value
+                elif key in self._electrical:
+                    self._electrical[key] = value
+                elif key in self._ecs_state:
+                    self._ecs_state[key] = value
+                else:
+                    continue
+                self._validity.mark(key)
+
+    def has_valid(self, field):
+        """True when `field` has had real data recently."""
+        return self._validity.is_valid(field)
+
     def _lazy_fms(self):
         """Lazy-import FMS handles (avoids circular imports at module load)."""
         if self._fms is None:
@@ -169,35 +243,64 @@ class EICASDisplay(BaseDisplay):
                 velocity = fd.get("velocity", {})
                 nav      = fd.get("navigation", {})
 
-                airspeed = velocity.get("airspeed", 300)   # knots
-                altitude = nav.get("altitude", 30000)      # feet
+                # No fabricated fallbacks. These used to default to 300 kt /
+                # 30,000 ft / 70% thrust, so with the FMS silent the display
+                # showed a complete engine picture derived from three constants.
+                airspeed = velocity.get("airspeed")
+                altitude = nav.get("altitude")
+                self._validity.mark_from(velocity, {'airspeed': 'airspeed'})
+                self._validity.mark_from(nav, {'altitude': 'altitude'})
 
-                # Thrust: derive from throttle via fmsControl if available
-                thrust = 70.0
+                # Thrust comes from fmsControl or not at all.
+                thrust = None
                 if self._fms_control:
-                    ts = self._fms_control.get_tactical_status()
+                    ts = self._fms_control.get_tactical_status() or {}
                     profile = ts.get("profile_limits", {})
-                    thrust = profile.get("engine_power", 0.7) * 100
+                    if "engine_power" in profile:
+                        thrust = profile["engine_power"] * 100
 
-                self._engine["thrust_pct"] = thrust
-                self._engine["n1_pct"]     = 0.8  * thrust + 18
-                self._engine["n2_pct"]     = 0.75 * thrust + 22
-                self._engine["egt_c"]      = 350  + thrust * 4.5
-                self._engine["ff_kgh"]     = thrust * 42
-                # Oil parameters slowly oscillate (simulated)
-                t = time.time()
-                self._engine["oil_psi"]    = 60 + 4 * math.sin(t * 0.1)
-                self._engine["oil_temp_c"] = 92 + 8 * math.sin(t * 0.05 + 1)
-                self._engine["vib"]        = 0.2 + 0.15 * abs(math.sin(t * 0.3))
+                if thrust is not None:
+                    # These four are a documented MODEL of the engine, derived
+                    # from commanded thrust -- not measurements. They are valid
+                    # only while a real thrust value is being published.
+                    self._engine["thrust_pct"] = thrust
+                    self._engine["n1_pct"]     = 0.8  * thrust + 18
+                    self._engine["n2_pct"]     = 0.75 * thrust + 22
+                    self._engine["egt_c"]      = 350  + thrust * 4.5
+                    self._engine["ff_kgh"]     = thrust * 42
+                    self._validity.mark('thrust_pct', 'n1_pct', 'n2_pct',
+                                        'egt_c', 'ff_kgh')
 
-                # Fuel: simple depletion model (100 kg/min at full power)
-                self._fuel["flow_kgh"]   = self._engine["ff_kgh"]
-                self._fuel["total_kg"]   = max(0, self._fuel["total_kg"]
-                                               - self._fuel["flow_kgh"] / 36000)
-                # Hydraulic: degrade slightly with G-load
-                g = tactical.get("g_force", 1.0)
-                self._hydraulic["sys_a_psi"] = 3000 - max(0, (g - 5) * 20)
-                self._hydraulic["sys_b_psi"] = 3000 - max(0, (g - 6) * 15)
+                # Oil pressure, oil temperature and vibration were SINE WAVES
+                # presented as engine instruments, and their alarm thresholds
+                # were mathematically unreachable as a result:
+                #
+                #   oil_psi    60 + 4*sin()        -> [56, 64]   vs <50 caution
+                #   oil_temp_c 92 + 8*sin()        -> [84, 100]  vs >130 warning
+                #   vib        0.2 + 0.15*|sin()|  -> [0.20, 0.35] vs >0.8 caution
+                #
+                # So three alarm families could never fire, while the panel read
+                # reassuringly nominal. There is no ECU feed for these, so they
+                # stay UNKNOWN until set_engine_readings() supplies real values.
+
+                # Fuel is NOT owned by this display any more. It used to start
+                # at a hardcoded 6800 kg and integrate its own burn here, which
+                # made EICAS the sole authority on fuel quantity -- so closing
+                # and reopening the display reset the aircraft's fuel. Quantity
+                # now comes from a real source or reads UNKNOWN.
+                if thrust is not None:
+                    self._fuel["flow_kgh"] = self._engine["ff_kgh"]
+                    self._validity.mark('flow_kgh')
+                # Hydraulic: a MODEL of pressure droop under G-load, not a
+                # measurement, and only meaningful while a real g_force is being
+                # published. The default of 1.0 used to stand in for a missing
+                # reading, which pinned both systems at exactly 3000 psi -- a
+                # healthy-looking number derived from nothing.
+                g = tactical.get("g_force")
+                if g is not None:
+                    self._hydraulic["sys_a_psi"] = 3000 - max(0, (g - 5) * 20)
+                    self._hydraulic["sys_b_psi"] = 3000 - max(0, (g - 6) * 15)
+                    self._validity.mark('sys_a_psi', 'sys_b_psi')
 
                 # Build alert list
                 self._alerts = self._compute_alerts(thrust)
@@ -314,46 +417,84 @@ class EICASDisplay(BaseDisplay):
             msgs.append({"text": text, "severity": sev, "ts": now})
 
         # Engine warnings
-        if self._engine["egt_c"] > 800:
-            add("ENG  EGT HIGH", _WARN)
-        elif self._engine["egt_c"] > 750:
-            add("ENG  EGT CAUTION", _CAUT)
+        # Each check runs only on a field that has real data. An UNKNOWN
+        # reading must not be silently treated as in-limits: it is reported as
+        # unknown instead, which is the honest state and is itself actionable.
+        v = self._validity
 
-        if self._engine["oil_psi"] < 40:
-            add("ENG  OIL PRESSURE LO", _WARN)
-        elif self._engine["oil_psi"] < 50:
-            add("ENG  OIL PRESS LOW", _CAUT)
+        if v.is_valid('egt_c'):
+            if self._engine["egt_c"] > 800:
+                add("ENG  EGT HIGH", _WARN)
+            elif self._engine["egt_c"] > 750:
+                add("ENG  EGT CAUTION", _CAUT)
+        else:
+            add("ENG  EGT UNKNOWN", _CAUT)
 
-        if self._engine["oil_temp_c"] > 130:
-            add("ENG  OIL TEMP HIGH", _WARN)
+        if v.is_valid('oil_psi'):
+            if self._engine["oil_psi"] < 40:
+                add("ENG  OIL PRESSURE LO", _WARN)
+            elif self._engine["oil_psi"] < 50:
+                add("ENG  OIL PRESS LOW", _CAUT)
+        else:
+            add("ENG  OIL PRESS UNKNOWN", _CAUT)
 
-        if self._engine["vib"] > 0.8:
-            add("ENG  VIBRATION HIGH", _CAUT)
+        if v.is_valid('oil_temp_c'):
+            if self._engine["oil_temp_c"] > 130:
+                add("ENG  OIL TEMP HIGH", _WARN)
+        else:
+            add("ENG  OIL TEMP UNKNOWN", _CAUT)
+
+        if v.is_valid('vib'):
+            if self._engine["vib"] > 0.8:
+                add("ENG  VIBRATION HIGH", _CAUT)
+        else:
+            add("ENG  VIB UNKNOWN", _CAUT)
 
         # Fuel warnings
-        if self._fuel["total_kg"] < 500:
+        if not v.is_valid('total_kg'):
+            add("FUEL QTY UNKNOWN", _CAUT)
+        elif self._fuel["total_kg"] < 500:
             add("FUEL  QUANTITY LOW", _WARN)
         elif self._fuel["total_kg"] < 1000:
             add("FUEL  QUANTITY CAUTION", _CAUT)
 
-        if abs(self._fuel["balance_kg"]) > 200:
+        if not v.is_valid('balance_kg'):
+            add("FUEL  BALANCE UNKNOWN", _CAUT)
+        elif abs(self._fuel["balance_kg"]) > 200:
             add("FUEL  IMBALANCE", _CAUT)
 
-        # Hydraulic warnings
-        for name, psi in [("HYD A", self._hydraulic["sys_a_psi"]),
-                           ("HYD B", self._hydraulic["sys_b_psi"]),
-                           ("HYD C", self._hydraulic["sys_c_psi"])]:
+        # Hydraulic warnings. An unmonitored system is reported as unmonitored;
+        # running the threshold against a placeholder reads as "in limits" and
+        # is indistinguishable from a healthy measured system.
+        for name, field in [("HYD A", "sys_a_psi"),
+                            ("HYD B", "sys_b_psi"),
+                            ("HYD C", "sys_c_psi")]:
+            if not v.is_valid(field):
+                add(f"{name}  PRESSURE UNKNOWN", _CAUT)
+                continue
+            psi = self._hydraulic[field]
             if psi < 2000:
                 add(f"{name}  PRESSURE LOW", _WARN)
             elif psi < 2500:
                 add(f"{name}  PRESS REDUCED", _CAUT)
 
-        # Electrical
-        if not self._electrical["gen1_ok"]:
+        # Electrical. Nothing publishes these, so in the current system every
+        # one of them reports UNKNOWN -- which is the point: the panel used to
+        # show a nominal bus voltage and two healthy generators that no part of
+        # the aircraft had ever asserted.
+        if not v.is_valid('gen1_ok'):
+            add("ELEC  GEN 1 UNKNOWN", _CAUT)
+        elif not self._electrical["gen1_ok"]:
             add("ELEC  GEN 1 FAULT", _WARN)
-        if not self._electrical["gen2_ok"]:
+
+        if not v.is_valid('gen2_ok'):
+            add("ELEC  GEN 2 UNKNOWN", _CAUT)
+        elif not self._electrical["gen2_ok"]:
             add("ELEC  GEN 2 FAULT", _WARN)
-        if self._electrical["main_bus_v"] < 100:
+
+        if not v.is_valid('main_bus_v'):
+            add("ELEC  BUS VOLTS UNKNOWN", _CAUT)
+        elif self._electrical["main_bus_v"] < 100:
             add("ELEC  MAIN BUS LO", _CAUT)
 
         # Advisory: high thrust without afterburner selected
@@ -514,21 +655,32 @@ class EICASDisplay(BaseDisplay):
         f_label = QFont("Monospace", 8)
         f_value = QFont("Monospace", 10, QFont.Weight.Bold)
 
+        # Each row names the validity field behind it. A parameter with no
+        # current reading is drawn as dashes in amber, and its threshold colour
+        # is not evaluated at all -- the numbers in self._engine are layout
+        # seeds, and colouring them green was the display asserting a nominal
+        # engine while nothing was feeding it.
+        def reading(field, fmt, colour_fn=None):
+            if not self._validity.is_valid(field):
+                return (_UNKNOWN_TEXT, _AMBER)
+            value = self._engine[field]
+            return (fmt(value), colour_fn(value) if colour_fn else _GREEN)
+
         params = [
-            ("THRUST",   f"{self._engine['thrust_pct']:5.1f} %",   _GREEN),
-            ("N1",       f"{self._engine['n1_pct']:5.1f} %",        _GREEN),
-            ("N2",       f"{self._engine['n2_pct']:5.1f} %",        _GREEN),
-            ("EGT",      f"{self._engine['egt_c']:5.0f} °C",
-             _RED if self._engine["egt_c"] > 800 else
-             _AMBER if self._engine["egt_c"] > 750 else _GREEN),
-            ("FF",       f"{self._engine['ff_kgh']:5.0f} kg/h",     _GREEN),
-            ("OIL PSI",  f"{self._engine['oil_psi']:5.1f}",
-             _RED if self._engine["oil_psi"] < 40 else
-             _AMBER if self._engine["oil_psi"] < 50 else _GREEN),
-            ("OIL °C",   f"{self._engine['oil_temp_c']:5.1f}",
-             _RED if self._engine["oil_temp_c"] > 130 else _GREEN),
-            ("VIB",      f"{self._engine['vib']:5.2f}",
-             _AMBER if self._engine["vib"] > 0.8 else _GREEN),
+            ("THRUST",  *reading('thrust_pct', lambda v: f"{v:5.1f} %")),
+            ("N1",      *reading('n1_pct',     lambda v: f"{v:5.1f} %")),
+            ("N2",      *reading('n2_pct',     lambda v: f"{v:5.1f} %")),
+            ("EGT",     *reading('egt_c',      lambda v: f"{v:5.0f} °C",
+                                 lambda v: _RED if v > 800 else
+                                           _AMBER if v > 750 else _GREEN)),
+            ("FF",      *reading('ff_kgh',     lambda v: f"{v:5.0f} kg/h")),
+            ("OIL PSI", *reading('oil_psi',    lambda v: f"{v:5.1f}",
+                                 lambda v: _RED if v < 40 else
+                                           _AMBER if v < 50 else _GREEN)),
+            ("OIL °C",  *reading('oil_temp_c', lambda v: f"{v:5.1f}",
+                                 lambda v: _RED if v > 130 else _GREEN)),
+            ("VIB",     *reading('vib',        lambda v: f"{v:5.2f}",
+                                 lambda v: _AMBER if v > 0.8 else _GREEN)),
         ]
 
         row_h = r.height() / (len(params) + 1)
@@ -588,20 +740,39 @@ class EICASDisplay(BaseDisplay):
 
         # ── Fuel ────────────────────────────────────────────────────────────
         section("─── FUEL ────────────")
-        fuel_col = (_RED   if self._fuel["total_kg"] < 500  else
-                    _AMBER if self._fuel["total_kg"] < 1000 else _GREEN)
-        row("TOTAL",   f"{self._fuel['total_kg']:6.0f} kg",  fuel_col)
-        row("FLOW",    f"{self._fuel['flow_kgh']:6.0f} kg/h", _GREEN)
-        bal = self._fuel["balance_kg"]
-        bal_col = _AMBER if abs(bal) > 200 else _GREEN
-        row("BALANCE", f"{bal:+6.0f} kg", bal_col)
+        # Quantity is not owned by this display any more, and nothing currently
+        # publishes it, so TOTAL reads as unknown rather than as the 0 kg the
+        # layout placeholder holds -- 0 would be drawn red, i.e. as a fuel
+        # emergency, which is the opposite of "no reading".
+        if self._validity.is_valid('total_kg'):
+            total = self._fuel["total_kg"]
+            fuel_col = (_RED   if total < 500  else
+                        _AMBER if total < 1000 else _GREEN)
+            row("TOTAL", f"{total:6.0f} kg", fuel_col)
+        else:
+            row("TOTAL", _UNKNOWN_TEXT, _AMBER)
+
+        if self._validity.is_valid('flow_kgh'):
+            row("FLOW", f"{self._fuel['flow_kgh']:6.0f} kg/h", _GREEN)
+        else:
+            row("FLOW", _UNKNOWN_TEXT, _AMBER)
+
+        if self._validity.is_valid('balance_kg'):
+            bal = self._fuel["balance_kg"]
+            row("BALANCE", f"{bal:+6.0f} kg", _AMBER if abs(bal) > 200 else _GREEN)
+        else:
+            row("BALANCE", _UNKNOWN_TEXT, _AMBER)
 
         y += 4
         # ── Hydraulics ──────────────────────────────────────────────────────
         section("─── HYDRAULIC ───────")
-        for sys_name, psi in [("SYS A", self._hydraulic["sys_a_psi"]),
-                               ("SYS B", self._hydraulic["sys_b_psi"]),
-                               ("SYS C", self._hydraulic["sys_c_psi"])]:
+        for sys_name, field in [("SYS A", "sys_a_psi"),
+                                ("SYS B", "sys_b_psi"),
+                                ("SYS C", "sys_c_psi")]:
+            if not self._validity.is_valid(field):
+                row(sys_name, _UNKNOWN_TEXT, _AMBER)
+                continue
+            psi = self._hydraulic[field]
             col = (_RED   if psi < 2000 else
                    _AMBER if psi < 2500 else _GREEN)
             row(sys_name, f"{psi:5.0f} psi", col)
@@ -609,13 +780,23 @@ class EICASDisplay(BaseDisplay):
         y += 4
         # ── Electrical ──────────────────────────────────────────────────────
         section("─── ELECTRICAL ──────")
-        mb_col = _AMBER if self._electrical["main_bus_v"] < 100 else _GREEN
-        row("MAIN BUS", f"{self._electrical['main_bus_v']:5.1f} V",   mb_col)
-        row("ESS BUS",  f"{self._electrical['ess_bus_v']:5.1f} V",    _GREEN)
-        row("GEN 1",   "NORM" if self._electrical["gen1_ok"] else "FAIL",
-            _GREEN if self._electrical["gen1_ok"] else _RED)
-        row("GEN 2",   "NORM" if self._electrical["gen2_ok"] else "FAIL",
-            _GREEN if self._electrical["gen2_ok"] else _RED)
+        if self._validity.is_valid('main_bus_v'):
+            mb = self._electrical["main_bus_v"]
+            row("MAIN BUS", f"{mb:5.1f} V", _AMBER if mb < 100 else _GREEN)
+        else:
+            row("MAIN BUS", _UNKNOWN_TEXT, _AMBER)
+
+        if self._validity.is_valid('ess_bus_v'):
+            row("ESS BUS", f"{self._electrical['ess_bus_v']:5.1f} V", _GREEN)
+        else:
+            row("ESS BUS", _UNKNOWN_TEXT, _AMBER)
+
+        for label, field in (("GEN 1", "gen1_ok"), ("GEN 2", "gen2_ok")):
+            if not self._validity.is_valid(field):
+                row(label, _UNKNOWN_TEXT, _AMBER)
+            else:
+                ok = self._electrical[field]
+                row(label, "NORM" if ok else "FAIL", _GREEN if ok else _RED)
 
         y += 4
         # ── FCS / GCAS ──────────────────────────────────────────────────────
@@ -630,11 +811,22 @@ class EICASDisplay(BaseDisplay):
         y += 4
         # ── Environmental (ECS) ─────────────────────────────────────────────
         section("─── ECS ─────────────")
-        row("CAB ALT", f"{self._ecs_state['cabin_alt_ft']:5.0f} ft",
-            _AMBER if self._ecs_state['cabin_alt_ft'] > 10000 else _GREEN)
-        row("CAB TEMP", f"{self._ecs_state['cabin_temp_c']:5.1f} °C",  _GREEN)
-        row("OXY PSI",  f"{self._ecs_state['oxy_psi']:5.0f} psi",
-            _RED if self._ecs_state['oxy_psi'] < 500 else _GREEN)
+        if self._validity.is_valid('cabin_alt_ft'):
+            alt = self._ecs_state['cabin_alt_ft']
+            row("CAB ALT", f"{alt:5.0f} ft", _AMBER if alt > 10000 else _GREEN)
+        else:
+            row("CAB ALT", _UNKNOWN_TEXT, _AMBER)
+
+        if self._validity.is_valid('cabin_temp_c'):
+            row("CAB TEMP", f"{self._ecs_state['cabin_temp_c']:5.1f} °C", _GREEN)
+        else:
+            row("CAB TEMP", _UNKNOWN_TEXT, _AMBER)
+
+        if self._validity.is_valid('oxy_psi'):
+            oxy = self._ecs_state['oxy_psi']
+            row("OXY PSI", f"{oxy:5.0f} psi", _RED if oxy < 500 else _GREEN)
+        else:
+            row("OXY PSI", _UNKNOWN_TEXT, _AMBER)
 
         y += 4
         # ── BITS ────────────────────────────────────────────────────────────

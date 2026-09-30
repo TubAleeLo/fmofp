@@ -45,6 +45,22 @@ class PFDDisplayFactory:
             
             # Create appropriate display based on type
             logger.info(f"Creating new PFD display of type: {display_type}")
+            # A PFD that cannot show the aircraft's real state must never be
+            # handed to an operator, whatever the theme asks for. HolographicPFD
+            # inherits HolographicDisplay rather than PrimaryFlightDisplay, so it
+            # never polls the FMS -- it rendered a fixed 30,000 ft / 450 kt /
+            # Mach 0.85 picture with a live-looking scan-line animation. Choosing
+            # the "Modern" theme therefore replaced the PFD with a disconnected
+            # one, silently. Refuse it here rather than trusting the theme file.
+            if display_type == "holographic" and not getattr(
+                    HolographicPFD, "PROVIDES_FLIGHT_DATA", False):
+                logger.error(
+                    "Theme requested the holographic PFD, but that display has "
+                    "no flight-data feed (PROVIDES_FLIGHT_DATA is False) and "
+                    "would show fixed values as if live. Using the standard "
+                    "PrimaryFlightDisplay instead.")
+                display_type = "standard"
+
             if display_type == "holographic":
                 try:
                     # Create holographic display with parent

@@ -384,6 +384,36 @@ class MultiFunctionDisplay(BaseDisplay):
             logger.error(f"Error drawing standby display: {str(e)}")
             raise
 
+    def _read_tfr_clearance(self):
+        """Real terrain clearance from the TFR radar, or (None, 'UNKNOWN').
+
+        Returns (metres, level) where level is the ClearanceManager's master
+        level -- CLEAR, LOW, CAUTION or PULL_UP. Never substitutes a plausible
+        number: a terrain-following display that invents its clearance is worse
+        than one that admits it does not know.
+        """
+        try:
+            from FMOFP.Systems.radarManagement.radarControl import (
+                get_radar_management_system)
+            from FMOFP.Systems.radarManagement.terrainFollowing.tfr_radar import (
+                tfr_radar as _tfr_radar_cls)
+
+            rms = get_radar_management_system()
+            for radar in getattr(rms, "radars", {}).values():
+                if not isinstance(radar, _tfr_radar_cls):
+                    continue
+                mgr = getattr(radar, "clearance_manager", None)
+                if mgr is None:
+                    continue
+                clearance = mgr.min_clearance_m
+                level = mgr.master_level
+                if clearance is None or level is None:
+                    return None, "UNKNOWN"
+                return float(clearance), str(level)
+        except Exception as exc:
+            logger.debug(f"[MFD] Terrain clearance unavailable: {exc}")
+        return None, "UNKNOWN"
+
     def _get_radar_data(self) -> Dict:
         """Get appropriate radar data based on current mode"""
         try:
@@ -400,10 +430,21 @@ class MultiFunctionDisplay(BaseDisplay):
                 return base_data
             elif isinstance(self.radar_data.mode, tfr_radarMode):
                 # Include TFR data and ensure mode is passed
+                # These were literals with the author's own comment saying they
+                # should come from real data: terrain_clearance 500 and
+                # system_health 'NORMAL'. So the most safety-relevant number on
+                # a terrain-following display read a constant 500 m in green on
+                # every frame, whatever the terrain was doing.
+                #
+                # A real source exists and was simply not wired up:
+                # tfr_radar.clearance_manager is a ClearanceManager that
+                # assess_profile() feeds every sweep, exposing min_clearance_m
+                # and a master_level of CLEAR / LOW / CAUTION / PULL_UP.
+                clearance_m, health = self._read_tfr_clearance()
                 base_data.update({
                     'tfr_data': self.radar_data.tfr_data,
-                    'terrain_clearance': 500,  # Example value, should be from actual data
-                    'system_health': 'NORMAL'  # Example value, should be from actual data
+                    'terrain_clearance': clearance_m,   # None when unknown
+                    'system_health': health,            # 'UNKNOWN' when unknown
                 })
                 return base_data
             elif isinstance(self.radar_data.mode, sar_radarMode):

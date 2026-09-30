@@ -17,6 +17,10 @@ from FMOFP.Utils.logger.sys_logger import get_logger
 from FMOFP.Utils.common.async_task import cancel_and_await
 from FMOFP.local_messaging.messageConfigurations.weather_radar_data import PrecipitationData
 from FMOFP.Utils.common.message_format_adapter import get_message_format_adapter
+from FMOFP.Utils.common.radar_records import (
+    COLLECTION_RECORD_TYPE,
+    MEASUREMENT_ONLY_SQL,
+)
 from ...handlers.precipitation_data_handler import PrecipitationDataHandler
 
 logger = get_logger()
@@ -236,8 +240,9 @@ class PrecipitationResponseService:
                 query = """
                         SELECT * FROM precipitation_data
                         WHERE request_id = ?
+                          AND {measurement_only}
                         ORDER BY timestamp DESC
-                        """
+                        """.format(measurement_only=MEASUREMENT_ONLY_SQL)
 
                 results = radar_db.execute_query(
                     query,
@@ -254,8 +259,9 @@ class PrecipitationResponseService:
                     child_query = """
                             SELECT * FROM precipitation_data
                             WHERE request_id LIKE ?
+                              AND {measurement_only}
                             ORDER BY timestamp DESC
-                            """
+                            """.format(measurement_only=MEASUREMENT_ONLY_SQL)
 
                     results = radar_db.execute_query(
                         child_query,
@@ -394,9 +400,10 @@ class PrecipitationResponseService:
                         """
                         SELECT * FROM precipitation_data
                         WHERE timestamp > ?
+                          AND {measurement_only}
                         ORDER BY timestamp DESC
                         LIMIT 10
-                        """,
+                        """.format(measurement_only=MEASUREMENT_ONLY_SQL),
                         (staleness_threshold_time,),
                         query_type='select'
                     )
@@ -469,9 +476,10 @@ class PrecipitationResponseService:
                             precip_results = radar_db.execute_query(
                                 """
                                 SELECT * FROM precipitation_data
+                                WHERE {measurement_only}
                                 ORDER BY timestamp DESC
                                 LIMIT 10
-                                """,
+                                """.format(measurement_only=MEASUREMENT_ONLY_SQL),
                                 (),
                                 query_type='select'
                             )
@@ -494,9 +502,10 @@ class PrecipitationResponseService:
                     precip_results = radar_db.execute_query(
                         """
                         SELECT * FROM precipitation_data
+                        WHERE {measurement_only}
                         ORDER BY timestamp DESC
                         LIMIT 10
-                        """,
+                        """.format(measurement_only=MEASUREMENT_ONLY_SQL),
                         (),
                         query_type='select'
                     )
@@ -939,8 +948,9 @@ class PrecipitationResponseService:
                                         """
                                         SELECT * FROM precipitation_data
                                         WHERE request_id LIKE ?
+                                          AND {measurement_only}
                                         ORDER BY timestamp DESC
-                                        """,
+                                        """.format(measurement_only=MEASUREMENT_ONLY_SQL),
                                         (f"{request_id}_%",),
                                         query_type='select',
                                         manage_transaction=True
@@ -951,13 +961,21 @@ class PrecipitationResponseService:
                                         precip_results = child_results
                                         break
                                     else:
-                                        # Fall back to looking for the parent record
+                                        # Fall back to looking for the parent record.
+                                        # This is the one read that *wants* the link
+                                        # record rather than a measurement: it is
+                                        # after the batch's additional_info, which
+                                        # lists the child request_ids. Asking for it
+                                        # by type keeps that intent explicit, and
+                                        # keeps a real measurement stored under the
+                                        # parent id from being mistaken for one.
                                         parent_results = radar_db.execute_query(
                                             """
                                             SELECT * FROM precipitation_data
                                             WHERE request_id = ?
+                                              AND type = ?
                                             """,
-                                            (request_id,),
+                                            (request_id, COLLECTION_RECORD_TYPE),
                                             query_type='select',
                                             manage_transaction=True
                                         )
@@ -988,6 +1006,7 @@ class PrecipitationResponseService:
                                                         query = f"""
                                                         SELECT * FROM precipitation_data
                                                         WHERE request_id IN ({child_ids})
+                                                          AND {MEASUREMENT_ONLY_SQL}
                                                         """
                                                         child_results = radar_db.execute_query(query, (), query_type='select')
 
@@ -1406,7 +1425,8 @@ class PrecipitationResponseService:
                     query = """
                         SELECT COUNT(*) FROM precipitation_data
                         WHERE request_id = ?
-                    """
+                          AND {measurement_only}
+                    """.format(measurement_only=MEASUREMENT_ONLY_SQL)
 
                     result = radar_db.execute_query(
                         query,
@@ -1423,7 +1443,8 @@ class PrecipitationResponseService:
                     child_query = """
                         SELECT COUNT(*) FROM precipitation_data
                         WHERE request_id LIKE ?
-                    """
+                          AND {measurement_only}
+                    """.format(measurement_only=MEASUREMENT_ONLY_SQL)
 
                     child_result = radar_db.execute_query(
                         child_query,

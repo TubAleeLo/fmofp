@@ -16,6 +16,9 @@ logger = get_logger()
 class BaseRadarDisplay(ABC):
     def __init__(self):
         self.range_scale = 40  # nautical miles
+
+        # Size of the surface last painted; see viewport_rect() below.
+        self._last_viewport_rect = QRectF()
         
         # Theme manager and visual effects
         self._theme_manager = get_theme_manager()
@@ -29,6 +32,76 @@ class BaseRadarDisplay(ABC):
         # Update colors from theme
         self.update_colors_from_theme()
     
+    # ------------------------------------------------------------------ #
+    # Viewport size
+    #
+    # These classes are plain objects owned by a QWidget (see
+    # weather_radar_widget.py), not QWidget subclasses -- BaseRadarDisplay
+    # derives from ABC. A good deal of the drawing code was nevertheless
+    # written as though `self` were the widget, calling self.width() and
+    # self.height(). Those calls raised AttributeError every time, and because
+    # each drawing method wraps its body in `except Exception: log`, the failure
+    # showed up only as a log line: the weather radar's entire particle render
+    # path ("Error drawing particles: 'WeatherRadarDisplay' object has no
+    # attribute 'width'") and every draw method in the holographic weather radar
+    # silently produced nothing at all.
+    #
+    # The size is taken from the QPainter's own device rather than cached on the
+    # instance, so it is always the surface actually being painted and there is
+    # no stale value to go wrong between resizes. Pass the painter you are
+    # drawing with.
+    # ------------------------------------------------------------------ #
+
+    def viewport_rect(self, painter: QPainter) -> QRectF:
+        """Return the rectangle of the surface `painter` is drawing on.
+
+        The result is also remembered, so code that runs outside a paint cycle
+        (positioning a panel in response to a click, say) can ask
+        last_viewport_rect() for the size of the surface last painted.
+        """
+        try:
+            viewport = painter.viewport()
+            if viewport is not None and viewport.width() > 0 and viewport.height() > 0:
+                self._last_viewport_rect = QRectF(viewport)
+                return QRectF(self._last_viewport_rect)
+        except Exception:
+            pass
+
+        try:
+            device = painter.device()
+            if device is not None and device.width() > 0 and device.height() > 0:
+                self._last_viewport_rect = QRectF(
+                    0.0, 0.0, float(device.width()), float(device.height()))
+                return QRectF(self._last_viewport_rect)
+        except Exception:
+            pass
+
+        # Neither the viewport nor the device could be read. Returning a null
+        # rect is honest: callers use it for culling and centring, and a made-up
+        # size would put echoes somewhere they are not.
+        logger.warning(
+            "[BASE_RADAR] Could not determine the paint surface size from the "
+            "painter; returning a null viewport"
+        )
+        return QRectF()
+
+    def viewport_width(self, painter: QPainter) -> float:
+        """Width of the surface `painter` is drawing on."""
+        return self.viewport_rect(painter).width()
+
+    def viewport_height(self, painter: QPainter) -> float:
+        """Height of the surface `painter` is drawing on."""
+        return self.viewport_rect(painter).height()
+
+    def last_viewport_rect(self) -> QRectF:
+        """The surface size recorded by the most recent viewport_rect() call.
+
+        Null until something has been painted.  Callers with no painter to hand
+        must treat a null rect as "not known yet" and do nothing that depends on
+        the size, rather than substituting one.
+        """
+        return QRectF(getattr(self, '_last_viewport_rect', QRectF()))
+
     def update_colors_from_theme(self):
         """Update display colors from current theme"""
         self.hud_color = self._theme_manager.get_color("hud")
