@@ -489,6 +489,60 @@ def test_pfd_factory_refuses_unfed_display(r: _Results) -> None:
             f"alt={holo.altitude} ias={holo.airspeed}")
 
 
+def test_pfd_secondary_readouts_show_as_unknown(r: _Results) -> None:
+    """The small readouts must not assert values beside four X'd-out regions.
+
+    The airspeed, altitude, heading and attitude regions get an amber X when
+    their feed is stale, but G-FORCE, AOA and the flight-mode band kept drawing
+    from their seeds -- 1.0, 0 and "NORMAL" -- in normal colours. A display that
+    flags four instruments invalid while reporting a nominal G, AOA and mode
+    beside them contradicts itself, and "NORMAL" is a claim about the aircraft
+    rather than about the display. flight_mode had no validity marking at all,
+    so it could never go stale.
+    """
+    from FMOFP.Interfaces.userInterface.displays.pfd import (
+        PrimaryFlightDisplay, UNKNOWN_READING_TEXT,
+    )
+
+    print("\n  \u2500\u2500 PFD: secondary readouts \u2500\u2500")
+
+    disp = PrimaryFlightDisplay()
+    texts = _painted_texts(disp)
+    joined = " ".join(texts)
+
+    r.check("G-FORCE, AOA and the mode band all read as unknown",
+            texts.count(UNKNOWN_READING_TEXT) >= 3,
+            f"count={texts.count(UNKNOWN_READING_TEXT)} texts={texts[:30]}")
+    r.check("no G-force value is asserted", "1.0" not in texts, f"texts={texts[:30]}")
+    r.check("no AOA value is asserted",
+            not any(t.startswith("0.0\u00b0") for t in texts), f"texts={texts[:30]}")
+    r.check("the mode band does not claim NORMAL",
+            "NORMAL" not in joined, f"texts={texts[:30]}")
+
+    # NON-TAUTOLOGICAL: the seeds are still in place, so the checks above are
+    # about the rendering rather than about an emptied object.
+    r.check("NON-TAUTOLOGICAL: the seeds really are still there",
+            disp.g_force == 1.0 and disp.aoa == 0 and disp.flight_mode == "NORMAL")
+    r.check("NON-TAUTOLOGICAL: a seeded g_force of 1.0 really is inside the "
+            "normal band, so it drew in the nominal colour",
+            disp.g_force <= 2.0)
+
+    # A real reading must still appear, so "unknown" is not simply always drawn.
+    disp.g_force = 5.5
+    disp.aoa = 12.0
+    disp.flight_mode = "COMBAT"
+    disp.validity.mark('g_force', 'aoa', 'flight_mode')
+    joined2 = " ".join(_painted_texts(disp))
+    r.check("a marked g_force is shown", "5.5" in joined2, f"texts={joined2[:200]}")
+    r.check("a marked AOA is shown", "12.0" in joined2, f"texts={joined2[:200]}")
+    r.check("a marked mode is shown", "COMBAT" in joined2, f"texts={joined2[:200]}")
+
+    try:
+        disp.cleanup()
+    except Exception:
+        pass
+
+
 def test_pfd_flags_invalid_fields(r: _Results) -> None:
     """The PFD must flag missing data rather than showing seeded values (H9)."""
     print("\n  ── PFD: invalid fields are flagged, not invented ──")
@@ -697,6 +751,7 @@ def run_all() -> bool:
         test_mfd_terrain_clearance_not_invented,
         test_pfd_factory_refuses_unfed_display,
         test_pfd_flags_invalid_fields,
+        test_pfd_secondary_readouts_show_as_unknown,
         test_tsd_no_synthetic_threats,
         test_tsd_paint_combat_mode,
         # SMS

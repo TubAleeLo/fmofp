@@ -2,6 +2,15 @@ from PyQt6.QtCore import QRectF, QPointF, QLineF, Qt, QTimer
 from PyQt6.QtGui import QPainter, QPen, QColor, QBrush, QFont, QFontMetrics, QLinearGradient, QPainterPath
 from .base_display import BaseDisplay, DisplayType
 from .data_validity import FieldValidity, draw_invalid_overlay
+
+# Shown in place of a reading that has not arrived, in the same amber as
+# draw_invalid_overlay's crosshatch. The four main regions (airspeed, altitude,
+# heading, attitude) are X'd out when their feed is stale; these smaller
+# readouts sit beside them and used to keep asserting values from their seeds,
+# so the display contradicted itself -- four instruments flagged invalid and
+# G-FORCE 1.0 / AOA 0.0 / NORMAL next to them in normal colours.
+UNKNOWN_READING_TEXT = "----"
+UNKNOWN_READING_COLOR = QColor(255, 176, 0)
 import math
 import threading
 import time
@@ -131,9 +140,12 @@ class PrimaryFlightDisplay(BaseDisplay):
                             'g_force': 'g_force', 'aoa': 'aoa',
                             'energy_state': 'energy_state'})
 
-                    # Update status
+                    # Update status. This had no validity marking at all, so
+                    # self.flight_mode kept its "NORMAL" seed for the life of the
+                    # display and could never read as unknown.
                     if 'status' in flight_data:
                         self.flight_mode = flight_data['status'].get('mode', self.flight_mode)
+                        self.validity.mark_from(flight_data['status'], {'mode': 'flight_mode'})
 
                 if self.fms_control:
                     # Get tactical status for enhanced data
@@ -927,18 +939,24 @@ class PrimaryFlightDisplay(BaseDisplay):
                 # Set font for mode display
                 painter.setFont(QFont("Arial", 10, QFont.Weight.Bold))
 
-                # Draw the mode text
+                # Draw the mode text. With no status feed this said "NORMAL"
+                # from its seed, which is an assertion about the aircraft rather
+                # than about the display.
+                mode_valid = self.validity.is_valid('flight_mode')
+                mode_text = self.flight_mode if mode_valid else UNKNOWN_READING_TEXT
+                if not mode_valid:
+                    mode_color = UNKNOWN_READING_COLOR
                 painter.setPen(mode_color)
                 if glow:
                     self.draw_text(
                         painter, text_rect,
                         Qt.AlignmentFlag.AlignCenter,
-                        self.flight_mode,
+                        mode_text,
                         glow=True,
                         glow_color=mode_color
                     )
                 else:
-                    painter.drawText(text_rect, Qt.AlignmentFlag.AlignCenter, self.flight_mode)
+                    painter.drawText(text_rect, Qt.AlignmentFlag.AlignCenter, mode_text)
 
                 # Reset font
                 painter.setFont(QFont("Arial", 8))
@@ -958,9 +976,15 @@ class PrimaryFlightDisplay(BaseDisplay):
                 # Set font for mode display
                 painter.setFont(QFont("Arial", 10, QFont.Weight.Bold))
 
-                # Draw mode text
+                # Draw mode text. Same reasoning as the themed branch above:
+                # an unfed display must not report a mode from its seed.
+                if not self.validity.is_valid('flight_mode'):
+                    painter.setPen(UNKNOWN_READING_COLOR)
                 text_point = QPointF(mode_x - 25, mode_y + 5)
-                painter.drawText(text_point, self.flight_mode)
+                painter.drawText(
+                    text_point,
+                    self.flight_mode if self.validity.is_valid('flight_mode')
+                    else UNKNOWN_READING_TEXT)
 
                 # Reset font
                 painter.setFont(QFont("Arial", 8))
@@ -995,7 +1019,8 @@ class PrimaryFlightDisplay(BaseDisplay):
                 self.g_force,
                 2.0,  # Normal G threshold
                 6.0,  # Warning G threshold
-                8.0   # Critical G threshold
+                8.0,  # Critical G threshold
+                valid=self.validity.is_valid('g_force')
             )
 
             # 2. Angle of Attack (AOA) indicator
@@ -1010,7 +1035,8 @@ class PrimaryFlightDisplay(BaseDisplay):
                 self.aoa,
                 10.0,  # Normal AOA threshold
                 18.0,  # Warning AOA threshold
-                22.0   # Critical AOA threshold
+                22.0,  # Critical AOA threshold
+                valid=self.validity.is_valid('aoa')
             )
 
             # Removed energy state indicator as per user feedback
@@ -1020,10 +1046,26 @@ class PrimaryFlightDisplay(BaseDisplay):
             raise
 
     def _draw_tactical_value(self, painter, label, value, x, y, width,
-                           current_value, normal_threshold, warning_threshold, critical_threshold):
-        """Helper to draw tactical indicator with thresholds"""
+                           current_value, normal_threshold, warning_threshold,
+                           critical_threshold, valid=True):
+        """Helper to draw tactical indicator with thresholds.
+
+        Args:
+            valid: False when the field has no current reading. The value is
+                then drawn as dashes in amber and the thresholds are not
+                evaluated -- a seeded g_force of 1.0 and aoa of 0 both fall in
+                the "normal" band, so an unfed display read reassuringly
+                nominal.
+        """
+        if not valid:
+            value = UNKNOWN_READING_TEXT
+            color = UNKNOWN_READING_COLOR
+            current_value = None
+
         # Determine color based on value
-        if current_value > critical_threshold:
+        if current_value is None:
+            pass
+        elif current_value > critical_threshold:
             color = self.critical_color
         elif current_value > warning_threshold:
             color = self.warning_color
