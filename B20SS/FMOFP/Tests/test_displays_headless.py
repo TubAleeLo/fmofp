@@ -134,11 +134,15 @@ def test_eicas_paint_warnings(r: _Results) -> None:
     _qt_app()
     from FMOFP.Interfaces.userInterface.displays.eicas import EICASDisplay
     disp = EICASDisplay()
-    # Force alert-generating conditions
-    disp._engine["egt_c"]     = 850.0  # above WARNING threshold
-    disp._engine["oil_psi"]   = 35.0   # below LOW threshold
-    disp._fuel["total_kg"]    = 300.0  # below WARN threshold
-    disp._hydraulic["sys_a_psi"] = 1800.0  # below WARN threshold
+    # Force alert-generating conditions. These must go through the setters,
+    # which mark the fields valid: writing straight into the private dicts
+    # leaves them UNKNOWN, and an UNKNOWN reading is reported as unknown
+    # (CAUTION) rather than run against its threshold, so no WARNING would be
+    # produced at all.
+    disp.set_engine_readings(egt_c=850.0,      # above WARNING threshold
+                             oil_psi=35.0,     # below LOW threshold
+                             total_kg=300.0)   # below WARN threshold
+    disp.set_system_readings(sys_a_psi=1800.0)  # below WARN threshold
     disp._alerts = disp._compute_alerts(disp._engine["thrust_pct"])
     ok = _paint_widget(disp)
     r.check("paint_display() succeeds with active warnings", ok)
@@ -260,13 +264,55 @@ def test_eicas_compute_alerts(r: _Results) -> None:
     r.check("a fresh display reports UNKNOWN, not nominal",
             any("UNKNOWN" in a["text"] for a in disp._compute_alerts(70.0)))
 
-    # All in-limits, supplied properly → no alerts
+    # All in-limits, supplied properly. Supplying only the engine and fuel
+    # fields is no longer "all parameters": the hydraulic, electrical and fuel
+    # balance fields report UNKNOWN until something publishes them, which is the
+    # point -- nothing in this project ever has, and the panel used to show a
+    # nominal bus voltage, two healthy generators and 3000 psi regardless.
     disp.set_engine_readings(egt_c=600.0, oil_psi=65.0, oil_temp_c=95.0,
                              vib=0.3, total_kg=5000.0)
+    engine_ok = disp._compute_alerts(70.0)
+    r.check("no engine or fuel-quantity alert when those are in limits",
+            not any(t.startswith(("ENG", "FUEL  QUANTITY", "FUEL QTY"))
+                    for t in [a["text"] for a in engine_ok]),
+            f"got {[a['text'] for a in engine_ok]}")
+    r.check("the unpublished systems are reported as unknown, not as nominal",
+            {"HYD A  PRESSURE UNKNOWN", "ELEC  BUS VOLTS UNKNOWN"}
+            <= {a["text"] for a in engine_ok},
+            f"got {[a['text'] for a in engine_ok]}")
+
+    # With every field supplied, the list really does go quiet -- so the
+    # UNKNOWN cautions above are about absent data, not a permanent nag.
+    disp.set_system_readings(sys_a_psi=3000, sys_b_psi=3000, sys_c_psi=2950,
+                             main_bus_v=115.0, ess_bus_v=115.0,
+                             gen1_ok=True, gen2_ok=True,
+                             cabin_alt_ft=8000, cabin_temp_c=22.0,
+                             oxy_psi=1800)
+    disp.set_engine_readings(thrust_pct=70.0, n1_pct=78.5, n2_pct=84.2,
+                             ff_kgh=2400.0, balance_kg=0.0, flow_kgh=2400.0)
     alerts_ok = disp._compute_alerts(70.0)
-    r.check("no alerts when all parameters in limits",
+    r.check("no alerts when every parameter is supplied and in limits",
             len(alerts_ok) == 0, f"got {len(alerts_ok)}: "
             f"{[a['text'] for a in alerts_ok]}")
+
+    # NON-TAUTOLOGICAL: these alarms were unreachable, because nothing ever
+    # wrote the values they test.
+    r.check("NON-TAUTOLOGICAL: a bus undervolt alarm is now reachable",
+            any("MAIN BUS LO" in a["text"] for a in
+                (disp.set_system_readings(main_bus_v=94.0)
+                 or disp._compute_alerts(70.0))))
+    r.check("NON-TAUTOLOGICAL: a hydraulic low-pressure alarm is now reachable",
+            any("HYD C  PRESSURE LOW" in a["text"] for a in
+                (disp.set_system_readings(sys_c_psi=1800)
+                 or disp._compute_alerts(70.0))))
+    r.check("NON-TAUTOLOGICAL: a fuel-imbalance alarm is now reachable",
+            any("FUEL  IMBALANCE" in a["text"] for a in
+                (disp.set_engine_readings(balance_kg=350.0)
+                 or disp._compute_alerts(70.0))))
+
+    # Put them back in limits so the checks below see a quiet baseline.
+    disp.set_system_readings(main_bus_v=115.0, sys_c_psi=2950)
+    disp.set_engine_readings(balance_kg=0.0)
 
     # EGT above warning threshold
     disp.set_engine_readings(egt_c=820.0)

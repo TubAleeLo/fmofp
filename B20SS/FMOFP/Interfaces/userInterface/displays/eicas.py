@@ -96,10 +96,21 @@ class EICASDisplay(BaseDisplay):
             # a layout placeholder; validity decides whether it is shown.
             "total_kg":   0.0,
             "flow_kgh":   2400.0,
+            # Never written by anything: a constant 0.0, which also made the
+            # "FUEL IMBALANCE" alarm below (abs(balance) > 200) unreachable.
+            # Supply it through set_engine_readings() when a source exists.
             "balance_kg": 0.0,        # L-R imbalance
         }
 
         # ── systems health ──────────────────────────────────────────────────
+        # Layout placeholders, not readings. Nothing in this project publishes
+        # hydraulic system C, any electrical value, or the generator states:
+        # _electrical was written once here and thereafter only read, so
+        # MAIN BUS 115.0 V and GEN 1/2 NORM were constants on the panel and the
+        # "ELEC MAIN BUS LO" alarm below could never fire -- the same dead-alarm
+        # shape as the oil-pressure sine waves. Systems A and B are modelled
+        # from g-load in _poll_data and are valid only while a real g_force is
+        # published. Supply anything real through set_system_readings().
         self._hydraulic = {
             "sys_a_psi": 3000,
             "sys_b_psi": 3000,
@@ -174,6 +185,27 @@ class EICASDisplay(BaseDisplay):
                     self._engine[key] = value
                 elif key in self._fuel:
                     self._fuel[key] = value
+                else:
+                    continue
+                self._validity.mark(key)
+
+    def set_system_readings(self, **readings):
+        """Supply real hydraulic, electrical or ECS values.
+
+        Mirrors set_engine_readings for the system panels. Anything supplied
+        here is marked valid and IS alarm-checked; anything never supplied
+        reads as unknown rather than as its placeholder.
+        """
+        with self._lock:
+            for key, value in readings.items():
+                if value is None:
+                    continue
+                if key in self._hydraulic:
+                    self._hydraulic[key] = value
+                elif key in self._electrical:
+                    self._electrical[key] = value
+                elif key in self._ecs_state:
+                    self._ecs_state[key] = value
                 else:
                     continue
                 self._validity.mark(key)
@@ -259,10 +291,16 @@ class EICASDisplay(BaseDisplay):
                 if thrust is not None:
                     self._fuel["flow_kgh"] = self._engine["ff_kgh"]
                     self._validity.mark('flow_kgh')
-                # Hydraulic: degrade slightly with G-load
-                g = tactical.get("g_force", 1.0)
-                self._hydraulic["sys_a_psi"] = 3000 - max(0, (g - 5) * 20)
-                self._hydraulic["sys_b_psi"] = 3000 - max(0, (g - 6) * 15)
+                # Hydraulic: a MODEL of pressure droop under G-load, not a
+                # measurement, and only meaningful while a real g_force is being
+                # published. The default of 1.0 used to stand in for a missing
+                # reading, which pinned both systems at exactly 3000 psi -- a
+                # healthy-looking number derived from nothing.
+                g = tactical.get("g_force")
+                if g is not None:
+                    self._hydraulic["sys_a_psi"] = 3000 - max(0, (g - 5) * 20)
+                    self._hydraulic["sys_b_psi"] = 3000 - max(0, (g - 6) * 15)
+                    self._validity.mark('sys_a_psi', 'sys_b_psi')
 
                 # Build alert list
                 self._alerts = self._compute_alerts(thrust)
@@ -420,24 +458,43 @@ class EICASDisplay(BaseDisplay):
         elif self._fuel["total_kg"] < 1000:
             add("FUEL  QUANTITY CAUTION", _CAUT)
 
-        if abs(self._fuel["balance_kg"]) > 200:
+        if not v.is_valid('balance_kg'):
+            add("FUEL  BALANCE UNKNOWN", _CAUT)
+        elif abs(self._fuel["balance_kg"]) > 200:
             add("FUEL  IMBALANCE", _CAUT)
 
-        # Hydraulic warnings
-        for name, psi in [("HYD A", self._hydraulic["sys_a_psi"]),
-                           ("HYD B", self._hydraulic["sys_b_psi"]),
-                           ("HYD C", self._hydraulic["sys_c_psi"])]:
+        # Hydraulic warnings. An unmonitored system is reported as unmonitored;
+        # running the threshold against a placeholder reads as "in limits" and
+        # is indistinguishable from a healthy measured system.
+        for name, field in [("HYD A", "sys_a_psi"),
+                            ("HYD B", "sys_b_psi"),
+                            ("HYD C", "sys_c_psi")]:
+            if not v.is_valid(field):
+                add(f"{name}  PRESSURE UNKNOWN", _CAUT)
+                continue
+            psi = self._hydraulic[field]
             if psi < 2000:
                 add(f"{name}  PRESSURE LOW", _WARN)
             elif psi < 2500:
                 add(f"{name}  PRESS REDUCED", _CAUT)
 
-        # Electrical
-        if not self._electrical["gen1_ok"]:
+        # Electrical. Nothing publishes these, so in the current system every
+        # one of them reports UNKNOWN -- which is the point: the panel used to
+        # show a nominal bus voltage and two healthy generators that no part of
+        # the aircraft had ever asserted.
+        if not v.is_valid('gen1_ok'):
+            add("ELEC  GEN 1 UNKNOWN", _CAUT)
+        elif not self._electrical["gen1_ok"]:
             add("ELEC  GEN 1 FAULT", _WARN)
-        if not self._electrical["gen2_ok"]:
+
+        if not v.is_valid('gen2_ok'):
+            add("ELEC  GEN 2 UNKNOWN", _CAUT)
+        elif not self._electrical["gen2_ok"]:
             add("ELEC  GEN 2 FAULT", _WARN)
-        if self._electrical["main_bus_v"] < 100:
+
+        if not v.is_valid('main_bus_v'):
+            add("ELEC  BUS VOLTS UNKNOWN", _CAUT)
+        elif self._electrical["main_bus_v"] < 100:
             add("ELEC  MAIN BUS LO", _CAUT)
 
         # Advisory: high thrust without afterburner selected
@@ -700,16 +757,22 @@ class EICASDisplay(BaseDisplay):
         else:
             row("FLOW", _UNKNOWN_TEXT, _AMBER)
 
-        bal = self._fuel["balance_kg"]
-        bal_col = _AMBER if abs(bal) > 200 else _GREEN
-        row("BALANCE", f"{bal:+6.0f} kg", bal_col)
+        if self._validity.is_valid('balance_kg'):
+            bal = self._fuel["balance_kg"]
+            row("BALANCE", f"{bal:+6.0f} kg", _AMBER if abs(bal) > 200 else _GREEN)
+        else:
+            row("BALANCE", _UNKNOWN_TEXT, _AMBER)
 
         y += 4
         # ── Hydraulics ──────────────────────────────────────────────────────
         section("─── HYDRAULIC ───────")
-        for sys_name, psi in [("SYS A", self._hydraulic["sys_a_psi"]),
-                               ("SYS B", self._hydraulic["sys_b_psi"]),
-                               ("SYS C", self._hydraulic["sys_c_psi"])]:
+        for sys_name, field in [("SYS A", "sys_a_psi"),
+                                ("SYS B", "sys_b_psi"),
+                                ("SYS C", "sys_c_psi")]:
+            if not self._validity.is_valid(field):
+                row(sys_name, _UNKNOWN_TEXT, _AMBER)
+                continue
+            psi = self._hydraulic[field]
             col = (_RED   if psi < 2000 else
                    _AMBER if psi < 2500 else _GREEN)
             row(sys_name, f"{psi:5.0f} psi", col)
@@ -717,13 +780,23 @@ class EICASDisplay(BaseDisplay):
         y += 4
         # ── Electrical ──────────────────────────────────────────────────────
         section("─── ELECTRICAL ──────")
-        mb_col = _AMBER if self._electrical["main_bus_v"] < 100 else _GREEN
-        row("MAIN BUS", f"{self._electrical['main_bus_v']:5.1f} V",   mb_col)
-        row("ESS BUS",  f"{self._electrical['ess_bus_v']:5.1f} V",    _GREEN)
-        row("GEN 1",   "NORM" if self._electrical["gen1_ok"] else "FAIL",
-            _GREEN if self._electrical["gen1_ok"] else _RED)
-        row("GEN 2",   "NORM" if self._electrical["gen2_ok"] else "FAIL",
-            _GREEN if self._electrical["gen2_ok"] else _RED)
+        if self._validity.is_valid('main_bus_v'):
+            mb = self._electrical["main_bus_v"]
+            row("MAIN BUS", f"{mb:5.1f} V", _AMBER if mb < 100 else _GREEN)
+        else:
+            row("MAIN BUS", _UNKNOWN_TEXT, _AMBER)
+
+        if self._validity.is_valid('ess_bus_v'):
+            row("ESS BUS", f"{self._electrical['ess_bus_v']:5.1f} V", _GREEN)
+        else:
+            row("ESS BUS", _UNKNOWN_TEXT, _AMBER)
+
+        for label, field in (("GEN 1", "gen1_ok"), ("GEN 2", "gen2_ok")):
+            if not self._validity.is_valid(field):
+                row(label, _UNKNOWN_TEXT, _AMBER)
+            else:
+                ok = self._electrical[field]
+                row(label, "NORM" if ok else "FAIL", _GREEN if ok else _RED)
 
         y += 4
         # ── FCS / GCAS ──────────────────────────────────────────────────────
@@ -738,11 +811,22 @@ class EICASDisplay(BaseDisplay):
         y += 4
         # ── Environmental (ECS) ─────────────────────────────────────────────
         section("─── ECS ─────────────")
-        row("CAB ALT", f"{self._ecs_state['cabin_alt_ft']:5.0f} ft",
-            _AMBER if self._ecs_state['cabin_alt_ft'] > 10000 else _GREEN)
-        row("CAB TEMP", f"{self._ecs_state['cabin_temp_c']:5.1f} °C",  _GREEN)
-        row("OXY PSI",  f"{self._ecs_state['oxy_psi']:5.0f} psi",
-            _RED if self._ecs_state['oxy_psi'] < 500 else _GREEN)
+        if self._validity.is_valid('cabin_alt_ft'):
+            alt = self._ecs_state['cabin_alt_ft']
+            row("CAB ALT", f"{alt:5.0f} ft", _AMBER if alt > 10000 else _GREEN)
+        else:
+            row("CAB ALT", _UNKNOWN_TEXT, _AMBER)
+
+        if self._validity.is_valid('cabin_temp_c'):
+            row("CAB TEMP", f"{self._ecs_state['cabin_temp_c']:5.1f} °C", _GREEN)
+        else:
+            row("CAB TEMP", _UNKNOWN_TEXT, _AMBER)
+
+        if self._validity.is_valid('oxy_psi'):
+            oxy = self._ecs_state['oxy_psi']
+            row("OXY PSI", f"{oxy:5.0f} psi", _RED if oxy < 500 else _GREEN)
+        else:
+            row("OXY PSI", _UNKNOWN_TEXT, _AMBER)
 
         y += 4
         # ── BITS ────────────────────────────────────────────────────────────
