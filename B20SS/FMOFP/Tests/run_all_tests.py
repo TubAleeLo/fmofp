@@ -90,6 +90,12 @@ SUITES = [
     # 'collection' link row shadowed every real point on an exact request_id
     # lookup.
     (True,  "FMOFP.Tests.test_weather_radar_truthfulness", 300),
+    # H4: send_request guarded itself with `if not self._can_send_request():` on
+    # an async method. The un-awaited coroutine is always truthy, so the gate
+    # never ran -- losing both the rate limit and, more seriously, the readiness
+    # check that decides whether anything is listening. Adding `await` while
+    # keeping the surrounding `while` would have turned it into an infinite spin.
+    (True,  "FMOFP.Tests.test_radar_send_rate_limit", 300),
     # Production blockers B1/B2/B3/B4: a boot failure that hung the process
     # forever and an error shutdown that exited 0; initialization failures
     # swallowed so boot continued on a half-built system; coroutine stops

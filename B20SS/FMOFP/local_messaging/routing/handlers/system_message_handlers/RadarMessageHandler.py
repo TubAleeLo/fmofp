@@ -106,6 +106,16 @@ class RadarMessageHandler:
         self.request_rate_limit = 10  # requests per second
         self.last_request_time = 0
         self._lock = None  # Initialize lock as None
+        # Serialises _acquire_send_slot so the rate limit holds when several
+        # coroutines send at once. Separate from self._lock, which guards the
+        # pending-request cleanup -- a send must not queue behind a cleanup pass.
+        # Created lazily, like self._lock, so it binds to whichever loop is
+        # running and survives a stop/start onto a different one.
+        self._send_slot_lock = None
+        # Tracks whether the "responses will not be handled" warning has already
+        # been emitted for the current async-handler state, so a degraded run
+        # says so once rather than on every send.
+        self._warned_response_path_down = False
         self.rt_received_frames: List[List[str]] = []
         self.sendMsg = send1553Msg()
         self.bc_construct = BC_construct()
@@ -194,11 +204,17 @@ class RadarMessageHandler:
         logger.info(f"[SEND] Attempting to send request: radar={radar_name}, type={request_type}")
         logger.info(f"[SEND] Data: {data}")
 
-        # Check rate limit
-        if not self._can_send_request():  
-            logger.warning("[SEND] Request rate limit exceeded")
-            while not self._can_send_request():
-                await asyncio.sleep(0.01)
+        # Claim a send slot. This awaits the rate-limit gap internally, so there
+        # is nothing to spin on here -- the `while not self._can_send_request()`
+        # loop that used to sit in this spot could only ever have become an
+        # infinite one, because the single reason the call returns False is a
+        # handler that has not started, and sleeping does not start it.
+        if not await self._acquire_send_slot():
+            logger.error(
+                f"[SEND] Refusing to send {request_type} to {radar_name}: "
+                f"the handler is not in a state to send"
+            )
+            return None
 
         try:
             with self._message_lock:
@@ -1359,8 +1375,9 @@ class RadarMessageHandler:
             self.pending_requests.clear()
             self.rt_received_frames.clear()
             
-            # Clear the lock when stopping
+            # Clear the locks when stopping
             self._lock = None
+            self._send_slot_lock = None
             
             logger.info("[RDR_MSG_HNDLR] RadarMessageHandler stopped")
         except Exception as e:
@@ -1690,23 +1707,80 @@ class RadarMessageHandler:
         return radar_name
 
 
-    async def _can_send_request(self) -> bool:
-        """Check if we can send a request based on rate limiting"""
-        
-        current_time = time.time()
-        # Check for system and async handlers
-        if not self.async_handler or not self.async_handler.started:
-            logger.error("[SEND] AsyncMessageHandler not properly initialized")
+    async def _acquire_send_slot(self) -> bool:
+        """Wait out the inter-request gap, then claim the next send slot.
+
+        Renamed from `_can_send_request`. The old name read like a predicate, and
+        it was used like one -- `if not self._can_send_request():` -- without
+        `await`. That call returns a coroutine object, which is always truthy, so
+        `not` was always False: the body never ran, the coroutine was discarded
+        unawaited, and **the method never executed at all**. Two things were lost:
+
+          * the rate limit. self.last_request_time was never updated and
+            self.request_rate_limit was dead configuration.
+          * the readiness guard below. send_request proceeded whether or not the
+            async and system handlers had started, which is the more serious half
+            -- the throttle only paced traffic, this gate decides whether there is
+            anything on the other end.
+
+        The name is now a verb, because that is what it does: it *waits*, it does
+        not merely report. It returns False only when the handler cannot send at
+        all, which no amount of retrying will change -- so the caller must give
+        up rather than spin.
+
+        Returns:
+            True once the caller may send. False when the handler is not in a
+            state to send at all.
+        """
+        # Readiness, for what sending actually needs. A failure here is
+        # permanent until something re-initialises the handler, so it is
+        # reported rather than waited on.
+        #
+        # The original check refused the send unless `async_handler.started` and
+        # `system_handler` were both set. Neither is on the send path --
+        # send_request transmits through self.sendMsg.send_message(), and those
+        # two belong to *response* handling and system registration. Because the
+        # gate never actually ran (see the note above), nobody found out the
+        # condition was wrong. Turning it on unchanged refused 23 sends in
+        # test_predefined_messages_live that had been working: four radars
+        # stayed in STANDBY and every mode command returned None.
+        if not getattr(self, "sendMsg", None):
+            logger.error("[SEND] No message sender available; cannot transmit")
             return False
-        if not self.system_handler:
-            logger.error("[SEND] SystemHandler not properly initialized")
-            return False
-        if current_time - self.last_request_time < 1.0 / self.request_rate_limit:
-            # Check if we should wait
-            wait_time = (1.0 / self.request_rate_limit) - (current_time - self.last_request_time)
+
+        # A response path that is down does not stop the message going out, but
+        # it does mean nothing will process what comes back -- sync_response
+        # waits and status updates are both lost. Worth saying once per state
+        # change rather than once per send.
+        if not (self.async_handler and self.async_handler.started):
+            if not self._warned_response_path_down:
+                logger.warning(
+                    "[SEND] AsyncMessageHandler is not started: messages will "
+                    "still be transmitted, but responses will not be processed"
+                )
+                self._warned_response_path_down = True
+        else:
+            self._warned_response_path_down = False
+
+        if self._send_slot_lock is None:
+            self._send_slot_lock = asyncio.Lock()
+
+        # Held across the sleep so concurrent senders queue instead of all
+        # reading the same last_request_time and leaving together.
+        async with self._send_slot_lock:
+            # monotonic(), not time(): a wall-clock step backwards would make
+            # the elapsed time negative and stall every send until real time
+            # caught up to the old stamp.
+            gap = 1.0 / self.request_rate_limit
+            elapsed = time.monotonic() - self.last_request_time
+            wait_time = gap - elapsed
             if wait_time > 0:
-                await asyncio.sleep(wait_time)
-        self.last_request_time = current_time
+                # Clamped to one gap. Unbounded only if last_request_time were
+                # somehow in the future; this keeps a single send from parking
+                # the caller indefinitely.
+                await asyncio.sleep(min(wait_time, gap))
+            self.last_request_time = time.monotonic()
+
         return True
 
     def _handle_status_response(self, data: str, radar_type: str):
