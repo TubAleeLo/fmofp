@@ -718,32 +718,116 @@ class SystemDatabase:
         query = f'UPDATE "{table_name}" SET {set_clause}'
         self.execute_query(query, tuple(params), query_type='update')
 
-    def ensure_column_exists(self, table_name: str, column_name: str, data_type: str):
+    # Identifiers are interpolated into these statements rather than bound,
+    # because SQLite does not accept parameters in place of a table or column
+    # name. They are quoted, so the only way out of the quoting is an embedded
+    # double quote; a type is not quotable at all, so it is matched against a
+    # conservative shape instead.
+    _IDENTIFIER_RE = re.compile(r'^[A-Za-z_][A-Za-z0-9_]*$')
+    _COLUMN_TYPE_RE = re.compile(r"^[A-Za-z0-9_ ()',.+-]+$")
+
+    def ensure_column_exists(self, table_name: str, column_name: str,
+                             data_type: str) -> bool:
+        """Add `column_name` to `table_name` unless it is already there.
+
+        Returns:
+            True when the column is present on return -- whether it was added
+            now or already existed. False when it could not be ensured, which
+            the caller must treat as the column being absent.
+
+        Three defects made the previous version a silent no-op in every case:
+
+        * The ALTER statement was built as
+          ``f"[DBM] ALTER TABLE ..."`` -- the log prefix had been pasted inside
+          the SQL string, so SQLite answered `near "[DBM]": syntax error` for
+          every column it was ever asked to add.
+        * The existence check was ``column_name.lower() in table_schema.lower()``,
+          a substring match against the whole CREATE TABLE text. Asking for a
+          column named `id` against a table with `request_id` reported it as
+          already present; so did `at` against `rate`. Those calls returned
+          early and never reached the broken SQL at all.
+        * `sqlite3.OperationalError` was caught, logged, and the method returned
+          normally, so a caller could not tell a failure from a success.
+
+        Between them the column was never added and the caller was never told.
+        The correct form of this was already in the codebase -- see
+        Utils/common/paths.py, which uses PRAGMA table_info, emits valid SQL and
+        re-raises -- written inline by someone who did not use this helper.
+        """
+        for label, value in (("table", table_name), ("column", column_name)):
+            if not isinstance(value, str) or not self._IDENTIFIER_RE.match(value):
+                logger.error(
+                    f"[DBM] Refusing to alter {self.system_name}: "
+                    f"{label} name {value!r} is not a plain identifier"
+                )
+                return False
+        if not isinstance(data_type, str) or not self._COLUMN_TYPE_RE.match(data_type):
+            logger.error(
+                f"[DBM] Refusing to add column '{column_name}': "
+                f"type {data_type!r} is not an accepted column type"
+            )
+            return False
+
         try:
-            # Check if the column already exists
-            query = f"SELECT sql FROM sqlite_master WHERE type='table' AND name=?"
-            result = self.execute_query(query, (table_name,), query_type='select')
-            if not result:
-                logger.error(f"[DBM] Table '{table_name}' does not exist in {self.system_name}")
-                return
+            if not self.table_exists(table_name):
+                logger.error(
+                    f"[DBM] Table '{table_name}' does not exist in "
+                    f"{self.system_name}"
+                )
+                return False
 
-            table_schema = result[0][0]
-            if column_name.lower() in table_schema.lower():
-                logger.debug(f"[DBM] Column '{column_name}' already exists in table '{table_name}' for {self.system_name}")
-                return
+            # The authoritative column list, rather than a substring of the
+            # schema text. PRAGMA takes no parameters, hence the quoted name.
+            rows = self.execute_query(
+                f'PRAGMA table_info("{table_name}")', query_type='select')
+            existing = {row[1] for row in (rows or ())}
+            if column_name in existing:
+                logger.debug(
+                    f"[DBM] Column '{column_name}' already exists in table "
+                    f"'{table_name}' for {self.system_name}"
+                )
+                return True
 
-            # Column doesn't exist, so add it
-            logger.info(f"[DBM] Adding column '{column_name}' to table '{table_name}' for {self.system_name} with data type '{data_type}'")
-            alter_query = f"[DBM] ALTER TABLE {table_name} ADD COLUMN {column_name} {data_type}"
-            self.execute_query(alter_query, query_type='create')
-            logger.info(f"[DBM] Successfully added column '{column_name}' to table '{table_name}' for {self.system_name}")
+            logger.info(
+                f"[DBM] Adding column '{column_name}' to table '{table_name}' "
+                f"for {self.system_name} with data type '{data_type}'"
+            )
+            self.execute_query(
+                f'ALTER TABLE "{table_name}" ADD COLUMN "{column_name}" {data_type}',
+                query_type='create')
+
+            # Confirm rather than assume: ALTER is the whole point of the call,
+            # and the previous version's defining failure was reporting work it
+            # had not done.
+            rows = self.execute_query(
+                f'PRAGMA table_info("{table_name}")', query_type='select')
+            if column_name not in {row[1] for row in (rows or ())}:
+                logger.error(
+                    f"[DBM] ALTER TABLE reported no error but column "
+                    f"'{column_name}' is still absent from '{table_name}'"
+                )
+                return False
+
+            logger.info(
+                f"[DBM] Successfully added column '{column_name}' to table "
+                f"'{table_name}' for {self.system_name}"
+            )
+            return True
 
         except sqlite3.OperationalError as e:
-            logger.error(f"[DBM] SQLite operational error while ensuring column '{column_name}' in table '{table_name}' for {self.system_name}: {e}", exc_info=True)
-            # Get the current table schema
-            schema_query = f"PRAGMA table_info('{table_name}')"
-            schema = self.execute_query(schema_query)
-            logger.info(f"[DBM] Current schema for table '{table_name}': {schema}")
+            logger.error(
+                f"[DBM] SQLite operational error while ensuring column "
+                f"'{column_name}' in table '{table_name}' for "
+                f"{self.system_name}: {e}", exc_info=True)
+            try:
+                schema = self.execute_query(
+                    f'PRAGMA table_info("{table_name}")', query_type='select')
+                logger.info(
+                    f"[DBM] Current schema for table '{table_name}': {schema}")
+            except Exception:
+                logger.debug("[DBM] Could not read the schema for diagnostics",
+                             exc_info=True)
+            return False
 
     def delete_from_table(self, table_name: str, condition: Dict[str, Any]) -> int:
         """Delete records from a table based on condition"""

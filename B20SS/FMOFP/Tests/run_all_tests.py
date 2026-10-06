@@ -96,6 +96,11 @@ SUITES = [
     # check that decides whether anything is listening. Adding `await` while
     # keeping the surrounding `while` would have turned it into an infinite spin.
     (True,  "FMOFP.Tests.test_radar_send_rate_limit", 300),
+    # H17: SystemDatabase.ensure_column_exists had the log prefix "[DBM] "
+    # pasted inside its ALTER statement, checked for an existing column with a
+    # substring match against the CREATE TABLE text, and swallowed the resulting
+    # OperationalError. It added nothing, ever, and said it had.
+    (True,  "FMOFP.Tests.test_db_ensure_column", 300),
     # Production blockers B1/B2/B3/B4: a boot failure that hung the process
     # forever and an error shutdown that exited 0; initialization failures
     # swallowed so boot continued on a half-built system; coroutine stops
