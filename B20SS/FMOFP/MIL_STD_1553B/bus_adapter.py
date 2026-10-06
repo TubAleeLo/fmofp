@@ -48,6 +48,7 @@ Public API
   reset_bus_adapters()              -> drop cached adapters (tests only)
 """
 
+import ipaddress
 import os
 import socket
 import threading
@@ -73,6 +74,62 @@ _ROLE_DEFAULTS = {
 }
 
 _VALID_ROLES = tuple(_ROLE_DEFAULTS)
+
+# Addresses a listener may bind to without comment. BC and RT always reach each
+# other via "localhost", so there is no legitimate cross-host use: the sockets
+# carry no authentication and no encryption, and parse received frames, so an
+# address reachable from the network is a materially different exposure.
+#
+# The defaults are already loopback and RT_socket/BC_socket carry a comment
+# explaining why -- but nothing checked the value that actually arrived. The
+# port was validated (int(), with an error when it is not) while the host was
+# passed straight to bind(), so FMOFP_RT_LISTEN_HOST=0.0.0.0, or a typo in
+# busAdapterConfig.xml, silently undid that decision.
+_LOOPBACK_HOSTS = frozenset({"127.0.0.1", "localhost", "::1", ""})
+
+# Binding here is permitted but never silent, because the operator may have
+# meant it. Anything outside both sets is refused and the default used instead.
+_ALL_INTERFACES_HOSTS = frozenset({"0.0.0.0", "::", "*"})
+
+
+def _resolve_listen_host(role: str, host: str, default_host: str) -> str:
+    """Return the host to bind, refusing values that are not addresses at all.
+
+    A loopback address is returned as given. An all-interfaces address is
+    returned with a warning, since exposing an unauthenticated bus socket to
+    the network is a decision worth seeing in the log. Anything else is
+    rejected in favour of the default: a listener that silently binds somewhere
+    unintended is worse than one that starts where it was always going to.
+    """
+    candidate = (host or "").strip()
+
+    if candidate.lower() in _LOOPBACK_HOSTS:
+        return candidate
+
+    if candidate in _ALL_INTERFACES_HOSTS:
+        logger.warning(
+            f"[BUS_ADAPTER] {role.upper()} listener is configured to bind "
+            f"{candidate!r} -- all interfaces. This socket is unauthenticated "
+            f"and unencrypted and parses the frames it receives, so it will be "
+            f"reachable by any host that can route to this machine."
+        )
+        return candidate
+
+    try:
+        ipaddress.ip_address(candidate)
+    except ValueError:
+        logger.error(
+            f"[BUS_ADAPTER] Ignoring listen_host {candidate!r} for {role.upper()}: "
+            f"not an IP address; using {default_host!r}"
+        )
+        return default_host
+
+    logger.warning(
+        f"[BUS_ADAPTER] {role.upper()} listener is configured to bind "
+        f"{candidate!r}, which is not loopback. This socket is unauthenticated "
+        f"and unencrypted and parses the frames it receives."
+    )
+    return candidate
 
 _CONFIG_BASENAME = "busAdapterConfig.xml"
 
@@ -385,6 +442,7 @@ def get_listen_endpoint(role: str):
     env_host = os.environ.get(f"FMOFP_{role.upper()}_LISTEN_HOST")
     if env_host:
         host = env_host.strip()
+    host = _resolve_listen_host(role, host, defaults["listen_host"])
     env_port = os.environ.get(f"FMOFP_{role.upper()}_LISTEN_PORT")
     if env_port:
         try:

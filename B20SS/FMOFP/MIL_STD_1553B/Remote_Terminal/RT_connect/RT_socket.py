@@ -28,6 +28,10 @@ from FMOFP.Utils.logger.sys_logger import get_logger
 
 logger = get_logger()
 
+# How long an accepted connection may sit without sending anything before
+# the listener reclaims it. See handle_connection() for why this exists.
+CONNECTION_IDLE_TIMEOUT_S = 30.0
+
 class RT_sender:
     """
     Remote Terminal sender class that mirrors BC_sender behavior.
@@ -1001,10 +1005,39 @@ class RT_Listener:
         # dropped. Same fix mirrored here for RT_Listener.
         recv_buffer = b""
         _MAX_RECV_BUFFER_BYTES = 10 * 1024 * 1024  # 10 MB
+        # H2: a connection with no idle timeout. recv() here is guarded by a
+        # 1 s select, so no single syscall blocks forever -- but the loop runs
+        # on self.running, the LISTENER's flag, and only leaves when the peer
+        # closes or errors. A peer that connects and then says nothing holds
+        # this slot for as long as it stays connected.
+        #
+        # That matters because the accept loop is single-threaded (H3): while
+        # this runs, no other peer is accepted. Measured on the real listener:
+        # a silent peer A was accepted, peer B connected and sent a valid
+        # message, and B was not accepted until the moment A disconnected 3 s
+        # later. A sender that crashes mid-send, or a stalled link, leaves the
+        # bus unreachable indefinitely.
+        #
+        # The deadline is generous because senders here connect, send and close
+        # per message (see RT_sender/BC_sender), so a healthy peer is never
+        # idle for anything like this long; it exists to bound the pathological
+        # case rather than to police normal traffic.
+        last_data_time = time.time()
         while self.running:
             try:
                 readable, _, _ = select.select([connection], [], [], 1.0)
+                if not readable:
+                    idle = time.time() - last_data_time
+                    if idle >= CONNECTION_IDLE_TIMEOUT_S:
+                        logger.warning(
+                            f"[RT_LISTENER] Closing idle connection from {client_address} "
+                            f"after {idle:.0f}s without data; it was holding the "
+                            f"listener against other peers"
+                        )
+                        break
+                    continue
                 if readable:
+                    last_data_time = time.time()
                     data = connection.recv(1024)
                     if data:
                         recv_buffer += data
