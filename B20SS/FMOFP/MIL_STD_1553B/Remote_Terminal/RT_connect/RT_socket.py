@@ -32,6 +32,13 @@ logger = get_logger()
 # the listener reclaims it. See handle_connection() for why this exists.
 CONNECTION_IDLE_TIMEOUT_S = 30.0
 
+# H3: the accept loop used to call handle_connection() inline, so the listener
+# served exactly one connection at a time and nothing else was accepted until
+# that peer went away. Connections are now served on worker threads, bounded so
+# a flood cannot spawn threads without limit. Eight is far above the two peers
+# this bus actually has (one BC, one RT); it is a ceiling, not a target.
+MAX_CONCURRENT_CONNECTIONS = 8
+
 class RT_sender:
     """
     Remote Terminal sender class that mirrors BC_sender behavior.
@@ -828,7 +835,14 @@ class RT_Listener:
         self.last_activity_time = time.time()
         self.socket_variable = None
         self._lock = threading.Lock()
-        self.message_lock = threading.Lock()  # Lock for thread-safe operations on processed_messages
+        # Lock for thread-safe operations on processed_messages
+        self.message_lock = threading.Lock()
+        # Live connection-handler workers (H3). Guarded by _handler_lock, which
+        # is deliberately NOT self._lock: that one is held while appending to
+        # self.data_received inside a handler, so reusing it here would have a
+        # handler and the accept loop contend on every message.
+        self._handler_threads = set()
+        self._handler_lock = threading.Lock()
         logger.info(f"RT_Listener initialized on port {self.port}")
 
     def setup_socket(self):
@@ -928,21 +942,14 @@ class RT_Listener:
                     connection, client_address = self.socket_variable.accept()
                     logger.info(f"RT_Listener accepted connection from {client_address}")
                     connection.setblocking(False)
-                    try:
-                        self.handle_connection(connection, client_address)
-                    finally:
-                        # Defense in depth: handle_connection() already
-                        # closes `connection` itself on every normal and
-                        # caught-exception exit path, but if something
-                        # inside it ever raised a BaseException its own
-                        # broad `except Exception` doesn't catch (e.g. a
-                        # SystemExit/KeyboardInterrupt landing in this
-                        # background thread -- exceedingly unlikely, but
-                        # not impossible), this connection would otherwise
-                        # never be explicitly closed, leaking the socket
-                        # until Python's GC eventually reclaims it.
-                        # close() on an already-closed socket is a
-                        # documented no-op, so this is always safe.
+                    # Hand off and go straight back to accept(). Serving inline
+                    # here was H3: one peer held the listener for the whole life
+                    # of its connection, and every other peer waited. Measured
+                    # before the change on the real listener -- a silent peer was
+                    # accepted, a second peer connected and sent a valid message,
+                    # and the second was not accepted until the first
+                    # disconnected.
+                    if not self._spawn_connection_handler(connection, client_address):
                         try:
                             connection.close()
                         except Exception:
@@ -1031,8 +1038,9 @@ class RT_Listener:
                     if idle >= CONNECTION_IDLE_TIMEOUT_S:
                         logger.warning(
                             f"[RT_LISTENER] Closing idle connection from {client_address} "
-                            f"after {idle:.0f}s without data; it was holding the "
-                            f"listener against other peers"
+                            f"after {idle:.0f}s without data; it was holding "
+                            f"one of the {MAX_CONCURRENT_CONNECTIONS} handler "
+                            f"slots and will not be sending"
                         )
                         break
                     continue
@@ -1200,12 +1208,78 @@ class RT_Listener:
         connection.close()
         logger.info(f"Connection closed with {client_address}")
 
+
+    def _serve_connection(self, connection, client_address):
+        """Run one connection's handler, then close it. Runs on a worker thread."""
+        try:
+            self.handle_connection(connection, client_address)
+        except Exception:
+            logger.error(
+                f"[RT_LISTENER] Unhandled error serving {client_address}",
+                exc_info=True)
+        finally:
+            # handle_connection() closes on its normal paths; close() on an
+            # already-closed socket is a documented no-op, so this only matters
+            # when something escaped it.
+            try:
+                connection.close()
+            except Exception:
+                pass
+
+    def _spawn_connection_handler(self, connection, client_address) -> bool:
+        """Start a worker for this connection, unless we are at capacity.
+
+        Returns False when the connection was not taken, so the caller can
+        close it rather than leaving a peer believing it is being served.
+        """
+        with self._handler_lock:
+            self._handler_threads = {
+                t for t in self._handler_threads if t.is_alive()}
+            if len(self._handler_threads) >= MAX_CONCURRENT_CONNECTIONS:
+                logger.warning(
+                    f"[RT_LISTENER] Refusing connection from {client_address}: "
+                    f"{MAX_CONCURRENT_CONNECTIONS} handlers already active"
+                )
+                return False
+            worker = threading.Thread(
+                target=self._serve_connection,
+                args=(connection, client_address),
+                name=f"RT_LISTENER-conn-{client_address}",
+                daemon=True,
+            )
+            self._handler_threads.add(worker)
+        worker.start()
+        return True
+
+    def _drain_connection_handlers(self, timeout=5.0):
+        """Wait briefly for in-flight handlers after self.running goes False.
+
+        They notice within one select() tick, so this is short in practice. It
+        exists so a stop does not return while a handler is still appending to
+        self.data_received.
+        """
+        with self._handler_lock:
+            workers = list(self._handler_threads)
+        deadline = time.time() + timeout
+        for worker in workers:
+            remaining = deadline - time.time()
+            if remaining <= 0:
+                break
+            worker.join(remaining)
+        still_running = [w.name for w in workers if w.is_alive()]
+        if still_running:
+            logger.warning(
+                f"[RT_LISTENER] {len(still_running)} connection handler(s) still "
+                f"running after {timeout}s: {still_running}"
+            )
+
     def stop_listening(self):
         """
         Stop the RT_Listener, mirroring BC_Listener's stop_listening method.
         """
         logger.info("RT_Listener stopping...")
         self.running = False
+        self._drain_connection_handlers()
 
     def health_monitor(self):
         """

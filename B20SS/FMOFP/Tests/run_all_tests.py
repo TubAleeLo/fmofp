@@ -102,10 +102,14 @@ SUITES = [
     # OperationalError. It added nothing, ever, and said it had.
     (True,  "FMOFP.Tests.test_db_ensure_column", 300),
     # H2/H16: an accepted connection had no idle timeout, so a peer that
-    # connected and said nothing held the single-threaded accept loop against
-    # every other peer for as long as it stayed connected; and get_listen_endpoint
-    # validated the port but passed the host straight to bind().
+    # connected and said nothing held its handler for as long as it stayed
+    # connected; and get_listen_endpoint validated the port but passed the host
+    # straight to bind().
     (True,  "FMOFP.Tests.test_listener_idle_and_bind", 300),
+    # H3: both listeners called handle_connection() inline on the accept thread,
+    # so one held connection stopped every other peer being accepted at all.
+    # Connections are now served on a bounded pool of worker threads.
+    (True,  "FMOFP.Tests.test_listener_concurrency", 420),
     # Production blockers B1/B2/B3/B4: a boot failure that hung the process
     # forever and an error shutdown that exited 0; initialization failures
     # swallowed so boot continued on a half-built system; coroutine stops

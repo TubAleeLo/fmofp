@@ -7,11 +7,13 @@ select, so no single syscall blocks forever, but handle_connection loops on
 errors. A peer that connects and then says nothing holds the slot for as long as
 it stays connected.
 
-That compounds with H3: the accept loop is single-threaded, so while one
-connection is held, no other peer is accepted. Measured against the real
-listener before the fix: a silent peer A was accepted, peer B connected and sent
-a valid message, and B was not accepted until the moment A disconnected three
-seconds later. A sender that crashes mid-send leaves the bus unreachable.
+That used to compound with H3, where the accept loop served each connection
+inline so one held connection stopped every other peer being accepted at all.
+H3 is fixed (see test_listener_concurrency), which means accepts can no longer
+be used to observe this timeout: a second peer is now accepted immediately
+whether or not the idle connection is ever reclaimed. So H2 is measured here
+directly, from the held peer's own side -- recv() returning b'' is the listener
+closing it -- and that measurement is independent of H3 in both directions.
 
 H16. get_listen_endpoint validated the port (int(), with an error when it is
 not) and passed the host straight to bind(). The defaults are loopback and the
@@ -33,7 +35,6 @@ for _p in (_B20SS, os.path.join(_B20SS, 'FMOFP')):
 import FMOFP.Tests  # noqa: F401  -- UTF-8 stdio for piped output
 
 import importlib
-import logging
 import socket
 import threading
 import time
@@ -72,19 +73,6 @@ class _Results:
 R = _Results()
 
 
-class _AcceptSpy(logging.Handler):
-    def __init__(self):
-        super().__init__()
-        self.count = 0
-
-    def emit(self, record):
-        try:
-            if "accepted connection from" in record.getMessage():
-                self.count += 1
-        except Exception:
-            pass
-
-
 def _run_listener(idle_timeout):
     """Start a real RT_Listener on an ephemeral loopback port."""
     import FMOFP.MIL_STD_1553B.Remote_Terminal.RT_connect.RT_socket as rt_socket
@@ -101,59 +89,58 @@ def _run_listener(idle_timeout):
     return listener, port
 
 
-def _second_peer_served(idle_timeout, wait_s):
-    """Hold one silent connection, then see whether a second peer is accepted.
+def _silent_peer_lifetime(idle_timeout, wait_s):
+    """Connect, send nothing, and time how long until the LISTENER closes us.
 
-    Returns (accepts_while_blocked, accepts_after_wait).
+    Returns (closed, elapsed). `closed` is True when recv() returned b'' --
+    an orderly close from the listener's end -- within wait_s. The peer never
+    sends and never closes, so nothing but the idle timeout can end it.
     """
-    spy = _AcceptSpy()
-    logging.getLogger().addHandler(spy)
-    listener = a = b = None
+    listener = peer = None
     try:
         listener, port = _run_listener(idle_timeout)
-        a = socket.create_connection(("127.0.0.1", port))   # connects, says nothing
-        time.sleep(0.8)
-        during = spy.count
-
-        b = socket.create_connection(("127.0.0.1", port))
-        b.sendall(b'{"hello":"B"}')
-
-        deadline = time.monotonic() + wait_s
-        while time.monotonic() < deadline and spy.count < 2:
-            time.sleep(0.2)
-        return during, spy.count
+        peer = socket.create_connection(("127.0.0.1", port))
+        peer.settimeout(wait_s)
+        started = time.monotonic()
+        try:
+            eof = peer.recv(64) == b""
+        except socket.timeout:
+            eof = False
+        return eof, time.monotonic() - started
     finally:
-        logging.getLogger().removeHandler(spy)
         if listener is not None:
             listener.running = False
-        for sock in (a, b):
-            try:
-                if sock is not None:
-                    sock.close()
-            except Exception:
-                pass
+        try:
+            if peer is not None:
+                peer.close()
+        except Exception:
+            pass
         time.sleep(1.1)
 
 
 def test_idle_connection_is_reclaimed():
-    R.section("H2 — an idle peer no longer holds the listener")
+    R.section("H2 \u2014 a peer that sends nothing is closed by the listener")
 
-    during, after = _second_peer_served(idle_timeout=2.0, wait_s=8.0)
-    R.check("only the first peer is accepted while it holds the slot",
-            during == 1, f"accepts={during}")
-    R.check("the second peer is served once the idle timeout fires, "
-            "without the first disconnecting",
-            after >= 2, f"accepts={after}")
+    closed, elapsed = _silent_peer_lifetime(idle_timeout=2.0, wait_s=8.0)
+    R.check("the listener closes a connection that never sends",
+            closed, f"closed={closed} after {elapsed:.1f}s")
+    R.check("and it waits for the timeout rather than closing on arrival",
+            elapsed >= 2.0, f"closed after {elapsed:.1f}s, timeout was 2.0s")
 
 
-def test_pre_fix_blocks_indefinitely():
-    """With the timeout out of reach, the old behaviour returns exactly."""
-    R.section("NON-TAUTOLOGICAL — without the timeout the second peer waits")
+def test_pre_fix_holds_the_slot_forever():
+    """With the timeout out of reach, the old behaviour returns exactly.
 
-    during, after = _second_peer_served(idle_timeout=3600.0, wait_s=5.0)
-    R.check("the first peer is accepted", during == 1, f"accepts={during}")
-    R.check("and the second is never accepted while the first stays connected",
-            after < 2, f"accepts={after}")
+    Before H2 there was no timeout at all, so this is the pre-fix code path:
+    the handler loops on the LISTENER's `running` flag and leaves only when the
+    peer goes away. If this ever starts failing, the assertion above is passing
+    for some reason other than the timeout.
+    """
+    R.section("NON-TAUTOLOGICAL \u2014 with no timeout in reach, nothing reclaims it")
+
+    closed, elapsed = _silent_peer_lifetime(idle_timeout=3600.0, wait_s=5.0)
+    R.check("the connection is still open after 5s of silence",
+            not closed, f"closed={closed} after {elapsed:.1f}s")
 
 
 def test_listen_host_is_validated():
@@ -200,7 +187,7 @@ def main():
 
     for test in (test_listen_host_is_validated,
                  test_idle_connection_is_reclaimed,
-                 test_pre_fix_blocks_indefinitely):
+                 test_pre_fix_holds_the_slot_forever):
         try:
             test()
         except Exception:
