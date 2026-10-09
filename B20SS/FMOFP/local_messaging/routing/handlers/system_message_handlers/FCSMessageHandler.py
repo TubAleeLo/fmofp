@@ -120,6 +120,10 @@ class FCSMessageHandler:
         self.started = False
         self.pending_requests = {}  # request_id -> PendingRequest
         self.cleanup_timer = None
+        # The loop timeout notifications are delivered on, captured in start().
+        # The cleanup timer runs on a threading.Timer thread, which has no loop
+        # of its own -- see _notify_request_timed_out().
+        self._loop = None
         self.logger = logger.logger  # Direct access to logger
         self.event_bus = get_event_bus()
         
@@ -1038,6 +1042,60 @@ class FCSMessageHandler:
         # Fallback for non-dict messages
         return f"{id(message)}_{message_subtype}"
     
+
+    def _remember_loop(self):
+        """Record the event loop to deliver timeout notifications on.
+
+        start() is awaited from SystemManager.start_async_component, so it runs
+        on the loop thread and there is a running loop to capture here. The
+        cleanup timer that needs it runs on a threading.Timer thread, where
+        there is not -- which was H7.
+        """
+        try:
+            self._loop = asyncio.get_running_loop()
+        except RuntimeError:
+            # Started off the loop (a direct call, or a test). Notifications
+            # cannot be delivered until a loop is known; say so once, here,
+            # rather than raising once per expired request later.
+            self._loop = None
+            logger.warning(
+                f"[FCS_MSG_HNDLR] Started without a running event loop: request "
+                f"timeout notifications will be dropped until one is set"
+            )
+
+    def _notify_request_timed_out(self, request_id, response) -> bool:
+        """Deliver a timeout notification from the cleanup timer's thread.
+
+        Returns False when it could not be delivered. Never raises: a failure
+        here must not abort the rest of the expired batch, which is half of
+        what made H7 bite.
+        """
+        loop = getattr(self, '_loop', None)
+        if loop is None or loop.is_closed():
+            logger.error(
+                f"[FCS_MSG_HNDLR] Cannot notify {request_id} of its timeout: no "
+                f"usable event loop. The request was still expired and removed."
+            )
+            return False
+        if self.response_service is None:
+            logger.error(
+                f"[FCS_MSG_HNDLR] Cannot notify {request_id} of its timeout: no "
+                f"response service"
+            )
+            return False
+        try:
+            # The coroutine is built only once the loop is known to be usable,
+            # so there is no path that creates one and drops it unawaited.
+            asyncio.run_coroutine_threadsafe(
+                self.response_service.send_response(request_id, response), loop)
+            return True
+        except Exception as e:
+            logger.error(
+                f"[FCS_MSG_HNDLR] Failed to notify {request_id} of its timeout: "
+                f"{e}"
+            )
+            return False
+
     def _start_cleanup_timer(self):
         """Start the cleanup timer for pending requests"""
         if self.cleanup_timer and self.cleanup_timer.is_alive():
@@ -1085,11 +1143,26 @@ class FCSMessageHandler:
                             "data": {}
                         }
                         
-                        # Send failure response
-                        asyncio.run_coroutine_threadsafe(
-                            self.response_service.send_response(request_id, response),
-                            asyncio.get_event_loop()
-                        )
+                        # Send failure response.
+                        #
+                        # H7: this used to pass asyncio.get_event_loop() here.
+                        # _cleanup_pending_requests runs on a threading.Timer
+                        # thread, and get_event_loop() is per-thread: with no
+                        # loop set on THAT thread it raises
+                        # "RuntimeError: There is no current event loop in
+                        # thread 'Thread-N'" -- measured on 3.11, and it raises
+                        # even while a loop is running happily in another
+                        # thread, which is exactly this program's shape.
+                        #
+                        # Two things were lost each time. The notification: the
+                        # coroutine argument is built BEFORE get_event_loop() is
+                        # evaluated, so it was created and discarded unawaited
+                        # ("coroutine 'send_response' was never awaited") -- the
+                        # same defect class as H4. And the rest of the batch:
+                        # the exception escaped to the outer handler, so every
+                        # expired request after the first was skipped, having
+                        # already been popped above.
+                        self._notify_request_timed_out(request_id, response)
         except Exception as e:
             logger.error(f"Error cleaning up pending requests: {e}")
         finally:
@@ -1105,6 +1178,9 @@ class FCSMessageHandler:
             
         self.started = True
         
+        # Capture the loop BEFORE the timer that needs it is started.
+        self._remember_loop()
+
         # Start cleanup timer
         self._start_cleanup_timer()
         

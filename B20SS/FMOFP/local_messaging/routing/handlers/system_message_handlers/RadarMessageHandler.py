@@ -117,6 +117,10 @@ class RadarMessageHandler:
         # been emitted for the current async-handler state, so a degraded run
         # says so once rather than on every send.
         self._warned_response_path_down = False
+        # The pending-request expiry task. Named for the threading.Timer the
+        # sibling handlers use; here it is an asyncio task. Started by start(),
+        # cancelled by stop(). It had no caller at all until H8.
+        self.cleanup_timer = None
         self.rt_received_frames: List[List[str]] = []
         self.sendMsg = send1553Msg()
         self.bc_construct = BC_construct()
@@ -480,7 +484,11 @@ class RadarMessageHandler:
                     return False
                 
                 current_time = time.time()
-                stuck_requests = sum(1 for req in self.pending_requests.values()
+                # list(): the cleanup task deletes from this dict on another
+                # loop, and RuntimeError("dictionary changed size during
+                # iteration") inside a health check would read as an unhealthy
+                # component rather than as the bug it is.
+                stuck_requests = sum(1 for req in list(self.pending_requests.values())
                                    if req.is_expired(current_time) and not req.should_retry())
                 if stuck_requests > 0:
                     logger.warning(f"Found {stuck_requests} stuck requests")
@@ -662,7 +670,7 @@ class RadarMessageHandler:
                 
             # First try to match by request ID
             current_time = time.time()
-            for uuid, req in self.pending_requests.items():
+            for uuid, req in list(self.pending_requests.items()):
                 if not req.is_expired(current_time):
                     if uuid == request_id:
                         logger.info(f"Found matching request {uuid} for unrecognized command {command_word}")
@@ -678,7 +686,7 @@ class RadarMessageHandler:
             if matched_radar_type and command_type:
                 logger.info(f"Identified command word {command_word} as {matched_cmd} for {matched_radar_type}")
                 # Look for pending requests matching the identified command type
-                for uuid, req in self.pending_requests.items():
+                for uuid, req in list(self.pending_requests.items()):
                     if not req.is_expired(current_time):
                             logger.info(f"Found matching request {uuid} by command type")
                             return {
@@ -729,7 +737,7 @@ class RadarMessageHandler:
                     mode_value = 1  # Default to STANDBY
                 
                 # Find matching request
-                for uuid, req in self.pending_requests.items():
+                for uuid, req in list(self.pending_requests.items()):
                     is_expired = (current_time - req.timestamp) > req.timeout
                     if (req.radar_name == radar_type and 
                         req.request_type == "mode_change" and
@@ -899,7 +907,7 @@ class RadarMessageHandler:
                     
                     # Try to find existing request ID
                     current_time = time.time()
-                    for uuid, req in self.pending_requests.items():
+                    for uuid, req in list(self.pending_requests.items()):
                         if (req.radar_name == radar_type and 
                             req.request_type == "mode_change" and
                             not req.is_expired(current_time)):
@@ -1073,7 +1081,7 @@ class RadarMessageHandler:
                 
                 # Log any pending requests that might match
                 current_time = time.time()
-                for uuid, req in self.pending_requests.items():
+                for uuid, req in list(self.pending_requests.items()):
                     if not req.is_expired(current_time):
                         logger.info(f"[MODE]Found pending request: {uuid} for {req.radar_name}")
 
@@ -1237,7 +1245,7 @@ class RadarMessageHandler:
             if not request:
                 # Try to find request by radar type, command type, and command word
                 current_time = time.time()
-                for uuid, req in self.pending_requests.items():
+                for uuid, req in list(self.pending_requests.items()):
                     if not req.is_expired(current_time):
                         matches = []
                         if radar_type and req.radar_name == radar_type:
@@ -1376,6 +1384,9 @@ class RadarMessageHandler:
                 return
 
             self.started = True
+            # Must follow `self.started = True`: the task's own loop condition
+            # is `while self.started`, so starting it first would exit at once.
+            self._start_cleanup_timer()
             logger.info("[RDR_MSG_HNDLR] RadarMessageHandler started successfully")
         except Exception as e:
             logger.error(f"[RDR_MSG_HNDLR] Error starting RadarMessageHandler: {str(e)}")
@@ -1386,6 +1397,12 @@ class RadarMessageHandler:
         try:
             # Don't stop async handler - let system manager handle that
             self.started = False
+            # `while self.started` would end the task within a second anyway;
+            # cancelling means stop() does not leave a task sleeping on a loop
+            # that may be about to close.
+            if self.cleanup_timer is not None:
+                self.cleanup_timer.cancel()
+                self.cleanup_timer = None
             self.pending_requests.clear()
             self.rt_received_frames.clear()
             
@@ -1454,17 +1471,56 @@ class RadarMessageHandler:
         # Format as 16-bit binary string
         return [format(mode_value, '016b')]
 
-    def _start_cleanup_timer(self):
-        """Start timer for cleaning up stale requests"""
+    def _start_cleanup_timer(self) -> bool:
+        """Start the task that expires and retries stale pending requests.
+
+        H8: this method existed and had no caller anywhere, so pending requests
+        were never expired and never retried. Three things fell out of that,
+        all confirmed by measurement rather than reading:
+
+          * PendingRequest.is_expired / should_retry / increment_retry were
+            dead, and request_rate_limit's sibling max_retries was dead
+            configuration.
+          * is_healthy() counts "stuck" requests as expired AND out of
+            retries. The check itself is sound -- hand a request a spent budget
+            and it does report False. But nothing ever incremented retries, so
+            should_retry() was always True and no request could reach that
+            state: the count was zero for the life of the process. The
+            precondition was unreachable rather than the check being wrong,
+            which is the harder kind of dead code to notice.
+          * pending_requests only ever grew, for the life of the process.
+
+        It is called from start(), which SystemManager.start_async_component
+        awaits -- so there is a running loop to attach the task to. Returns
+        False when there is not, rather than raising into the caller's start.
+        """
+        existing = getattr(self, 'cleanup_timer', None)
+        if existing is not None and not existing.done():
+            return True  # already running
+
+        try:
+            loop = asyncio.get_running_loop()
+        except RuntimeError:
+            self.cleanup_timer = None
+            logger.error(
+                "[RDR_MSG_HNDLR] Cannot start the pending-request cleanup task: "
+                "no running event loop. Requests will not be expired or retried."
+            )
+            return False
+
         async def cleanup():
             while self.started:
                 try:
                     await self._cleanup_pending_requests()
+                except asyncio.CancelledError:
+                    raise
                 except Exception as e:
                     logger.error(f"[RDR_MSG_HNDLR] Error in cleanup timer: {str(e)}")
                 await asyncio.sleep(1.0)
 
-        self.cleanup_timer = asyncio.create_task(cleanup())
+        self.cleanup_timer = loop.create_task(cleanup())
+        logger.info("[RDR_MSG_HNDLR] Pending-request cleanup task started")
+        return True
 
     def _loop_bound_lock(self, purpose: str) -> asyncio.Lock:
         """Return the `purpose` lock, bound to the loop that is running now.
@@ -1511,26 +1567,43 @@ class RadarMessageHandler:
             pending_items = list(self.pending_requests.items())
             
             for uuid, request in pending_items:
-                # Only expire requests that have been acknowledged
-                if request.is_expired(current_time):
-                    # Keep mode change requests around longer to ensure acknowledgments are found
-                    if request.request_type == "mode_change":
-                        # Only expire after max retries
-                        if not request.should_retry():
-                            expired_uuids.append(uuid)
-                            logger.info(f"[RDR_MSG_HNDLR] Expiring mode change request {uuid} after max retries")
-                    else:
-                        expired_uuids.append(uuid)
-                        logger.info(f"[RDR_MSG_HNDLR] Expiring non-mode change request {uuid}")
+                if not request.is_expired(current_time):
+                    continue
 
-                    # If not completed and should retry, do so
-                    if request.should_retry() and self.async_handler.started:
-                        logger.warning(f"Retrying request {uuid} for {request.radar_name}")
-                        request.increment_retry()
-                        await self._resend_request(uuid, request)
-                    else:
-                        logger.error(f"[RDR_MSG_HNDLR] Request {uuid} for {request.radar_name} failed after max retries")
-                        expired_uuids.append(uuid)
+                # H8: this branch had never executed -- _start_cleanup_timer()
+                # had no caller -- so its own bugs were undiscovered. Measured
+                # by driving it directly: a non-mode_change request was appended
+                # to expired_uuids AND resent AND appended a second time, so it
+                # was deleted in the same pass that retried it. retries was
+                # incremented on an object already being thrown away, and each
+                # resend built a fresh PendingRequest with retries=0 -- which
+                # made max_retries=3 unreachable for every type except
+                # mode_change. "Retry three times" was really "retry forever,
+                # once per expiry". mode_change alone behaved as designed,
+                # because its branch expired it only once the budget was spent.
+                #
+                # One rule for every type now. The longer window mode_change
+                # needs already lives in PendingRequest.timeout (10 s vs 5 s),
+                # so the special case here was never what gave it that.
+                if request.should_retry() and self.async_handler.started:
+                    request.increment_retry()
+                    logger.warning(
+                        f"[RDR_MSG_HNDLR] Retrying {request.request_type} "
+                        f"{uuid} for {request.radar_name} "
+                        f"({request.retries}/{request.max_retries})"
+                    )
+                    # The resend registers a NEW uuid, so this one goes; the
+                    # budget is carried onto the new entry by _resend_request
+                    # so it cannot restart at zero.
+                    expired_uuids.append(uuid)
+                    await self._resend_request(uuid, request)
+                else:
+                    expired_uuids.append(uuid)
+                    logger.error(
+                        f"[RDR_MSG_HNDLR] {request.request_type} request {uuid} "
+                        f"for {request.radar_name} expired after "
+                        f"{request.retries} of {request.max_retries} retries"
+                    )
 
             # Remove expired requests after iteration is complete
             for uuid in expired_uuids:
@@ -1538,11 +1611,28 @@ class RadarMessageHandler:
                     del self.pending_requests[uuid]
 
     async def _resend_request(self, uuid: str, request: PendingRequest):
-        """Resend a failed request"""
+        """Resend a failed request, carrying its retry budget forward.
+
+        send_request() always mints a fresh request_id, so the resent request
+        is a new pending entry. Without copying the count onto it, every resend
+        started the budget again at zero and max_retries could never bind --
+        which is what made the old expiry path retry indefinitely (H8).
+        """
         try:
             # Only resend if AsyncMessageHandler is running
             if self.async_handler and self.async_handler.started:
-                await self.send_request(request.radar_name, request.request_type, request.data)
+                new_uuid = await self.send_request(
+                    request.radar_name, request.request_type, request.data)
+                # send_request registers the new entry itself. It writes
+                # self.pending_requests directly rather than under the
+                # 'pending' lock we are holding here, which is safe only
+                # because a single dict store is atomic -- if that write is
+                # ever brought under this lock, the acquisition order inverts
+                # against send_request's 'bus' lock and deadlocks.
+                if isinstance(new_uuid, str):
+                    resent = self.pending_requests.get(new_uuid)
+                    if resent is not None:
+                        resent.retries = request.retries
         except Exception as e:
             logger.error(f"[RDR_MSG_HNDLR] Error resending request {uuid}: {str(e)}")
 
@@ -2654,7 +2744,7 @@ class RadarMessageHandler:
             elif isinstance(message, list):
                 # Try to find existing request ID from pending requests
                 current_time = time.time()
-                for uuid, req in self.pending_requests.items():
+                for uuid, req in list(self.pending_requests.items()):
                     if not req.is_expired(current_time):
                         original_request_id = uuid
                         break

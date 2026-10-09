@@ -115,6 +115,11 @@ SUITES = [
     # thread lock blocks the thread, not the task, so two concurrent calls
     # deadlocked the event loop outright instead of serialising.
     (True,  "FMOFP.Tests.test_handler_lock_discipline", 420),
+    # H8/H7: RadarMessageHandler._start_cleanup_timer() had no caller, so
+    # pending requests were never expired or retried and the expiry path's own
+    # bugs had never executed; and FCS/FMS delivered timeout notifications via
+    # asyncio.get_event_loop() from a threading.Timer thread, where it raises.
+    (True,  "FMOFP.Tests.test_request_expiry", 420),
     # Production blockers B1/B2/B3/B4: a boot failure that hung the process
     # forever and an error shutdown that exited 0; initialization failures
     # swallowed so boot continued on a half-built system; coroutine stops
