@@ -105,13 +105,14 @@ class RadarMessageHandler:
         self.started = False
         self.request_rate_limit = 10  # requests per second
         self.last_request_time = 0
-        self._lock = None  # Initialize lock as None
-        # Serialises _acquire_send_slot so the rate limit holds when several
-        # coroutines send at once. Separate from self._lock, which guards the
-        # pending-request cleanup -- a send must not queue behind a cleanup pass.
-        # Created lazily, like self._lock, so it binds to whichever loop is
-        # running and survives a stop/start onto a different one.
-        self._send_slot_lock = None
+        # Lazily-created asyncio locks, keyed by purpose, each remembered
+        # alongside the loop it was created on. See _loop_bound_lock(). This
+        # replaces three separate lazy-lock attributes that each open-coded the
+        # same idiom; they are kept as SEPARATE NAMED locks rather than merged,
+        # because _cleanup_pending_requests() holds "pending" across a call into
+        # send_request(), which takes "bus" -- one lock for both would
+        # self-deadlock, asyncio.Lock not being reentrant.
+        self._loop_locks = {}
         # Tracks whether the "responses will not be handled" warning has already
         # been emitted for the current async-handler state, so a degraded run
         # says so once rather than on every send.
@@ -119,8 +120,10 @@ class RadarMessageHandler:
         self.rt_received_frames: List[List[str]] = []
         self.sendMsg = send1553Msg()
         self.bc_construct = BC_construct()
+        # Guards one-time wiring in set_async_handler(), which is synchronous
+        # and never awaits -- so a thread lock is right here, unlike the bus
+        # lock that used to sit on the next line.
         self._init_lock = threading.Lock()
-        self._message_lock = threading.Lock()
         self.SYSTEM_NAME = "radar"  # Centralize system name
         
         # Get routing service for message handling
@@ -217,7 +220,18 @@ class RadarMessageHandler:
             return None
 
         try:
-            with self._message_lock:
+            # H5: this was `with self._message_lock:` -- a threading.Lock held
+            # across three awaits (_create_request, the sendMsg.send_message
+            # network write, and the sync_response wait). A thread lock blocks
+            # the THREAD, not the task, and an event loop has one thread, so two
+            # concurrent sends did not serialise, they deadlocked the loop
+            # permanently: the first suspended inside the lock, the second
+            # blocked the thread waiting for it, and nothing could ever resume
+            # the first. Measured on the real handler -- one send reached the
+            # wire, the lock stayed held, and the loop never ran again. Not even
+            # an asyncio.wait_for() around the pair could fire, because the
+            # timeout itself needed the loop.
+            async with self._loop_bound_lock('bus'):
                 
                 # Check request type
                 logger.info("[SEND] Getting command word...")
@@ -1375,9 +1389,9 @@ class RadarMessageHandler:
             self.pending_requests.clear()
             self.rt_received_frames.clear()
             
-            # Clear the locks when stopping
-            self._lock = None
-            self._send_slot_lock = None
+            # Drop the locks when stopping, so a restart onto a different
+            # event loop does not inherit locks bound to the old one.
+            self._loop_locks.clear()
             
             logger.info("[RDR_MSG_HNDLR] RadarMessageHandler stopped")
         except Exception as e:
@@ -1452,11 +1466,35 @@ class RadarMessageHandler:
 
         self.cleanup_timer = asyncio.create_task(cleanup())
 
-    async def ensure_lock(self):
-        """Ensure we have a lock for the current event loop"""
-        if self._lock is None:
-            self._lock = asyncio.Lock()
-        return self._lock
+    def _loop_bound_lock(self, purpose: str) -> asyncio.Lock:
+        """Return the `purpose` lock, bound to the loop that is running now.
+
+        asyncio locks do not travel between event loops, and the failure is
+        silent rather than loud. Measured on 3.11: a lock created and left held
+        on one loop makes an acquirer on a second loop wait forever -- it does
+        not raise, the waiter simply never wakes, because only the first loop
+        could have released it. This handler really is driven from more than one
+        loop (the precipitation and VIL response services each run their own and
+        call send_request from it), so the loop a lock was made on is recorded
+        with it and a lock belonging to a different loop is replaced.
+
+        What that does and does not buy: sends are serialised per loop, which is
+        what stops the deadlock. It is NOT global arbitration of the 1553B bus
+        -- two loops sending at once still interleave on the wire. The previous
+        code did not provide that either (last_request_time is read and written
+        with no cross-thread guard), so this is not a regression, but it is not
+        solved. Recorded as its own finding rather than papered over here.
+
+        There is no await between the lookup and the store, so two coroutines on
+        one loop cannot both create a lock; and callers on different loops are
+        meant to get different locks.
+        """
+        loop = asyncio.get_running_loop()
+        existing, owner = self._loop_locks.get(purpose, (None, None))
+        if existing is None or owner is not loop:
+            existing = asyncio.Lock()
+            self._loop_locks[purpose] = (existing, loop)
+        return existing
 
     async def _cleanup_pending_requests(self):
         """Clean up expired pending requests"""
@@ -1468,9 +1506,7 @@ class RadarMessageHandler:
         current_time = time.time()
         expired_uuids = []
 
-        # Get lock for current event loop
-        lock = await self.ensure_lock()
-        async with lock:
+        async with self._loop_bound_lock('pending'):
             # Create a list of items to iterate over to avoid dictionary modification during iteration
             pending_items = list(self.pending_requests.items())
             
@@ -1762,12 +1798,9 @@ class RadarMessageHandler:
         else:
             self._warned_response_path_down = False
 
-        if self._send_slot_lock is None:
-            self._send_slot_lock = asyncio.Lock()
-
         # Held across the sleep so concurrent senders queue instead of all
         # reading the same last_request_time and leaving together.
-        async with self._send_slot_lock:
+        async with self._loop_bound_lock('send_slot'):
             # monotonic(), not time(): a wall-clock step backwards would make
             # the elapsed time negative and stall every send until real time
             # caught up to the old stamp.

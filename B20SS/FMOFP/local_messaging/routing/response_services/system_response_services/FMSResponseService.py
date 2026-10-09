@@ -46,28 +46,40 @@ class FMSResponseService:
             logger.warning("Cannot send response - request_id is None")
             return False
             
+        # H5: this whole body used to sit inside `with self.lock:` -- a
+        # threading.Lock held across `await callback(response)` and across the
+        # generic-route await below. A thread lock blocks the thread, not the
+        # task, and an event loop has one thread, so two concurrent responses
+        # deadlocked the loop outright rather than serialising.
+        #
+        # The lock is not needed for the awaits in any case. It guards exactly
+        # one thing, self.response_callbacks, which is also read by the
+        # synchronous cleanup_expired_callbacks() -- so it stays a thread lock
+        # and is narrowed to the dictionary access. pop() already removed the
+        # entry before the callback ran, so taking it out first changes nothing
+        # except what is held while awaiting.
         with self.lock:
-            # If there's a callback, invoke it
-            if request_id in self.response_callbacks:
-                callback_info = self.response_callbacks.pop(request_id)
-                callback = callback_info['callback']
-                try:
-                    # Call the callback with the response
-                    if asyncio.iscoroutinefunction(callback):
-                        await callback(response)
-                    else:
-                        callback(response)
-                    logger.info(f"Response sent to callback for request {request_id}")
-                    return True
-                except Exception as e:
-                    logger.error(f"Error invoking callback for request {request_id}: {e}")
-                    return False
-            else:
-                # No callback found, route response through standard channels
-                # For FMS responses, this typically means sending via event bus
-                await self.routing_service.route_generic_message("fms_response", response)
-                logger.info(f"Response routed generically for request {request_id}")
+            callback_info = self.response_callbacks.pop(request_id, None)
+
+        if callback_info is not None:
+            callback = callback_info['callback']
+            try:
+                # Call the callback with the response
+                if asyncio.iscoroutinefunction(callback):
+                    await callback(response)
+                else:
+                    callback(response)
+                logger.info(f"Response sent to callback for request {request_id}")
                 return True
+            except Exception as e:
+                logger.error(f"Error invoking callback for request {request_id}: {e}")
+                return False
+        else:
+            # No callback found, route response through standard channels
+            # For FMS responses, this typically means sending via event bus
+            await self.routing_service.route_generic_message("fms_response", response)
+            logger.info(f"Response routed generically for request {request_id}")
+            return True
     
     def cleanup_expired_callbacks(self):
         """Clean up expired response callbacks."""

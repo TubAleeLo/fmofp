@@ -110,6 +110,11 @@ SUITES = [
     # so one held connection stopped every other peer being accepted at all.
     # Connections are now served on a bounded pool of worker threads.
     (True,  "FMOFP.Tests.test_listener_concurrency", 420),
+    # H5: RadarMessageHandler.send_request held a threading.Lock across three
+    # awaits, and FMSResponseService.send_response across its callback await. A
+    # thread lock blocks the thread, not the task, so two concurrent calls
+    # deadlocked the event loop outright instead of serialising.
+    (True,  "FMOFP.Tests.test_handler_lock_discipline", 420),
     # Production blockers B1/B2/B3/B4: a boot failure that hung the process
     # forever and an error shutdown that exited 0; initialization failures
     # swallowed so boot continued on a half-built system; coroutine stops

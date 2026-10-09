@@ -85,7 +85,11 @@ def _handler(started=True, system=True, rate=10, sender=True):
     h.sendMsg = object() if sender else None
     h.request_rate_limit = rate
     h.last_request_time = 0
-    h._send_slot_lock = None
+    # H5: the three ad-hoc lazy locks (_lock, _send_slot_lock, _message_lock)
+    # became one registry keyed by purpose. _loop_bound_lock() reads it without
+    # a getattr default on purpose -- a half-built handler should raise here
+    # rather than quietly make itself a lock, so this factory has to name it.
+    h._loop_locks = {}
     h._warned_response_path_down = False
     return h
 
