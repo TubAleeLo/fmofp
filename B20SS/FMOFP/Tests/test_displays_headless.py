@@ -665,6 +665,92 @@ def test_tsd_no_synthetic_threats(r: _Results) -> None:
     disp.stop()
 
 
+def test_theme_colours_are_not_shared_objects(r: _Results) -> None:
+    """get_color() must hand out a copy, not the theme's own QColor.
+
+    QColor is mutable. Returning the dictionary's own object meant a caller
+    that adjusted the alpha for its own drawing rewrote the theme for
+    everyone. Three callers do exactly that -- holographic_display.py's
+    draw_holographic_background() and draw_startup_animation() each take a
+    colour and immediately setAlpha() it.
+
+    Measured against the live theme manager before the fix:
+
+        two calls return the SAME object: True
+        alpha before: 200
+        after one caller setAlpha(30), a later caller sees: 30
+        after a second caller setAlpha(200), the theme reads: 200
+        the first caller's own variable also changed to: 200
+
+    The last line is the sharp one: two routines that each set their own alpha
+    overwrite each other, so what an element renders at depends on the order
+    the drawing code ran in that frame.
+    """
+    print("\n  ── theme: get_color() hands out copies ──")
+    _qt_app()
+    from FMOFP.Interfaces.userInterface.displays.visual.theme_manager import (
+        get_theme_manager)
+    tm = get_theme_manager()
+
+    a = tm.get_color("hud")
+    b = tm.get_color("hud")
+    r.check("two calls return distinct objects", a is not b)
+    r.check("...with equal values", a == b, f"{a.getRgb()} vs {b.getRgb()}")
+
+    original = tm.get_color("hud").alpha()
+    mine = tm.get_color("hud")
+    mine.setAlpha(17)
+    r.check("a caller's setAlpha does not reach the theme",
+            tm.get_color("hud").alpha() == original,
+            f"theme alpha became {tm.get_color('hud').alpha()}, was {original}")
+
+    other = tm.get_color("hud")
+    other.setAlpha(211)
+    r.check("...nor another caller's copy", mine.alpha() == 17,
+            f"the first caller's own colour became {mine.alpha()}")
+
+    # The fallback path must obey the same contract.
+    f1 = tm.get_color("definitely_not_a_theme_colour")
+    f2 = tm.get_color("definitely_not_a_theme_colour")
+    r.check("the unknown-colour fallback also returns distinct objects",
+            f1 is not f2)
+
+    # End to end: the real caller that mutates must leave the theme alone.
+    before = tm.get_color("hud").alpha()
+    try:
+        from PyQt6.QtGui import QPainter, QPixmap
+        from PyQt6.QtCore import QRectF
+        from FMOFP.Interfaces.userInterface.displays.holographic_display import (
+            HolographicDisplay)
+        from FMOFP.Interfaces.userInterface.displays.base_display import DisplayType
+        disp = HolographicDisplay(DisplayType.MFD)
+        pm = QPixmap(400, 300)
+        painter = QPainter(pm)
+        disp.draw_holographic_background(painter, QRectF(0, 0, 400, 300))
+        painter.end()
+        drew = True
+    except Exception as exc:  # noqa: BLE001
+        drew = f"{type(exc).__name__}: {exc}"
+    r.check("draw_holographic_background() runs", drew is True, str(drew))
+    r.check("...and leaves the theme's hud alpha unchanged",
+            tm.get_color("hud").alpha() == before,
+            f"{tm.get_color('hud').alpha()}, was {before}")
+
+    print("\n  ── NON-TAUTOLOGICAL: the pre-fix shape really does alias ──")
+    from PyQt6.QtGui import QColor
+    shared = {"colors": {"hud": QColor(0, 255, 0, 200)}}
+
+    def pre_fix_get_color(name):
+        return shared["colors"][name]          # the old body
+
+    p1 = pre_fix_get_color("hud")
+    p1.setAlpha(30)
+    p2 = pre_fix_get_color("hud")
+    r.check("returning the dict's own object leaks the mutation",
+            p2.alpha() == 30 and p1 is p2,
+            f"alpha={p2.alpha()}, same object={p1 is p2}")
+
+
 def test_tsd_oob_needs_a_real_ownship_position(r: _Results) -> None:
     """The OOB overlay is positioned entirely from ownship, so no fix means no overlay.
 
@@ -895,6 +981,7 @@ def run_all() -> bool:
         test_pfd_secondary_readouts_show_as_unknown,
         test_tsd_no_synthetic_threats,
         test_tsd_oob_needs_a_real_ownship_position,
+        test_theme_colours_are_not_shared_objects,
         test_tsd_paint_combat_mode,
         # SMS
         test_sms_instantiation,
