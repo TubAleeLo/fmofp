@@ -192,6 +192,14 @@ class FCSMessages(PredefinedMessagesBase):
         self.logger.info(f"Sending flight mode request to FCS (mode: {mode_name})")
         
         # Send data request
+        # Story C25.1, partially done. "data" is the wrong command type for a
+        # message that changes a mode -- FCS_MODE_CHANGE_REQUEST exists and is
+        # already in MODE_REQUEST_MAP for the FCS subsystems. Routing it as
+        # "mode_change" was tried and backed out: the command word resolves,
+        # but fcs_flightModeRequest defines no to_data_words() and
+        # _pack_data() handles radars only, so the mode would travel with no
+        # payload. Changing this line is the easy half; the FCS data-word
+        # encoding is the half that has to exist first.
         request_id = await self.radar_handler.send_request(
             "flightControlSystem",  # Target system
             "data",                 # Command type

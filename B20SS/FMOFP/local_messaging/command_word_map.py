@@ -461,6 +461,23 @@ DATA_REQUEST_MAP = {
     for radar_type in RADAR_TYPES
 }
 
+# Story C25.1, deliberately NOT done here. The FCS is in MODE_REQUEST_MAP and
+# STATUS_REQUEST_MAP above but not in the data map, so a data request to it is
+# refused and request_control_surface_change() sends nothing.
+#
+# Registering FCS_CONTROL_INPUT_REQUEST here does make the message travel --
+# and that was tried and backed out, because it travels EMPTY. The FCS message
+# classes (fcs_controlSurfaceRequest, fcs_flightModeRequest) define no
+# to_data_words(), and RadarMessageHandler._pack_data() starts from
+# RADAR_MODE_MAP and handles radars only, so the send falls through to the
+# default format. Measured: Data words: ['0000000000000000'] -- the surface,
+# position and rate are not encoded at all.
+#
+# A caller would then receive a request ID for a command carrying no payload,
+# which is worse than the command being refused: it looks like it was sent.
+# The missing piece is a data-word encoding for the FCS message families, and
+# that is a wire-format decision, not a wiring one.
+
 # Create display request maps
 DISPLAY_MODE_REQUEST_MAP = {
     display_type: globals()[f"{display_type.upper()}_MODE_REQUEST"]

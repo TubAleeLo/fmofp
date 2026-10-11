@@ -162,18 +162,46 @@ async def body(sm):
         issued.append(rid)
         check(f"request for {label} returns a request ID", is_request_id(rid), repr(rid))
 
-    # ── KNOWN DEFECT, characterised (story C25.1) ────────────────────────
-    print("\nKNOWN DEFECT (C25.1) — the FMS and FCS families return no request ID")
+    # ── C25.1, the FMS half: these now send and correlate ────────────────
+    #
+    # All four families used to return None, and the reason was not a missing
+    # return statement -- RadarMessageHandler.send_request's data branch
+    # enumerated the five radars by hand and refused everything else BEFORE
+    # sending, so the command never reached the bus. Measured on a live
+    # system: four "Unsupported radar type for data request" errors per run.
+    # It consults DATA_REQUEST_MAP now, and the FMS entries were already
+    # registered there by command_word_map_fms.update_command_maps().
+    print("\nC25.1 — the FMS families send, and return an ID that correlates")
 
-    FMS_FCS = (
-        ('request_flight_mode_change', messages.request_flight_mode_change("COMBAT")),
-        ('request_control_surface_change', messages.request_control_surface_change("aileron", 0.3)),
+    FMS_FIXED = (
         ('update_attitude', messages.update_attitude({"pitch": 1.0, "roll": 2.0, "yaw": 3.0})),
         ('request_navigation_update', messages.request_navigation_update(latitude=1.0, longitude=2.0)),
     )
-    for label, coro in FMS_FCS:
+    for label, coro in FMS_FIXED:
+        rid = await asyncio.wait_for(coro, timeout=30.0)
+        issued.append(rid)
+        check(f"{label}() returns a request ID", is_request_id(rid), repr(rid))
+
+    # ── C25.1, the FCS half: still refused, and deliberately so ──────────
+    #
+    # The FCS can be given a data command word in two lines, and that was
+    # tried. It makes the message travel EMPTY: fcs_controlSurfaceRequest and
+    # fcs_flightModeRequest define no to_data_words(), and _pack_data()
+    # handles radars only, so the send falls through to the default format.
+    # Measured: Data words: ['0000000000000000'] -- surface, position and rate
+    # not encoded. A request ID for a payload-less command is worse than a
+    # refusal, because it looks like the command was sent.
+    #
+    # These stay labelled defects until the FCS data-word encoding exists.
+    print("\nSTILL OPEN (C25.1) — the FCS families need a data-word encoding first")
+
+    FCS_OPEN = (
+        ('request_flight_mode_change', messages.request_flight_mode_change("COMBAT")),
+        ('request_control_surface_change', messages.request_control_surface_change("aileron", 0.3)),
+    )
+    for label, coro in FCS_OPEN:
         result = await asyncio.wait_for(coro, timeout=30.0)
-        check(f"DEFECT: {label}() returns None despite documenting a request ID",
+        check(f"DEFECT: {label}() still returns None, pending an FCS encoding",
               result is None, repr(result))
 
     # ── non-tautological guards ──────────────────────────────────────────
