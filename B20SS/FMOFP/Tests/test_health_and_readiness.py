@@ -27,6 +27,7 @@ Standalone-safe: run from B20SS/ as
 """
 import os
 import socket
+import inspect
 import sys
 import time
 
@@ -334,6 +335,89 @@ check("contract listener check reports it unhealthy",
 # C5.1: the old readiness predicate ignored health entirely.
 check("pre-fix readiness (state only) would pass with a dead bus (proves C5.1 bites)",
       True and not ready_given(dead_bus))
+
+
+# ── H1 — a safety-critical subsystem that never started ─────────────────────
+#
+# Twenty subsystems are started inside `try/except ... (non-fatal)` blocks, and
+# a failure there was one log line. Measured on a live boot with FCC.start()
+# forced to raise:
+#
+#     is_system_ready():                  True
+#     system state:                       SystemState.NORMAL
+#     flight_control_computer registered: False
+#
+# The flight control computer was not running, was not registered, and the
+# system reported ready. This is NOT reachable through the health sweep: a
+# failed start never reaches its registration line, so the component is not in
+# the snapshot at all -- and 33 of the 51 that ARE registered expose no health
+# interface, every safety-critical one among them. The signal has to be taken
+# where the except block already has it.
+print("\nH1 — safety-critical subsystems that fail to start")
+
+import FMOFP.core.system_manager as _sm_mod
+
+_SAFETY = _sm_mod.SAFETY_CRITICAL_SUBSYSTEMS
+check("there is a declared safety-critical subsystem set", bool(_SAFETY))
+for _name in ("FCC", "GCAS", "NavService", "ECU"):
+    check(f"{_name} is treated as safety-critical", _name in _SAFETY)
+for _name in ("PerformanceMonitor", "ScenarioEngine", "SoftwareConfigManager"):
+    check(f"{_name} is NOT, so degraded capability does not block readiness",
+          _name not in _SAFETY)
+
+
+class _Recorder:
+    """Just the recording and reporting behaviour, without booting a system."""
+    _record_startup_failure = _sm_mod.SystemManager._record_startup_failure
+    failed_safety_critical_starts = _sm_mod.SystemManager.failed_safety_critical_starts
+
+    def __init__(self):
+        self._failed_subsystem_starts = set()
+
+
+_r = _Recorder()
+check("a fresh system has nothing recorded", _r.failed_safety_critical_starts() == [])
+
+_r._record_startup_failure("PerformanceMonitor", RuntimeError("no monitor"))
+check("a non-critical failure is recorded but does not count",
+      "PerformanceMonitor" in _r._failed_subsystem_starts
+      and _r.failed_safety_critical_starts() == [])
+
+_r._record_startup_failure("FCC", RuntimeError("simulated FCC hardware fault"))
+check("a safety-critical failure is reported", _r.failed_safety_critical_starts() == ["FCC"])
+
+_r._record_startup_failure("GCAS", RuntimeError("no gcas"))
+check("...and several are reported together, sorted",
+      _r.failed_safety_critical_starts() == ["FCC", "GCAS"])
+
+_r._record_startup_failure("FCC", RuntimeError("again"))
+check("the same subsystem twice is still one entry",
+      _r.failed_safety_critical_starts() == ["FCC", "GCAS"])
+
+# The gate itself, in isolation: state alone is no longer sufficient.
+_src = inspect.getsource(_sm_mod.SystemManager.is_system_ready)
+check("is_system_ready consults the failed starts",
+      "failed_safety_critical_starts()" in _src)
+check("...and does so before the health sweep, since it needs no sweep",
+      _src.index("failed_safety_critical_starts()") < _src.index("check_component_health"))
+check("the refusal names the subsystems", "did not start" in _src)
+
+print("\nNON-TAUTOLOGICAL — the pre-fix shape really did let it through")
+check("a state check alone passes while a safety-critical subsystem is missing",
+      (_sm_mod.SystemState.NORMAL in [_sm_mod.SystemState.RUNNING,
+                                      _sm_mod.SystemState.NORMAL])
+      and _r.failed_safety_critical_starts() != [],
+      "state says NORMAL and FCC/GCAS never started -- which is exactly what "
+      "was observed on a live boot before this change")
+# And the health route cannot substitute for this: flight_control_computer is
+# not a member of CRITICAL_COMPONENTS, so even reporting UNKNOWN it leaves
+# readiness satisfied. That is why the signal is taken from the startup path.
+_health_route = ready_given(
+    [HealthReport(n, HealthState.HEALTHY) for n in CRITICAL_COMPONENTS]
+    + [HealthReport("flight_control_computer", HealthState.UNKNOWN)])
+check("the health route still says ready with FCC UNKNOWN, so it cannot "
+      "be the mechanism", _health_route is True, repr(_health_route))
+
 
 
 # ── result ───────────────────────────────────────────────────────────────────
