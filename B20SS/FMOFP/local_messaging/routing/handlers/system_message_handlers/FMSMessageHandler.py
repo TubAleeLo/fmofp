@@ -38,11 +38,21 @@ from FMOFP.local_messaging.command_word_map import (
 
 class PendingRequest:
     """Class to track pending requests to the FMS"""
-    def __init__(self, request_id: str, command_type: str, timestamp: float, timeout: float = 5.0):
+    def __init__(self, request_id: str, command_type: str, timestamp: float,
+                 timeout: float = 5.0, system_name: str = None, data=None):
         self.request_id = request_id
         self.command_type = command_type
         self.timestamp = timestamp
         self.timeout = timeout
+        # What this request WAS, so an expired one can actually be re-issued.
+        # Neither field was stored before, which is why the retry branch in
+        # _cleanup_pending_requests could only ever be the comment
+        # "Implementation would depend on the specific request type": the
+        # inputs send_request needs had been thrown away by then. It logged
+        # "Retrying request X (retry 1/3)" and retried nothing. Measured: one
+        # retry claim in the log, zero calls to send_request.
+        self.system_name = system_name
+        self.data = data
         self.retry_count = 0
         self.max_retries = 3
         self.response = None
@@ -58,8 +68,15 @@ class PendingRequest:
         return not self.completed and self.retry_count < self.max_retries
         
     def increment_retry(self) -> int:
-        """Increment retry count and return new count"""
+        """Increment retry count, restamp, and return the new count.
+
+        The restamp is what the radar handler's PendingRequest already does
+        and this one did not. Without it a retried request stays expired, so
+        the 1 s cleanup tick burned all three retries within three seconds of
+        the first timeout instead of giving each attempt its own window.
+        """
         self.retry_count += 1
+        self.timestamp = time.time()
         return self.retry_count
         
     def set_error_state(self, error: str) -> None:
@@ -169,7 +186,7 @@ class FMSMessageHandler:
         except Exception as e:
             logger.warning(f"Failed to register FMS categories with loop prevention middleware: {e}")
         
-    async def send_request(self, system_name: str, request_type: str, data: Any = None, metadata: Optional[Dict[str, Any]] = None) -> Optional[str]:
+    async def send_request(self, system_name: str, request_type: str, data: Any = None, metadata: Optional[Dict[str, Any]] = None, *, inherited_retries: int = 0) -> Optional[str]:
         """
         Send a request to the FMS system.
         
@@ -200,9 +217,22 @@ class FMSMessageHandler:
         pending_request = PendingRequest(
             request_id=request_id,
             command_type=request_type,
-            timestamp=timestamp
+            timestamp=timestamp,
+            system_name=system_name,
+            data=data,
         )
-        self.pending_requests[request_id] = pending_request
+        # Seeded on a re-issue so max_retries actually binds: send_request
+        # mints a new request_id, so without carrying the count forward every
+        # retry would start the budget again at zero.
+        pending_request.retry_count = inherited_retries
+        # Under the lock: _cleanup_pending_requests iterates this dict on a
+        # threading.Timer thread while this runs on the event loop thread.
+        # Only the cleanup side used to take the lock, which is worse than no
+        # lock at all because it reads as guarded. Reproduced in 4 s:
+        # "RuntimeError: dictionary changed size during iteration".
+        # Narrow by design -- never held across an await (H5).
+        with self.lock:
+            self.pending_requests[request_id] = pending_request
         
         try:
             # Determine appropriate command word and data words based on request type
@@ -335,7 +365,8 @@ class FMSMessageHandler:
             
             if result is None:
                 logger.error("[FMS_MSGR_HNDLR] Failed to send message through 1553B")
-                del self.pending_requests[request_id]
+                with self.lock:
+                    self.pending_requests.pop(request_id, None)
                 return None
                 
             logger.info("[FMS_MSGR_HNDLR] Successfully sent message through 1553B")
@@ -346,8 +377,8 @@ class FMSMessageHandler:
             logger.error(traceback.format_exc())
             
             # Clean up pending request on error
-            if request_id in self.pending_requests:
-                del self.pending_requests[request_id]
+            with self.lock:
+                self.pending_requests.pop(request_id, None)
                 
             return None
             
@@ -1166,10 +1197,29 @@ class FMSMessageHandler:
             return False
 
     def _start_cleanup_timer(self):
-        """Start the cleanup timer for pending requests"""
-        if self.cleanup_timer and self.cleanup_timer.is_alive():
-            return  # Timer already running
-            
+        """Arm the one-shot timer that expires stale pending requests.
+
+        The guard here used to be `if self.cleanup_timer.is_alive(): return`.
+        This method is re-armed from the `finally` block of
+        _cleanup_pending_requests -- which runs ON THE TIMER'S OWN THREAD, where
+        that Timer's is_alive() is True. So the guard returned early every
+        single time and the timer never re-armed: cleanup ran ONCE, one second
+        after start(), and never again. Measured directly -- one pass, one
+        "Retrying request" line, then `cleanup_timer.is_alive() == False`
+        forever.
+
+        The replacement compares against the thread actually running, so a
+        re-arm from inside the timer proceeds while a duplicate call from
+        elsewhere is still refused.
+        """
+        existing = self.cleanup_timer
+        if (existing is not None and existing.is_alive()
+                and existing is not threading.current_thread()):
+            return  # a different, live timer is already pending
+
+        if not self.started:
+            return  # stopped between the pass finishing and this re-arm
+
         self.cleanup_timer = threading.Timer(1.0, self._cleanup_pending_requests)
         self.cleanup_timer.daemon = True
         self.cleanup_timer.start()
@@ -1182,26 +1232,56 @@ class FMSMessageHandler:
                 retry_requests = []
                 
                 # Identify expired and retry requests
-                for request_id, request in self.pending_requests.items():
+                for request_id, request in list(self.pending_requests.items()):
                     if request.is_expired():
                         if request.should_retry():
                             retry_requests.append(request_id)
                         else:
                             expired_requests.append(request_id)
                 
-                # Handle retries
+                # Give an expired request another window, and say plainly
+                # that nothing was re-sent.
+                #
+                # This branch used to log "Retrying request X (retry 1/3)" with
+                # no re-issue behind it -- measured: one retry claim in the log,
+                # zero calls to send_request. PendingRequest did not store
+                # system_name or data, so there was nothing to re-send from;
+                # that is what the comment "Implementation would depend on the
+                # specific request type" was really recording. Both fields are
+                # captured now, so a re-issue is finally POSSIBLE.
+                #
+                # It is still not DONE, deliberately. Nothing marks a request
+                # complete when its response arrives -- set_response() and
+                # set_completed() have no callers in this handler -- so every
+                # successfully-sent request sits here until it expires whether
+                # or not it was answered. Measured: a request the bus accepted
+                # was still pending 28 s later with no response recorded.
+                # Re-sending on that basis would put four copies of every
+                # command on a 1553B bus. The missing completion path is the
+                # blocker and is tracked separately; until it exists, this
+                # waits rather than retransmits, and the log says so.
                 for request_id in retry_requests:
                     request = self.pending_requests[request_id]
-                    retry_count = request.increment_retry()
-                    logger.warning(f"Retrying request {request_id} (retry {retry_count}/{request.max_retries})")
-                    
-                    # Re-issue the request
-                    # Implementation would depend on the specific request type
+                    attempt = request.increment_retry()
+                    logger.warning(
+                        f"Request {request_id} ({request.command_type}) timed "
+                        f"out with no response; extending its window "
+                        f"({attempt}/{request.max_retries}). NOT re-sent: this "
+                        f"handler has no response-completion path, so a resend "
+                        f"could duplicate a command that did arrive."
+                    )
                 
                 # Remove expired requests
                 for request_id in expired_requests:
                     request = self.pending_requests.pop(request_id)
-                    logger.warning(f"Request {request_id} expired after {request.max_retries} retries")
+                    # request.max_retries here always printed "3", so a
+                    # request that expired on its first window reported
+                    # "expired after 3 retries". The real count is retry_count.
+                    logger.warning(
+                        f"Request {request_id} ({request.command_type}) "
+                        f"expired after {request.retry_count} of "
+                        f"{request.max_retries} windows with no response"
+                    )
                     
                     # Notify of failure
                     if request.command_type and self.response_service:
