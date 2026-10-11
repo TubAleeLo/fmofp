@@ -31,7 +31,7 @@ for _p in (_B20SS, os.path.join(_B20SS, 'FMOFP')):
     if _p not in sys.path:
         sys.path.insert(0, _p)
 
-import FMOFP.Tests  # noqa: F401  -- UTF-8 stdio for piped output
+from FMOFP.Tests import code_only as _code_only  # shared helper
 
 import asyncio
 import inspect
@@ -388,35 +388,6 @@ def test_notifier_never_raises_into_the_batch():
     h.response_service = None
     R.check("no response service -> False, not an exception",
             h._notify_request_timed_out("r", {"status": "ERROR"}) is False)
-
-
-def _code_only(source):
-    """Strip comments and strings, so a defect NAMED in a comment is not
-    mistaken for one still being called.
-
-    Strings go too, f-strings included, so this CANNOT be used to assert
-    anything about logged text -- check the raw source for that. Learned the
-    hard way: a check for "{request.retry_count}" against this output failed
-    against correct code, because the interpolation lives in an f-string.
-
-    The first version of this check tried to strip comments with a string
-    replace that did nothing, and so failed against correct code. The test was
-    wrong, not the fix -- which is the argument for the two assertions above
-    that exercise this helper both ways before it is trusted.
-    """
-    import io
-    import tokenize
-    kept = []
-    try:
-        for tok in tokenize.generate_tokens(io.StringIO(source).readline):
-            if tok.type in (tokenize.COMMENT, tokenize.STRING):
-                continue
-            kept.append(tok.string)
-    except (tokenize.TokenError, IndentationError):
-        # Fall back to a line filter rather than claiming a clean result.
-        return "\n".join(l for l in source.splitlines()
-                          if not l.strip().startswith("#"))
-    return " ".join(kept)
 
 
 def test_pre_fix_get_event_loop_raises_on_a_timer_thread():

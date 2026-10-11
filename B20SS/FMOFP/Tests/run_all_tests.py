@@ -126,6 +126,12 @@ SUITES = [
     # fallback. CI never caught it because it only runs on ubuntu-latest,
     # where WHEEL_DIRS is empty and that path is never exercised.
     (True,  "FMOFP.Tests.test_offline_install_matrix", 180),
+    # The bus send path could not finish: the block-transfer split produced
+    # chunks that were themselves "large", so any message over 33 frames
+    # recursed forever; the transport socket had no timeout; the caller's
+    # future.result() had none either; and one dispatch site submitted to an
+    # event loop nobody ran, so it burned its full 5 s timeout every call.
+    (True,  "FMOFP.Tests.test_send_path_bounds", 300),
     # Production blockers B1/B2/B3/B4: a boot failure that hung the process
     # forever and an error shutdown that exited 0; initialization failures
     # swallowed so boot continued on a half-built system; coroutine stops
