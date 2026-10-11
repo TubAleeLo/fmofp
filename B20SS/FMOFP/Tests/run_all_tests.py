@@ -120,6 +120,12 @@ SUITES = [
     # bugs had never executed; and FCS/FMS delivered timeout notifications via
     # asyncio.get_event_loop() from a threading.Timer thread, where it raises.
     (True,  "FMOFP.Tests.test_request_expiry", 420),
+    # The interpreters CI covers and the interpreters a shipped offline
+    # install supports were not the same set: PyQt6_sip is not abi3, so the
+    # bundled wheel is locked to CPython 3.10 and --offline has no PyPI
+    # fallback. CI never caught it because it only runs on ubuntu-latest,
+    # where WHEEL_DIRS is empty and that path is never exercised.
+    (True,  "FMOFP.Tests.test_offline_install_matrix", 180),
     # Production blockers B1/B2/B3/B4: a boot failure that hung the process
     # forever and an error shutdown that exited 0; initialization failures
     # swallowed so boot continued on a half-built system; coroutine stops
