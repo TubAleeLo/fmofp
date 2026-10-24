@@ -147,6 +147,14 @@ SUITES = [
     # Story C14.5: FCS mode vocabulary, control-input saturation and the
     # one-way FMS -> FCS coupling, against a live system.
     (True,  "FMOFP.Tests.test_flight_control_live", 420),
+    # Story C25.1, the FCS half: the FCS's command words were invented from
+    # a private 0x4000 base rather than derived from the address book, so
+    # 0x4007 decoded to RT address 8 -- Power Management -- and every FCS
+    # mode change and status request went out addressed there. Its data
+    # words had two incompatible encodings, one of them with no callers and
+    # nothing to decode it, and an unrecognised mode or surface was encoded
+    # as a different one rather than refused.
+    (True,  "FMOFP.Tests.test_fcs_wire_format", 180),
     # Story C14.6: the predefined message facade -- initialisation, the three
     # accepted radar-mode input forms, rejection, and request-ID contracts.
     (True,  "FMOFP.Tests.test_predefined_messages_live", 420),

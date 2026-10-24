@@ -634,6 +634,17 @@ def test_pending_request_can_describe_itself():
     R.check("send_request can inherit a retry budget",
             "inherited_retries" in sig.parameters)
 
+    # STEALTH, not CRUISE. This fixture used to send {"mode": "CRUISE"} and
+    # get a request ID back, which is exactly the defect story C25.1's FMS
+    # half turned up: CRUISE is not one of the FMS's five modes
+    # (FlightManagementSystem.set_mode's valid_modes are NORMAL, COMBAT,
+    # STEALTH, TRAINING, EMERGENCY), and the mode packer's
+    # `.get(name.upper(), 0)` default turned any unrecognised name into 0,
+    # which is NORMAL. So this fixture was transmitting a command to enter
+    # NORMAL and reading it as a successful send of CRUISE. The packer
+    # refuses an unknown mode now, so the payload has to be a real one --
+    # which is what this test wanted all along; it is about the retry
+    # budget, not about mode validity.
     async def seeded():
         class _Bus:
             async def send_message(self, cw, dw, rid, md):
@@ -643,7 +654,7 @@ def test_pending_request_can_describe_itself():
         h.started = True
         h.pending_requests.clear()
         rid = await h.send_request("flightManagementSystem", "mode_change",
-                                   {"mode": "CRUISE"}, inherited_retries=2)
+                                   {"mode": "STEALTH"}, inherited_retries=2)
         entry = h.pending_requests.get(rid)
         return entry.retry_count if entry else None, entry
 
@@ -651,6 +662,27 @@ def test_pending_request_can_describe_itself():
     R.check("and the new entry carries it", count == 2, f"retry_count={count}")
     R.check("while still recording its own inputs",
             entry is not None and entry.system_name == "flightManagementSystem")
+
+    # And the mode this fixture used to send is now refused outright, with no
+    # request ID and no pending entry left behind -- rather than being
+    # transmitted as a command to enter NORMAL.
+    async def bogus():
+        class _Bus:
+            async def send_message(self, cw, dw, rid, md):
+                return {'ok': True}
+        h = mod.get_fms_message_handler()
+        h.sendMsg = _Bus()
+        h.started = True
+        h.pending_requests.clear()
+        rid = await h.send_request("flightManagementSystem", "mode_change",
+                                   {"mode": "CRUISE"})
+        return rid, len(h.pending_requests)
+
+    rid, left_pending = asyncio.run(bogus())
+    R.check("a mode the FMS does not have returns no request ID",
+            rid is None, repr(rid))
+    R.check("...and leaves nothing pending behind it",
+            left_pending == 0, str(left_pending))
 
 
 def test_every_pending_mutation_is_guarded():

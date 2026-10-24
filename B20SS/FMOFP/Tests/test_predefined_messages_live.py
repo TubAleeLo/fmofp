@@ -182,27 +182,41 @@ async def body(sm):
         issued.append(rid)
         check(f"{label}() returns a request ID", is_request_id(rid), repr(rid))
 
-    # ── C25.1, the FCS half: still refused, and deliberately so ──────────
+    # ── C25.1, the FCS half: these now send and carry a payload ──────────
     #
-    # The FCS can be given a data command word in two lines, and that was
-    # tried. It makes the message travel EMPTY: fcs_controlSurfaceRequest and
-    # fcs_flightModeRequest define no to_data_words(), and _pack_data()
-    # handles radars only, so the send falls through to the default format.
-    # Measured: Data words: ['0000000000000000'] -- surface, position and rate
-    # not encoded. A request ID for a payload-less command is worse than a
-    # refusal, because it looks like the command was sent.
+    # Both used to return None, because registering the FCS's data command
+    # word made the message travel EMPTY -- fcs_controlSurfaceRequest and
+    # fcs_flightModeRequest had no to_data_words(), and _pack_data() handles
+    # radars only, so the send fell through to the default format. Measured
+    # then: Data words: ['0000000000000000'].
     #
-    # These stay labelled defects until the FCS data-word encoding exists.
-    print("\nSTILL OPEN (C25.1) — the FCS families need a data-word encoding first")
+    # They have one now (FMOFP/local_messaging/fcs_wire_format.py), and it is
+    # the encoding the FCS's own handler decodes rather than the orphan
+    # layout that used to sit in encode_1553b(). The mode change is also
+    # routed as "mode_change" rather than "data", so it resolves to
+    # FCS_MODE_CHANGE_REQUEST -- the command word the FCS's mode handler is
+    # registered against.
+    #
+    # See FMOFP/Tests/test_fcs_wire_format.py for the wire-level assertions;
+    # what this suite adds is that the live facade returns a correlatable ID.
+    print("\nC25.1 — the FCS families send, and return an ID that correlates")
 
-    FCS_OPEN = (
+    FCS_FIXED = (
         ('request_flight_mode_change', messages.request_flight_mode_change("COMBAT")),
         ('request_control_surface_change', messages.request_control_surface_change("aileron", 0.3)),
     )
-    for label, coro in FCS_OPEN:
-        result = await asyncio.wait_for(coro, timeout=30.0)
-        check(f"DEFECT: {label}() still returns None, pending an FCS encoding",
-              result is None, repr(result))
+    for label, coro in FCS_FIXED:
+        rid = await asyncio.wait_for(coro, timeout=30.0)
+        issued.append(rid)
+        check(f"{label}() returns a request ID", is_request_id(rid), repr(rid))
+
+    # And a mode the FCS does not have is refused rather than being turned
+    # into a command to enter NORMAL, which is what the old packer default
+    # did. No request ID exists for it, so nothing goes in `issued`.
+    refused = await asyncio.wait_for(
+        messages.request_flight_mode_change("CRUISE"), timeout=30.0)
+    check("a mode the FCS does not have is refused, not silently remapped",
+          refused is None, repr(refused))
 
     # ── non-tautological guards ──────────────────────────────────────────
     print("\nNON-TAUTOLOGICAL — these must not pass by accident")

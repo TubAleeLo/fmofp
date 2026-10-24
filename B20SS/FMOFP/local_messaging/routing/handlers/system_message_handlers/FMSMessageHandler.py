@@ -32,6 +32,14 @@ from FMOFP.local_messaging.command_word_map import register_command_word, valida
 logger = get_logger()
 
 # Import command word maps from main module
+# The control-input encoding is the FCS's: this handler forwards control
+# input to the FCS (see the FCS_CONTROL_INPUT_REQUEST command word below).
+# The mode encoding is the FMS's own, which is a different vocabulary -- see
+# _pack_data.
+from FMOFP.local_messaging.fcs_wire_format import control_input_data_words
+from FMOFP.local_messaging.messageConfigurations.fms_tactical_data import (
+    fms_mode_data_words,
+)
 from FMOFP.local_messaging.command_word_map import (
     MODE_REQUEST_MAP, STATUS_REQUEST_MAP, DATA_REQUEST_MAP
 )
@@ -387,9 +395,15 @@ class FMSMessageHandler:
         mode_value = None
         mode_name = None
         
-        # Extract mode name from data based on its type
-        if isinstance(data, dict) and 'mode_name' in data:
-            mode_name = data['mode_name']
+        # Extract mode name from data based on its type.
+        #
+        # 'mode' is accepted as well as 'mode_name'. It was not, and callers
+        # pass it: {"mode": "STEALTH"} matched none of these branches, so
+        # mode_name stayed None and the `.get(..., 0)` default below turned
+        # it into 0 -- NORMAL. The mode was not merely lost, it was replaced
+        # with a different command, and the send reported success.
+        if isinstance(data, dict) and ('mode_name' in data or 'mode' in data):
+            mode_name = data.get('mode_name', data.get('mode'))
             logger.info(f"[FMS_MSGR_HNDLR] Mode name extracted from dictionary: {mode_name}")
         elif hasattr(data, 'value'):
             mode_value = data.value
@@ -399,62 +413,55 @@ class FMSMessageHandler:
             mode_name = data
             logger.info(f"[FMS_MSGR_HNDLR] Mode name as string: {mode_name}")
         
-        # Map mode name to value
+        # Map mode name to value.
+        #
+        # The table written out here carried the comment "aligned with
+        # FlightControlSystem modes", and it was not: it listed the FCS's
+        # NORMAL/COMBAT/PRECISION/AUTOPILOT/TERRAIN/EMERGENCY while this is
+        # the FMS's mode packer, and the FMS's own five modes
+        # (FlightManagementSystem.set_mode's valid_modes, and the encoder and
+        # decoder in fms_tactical_data) are
+        # NORMAL/COMBAT/STEALTH/TRAINING/EMERGENCY. So STEALTH and TRAINING,
+        # which are real FMS modes, were not in the table at all and fell
+        # through the `.get(..., 0)` default to 0 -- NORMAL. An FMS mode
+        # change to STEALTH was transmitted as a change to NORMAL.
+        # EMERGENCY, the one that matters most, was encoded as the FCS's 5
+        # where the FMS decoder reads 4 and so names it as nothing.
+        #
+        # fms_mode_data_words() is the FMS vocabulary, shared with the
+        # tactical-data codec, and it raises rather than defaulting: the
+        # caller is inside send_request's try/except, so an unknown mode is
+        # refused instead of being turned into a different command.
         if mode_value is None:
-            # Map string mode to value - aligned with FlightControlSystem modes
-            mode_map = {
-                "NORMAL": 0,     
-                "COMBAT": 1,     
-                "PRECISION": 2,  
-                "AUTOPILOT": 3,  
-                "TERRAIN": 4,   
-                "EMERGENCY": 5   
-            }
-            if mode_name:
-                mode_value = mode_map.get(mode_name.upper(), 0)  # Default to NORMAL (0) not 1
-                logger.info(f"[FMS_MSGR_HNDLR] Mapped mode {mode_name} to value: {mode_value}")
-            else:
-                # Default to NORMAL mode value as fallback
-                mode_value = 0  # NORMAL mode (changed from 1)
-                logger.info(f"[FMS_MSGR_HNDLR] Using default mode value: {mode_value}")
-            
+            words = fms_mode_data_words(mode_name)
+            logger.info(f"[FMS_MSGR_HNDLR] Mapped mode {mode_name} to {words}")
+            return words
+
         # Format as 16-bit binary string
         return [format(mode_value, '016b')]
         
     def _pack_control_input_data(self, data: Any) -> list:
-        """Pack control input data into binary format for message transmission."""
-        # Extract control surface and value information
-        control_type = None
-        control_value = 0.0
-        
-        if isinstance(data, dict):
-            control_type = data.get('control_type')
-            control_value = data.get('value', 0.0)
-        
-        if not control_type:
-            logger.error("[FMS_MSGR_HNDLR] Missing control_type in control input data")
-            return [format(0, '016b'), format(0, '016b')]
-        
-        # Map control type to code
-        control_map = {
-            "aileron": 1,
-            "elevator": 2,
-            "rudder": 3,
-            "throttle": 4,
-            "flaps": 5,
-            "speedbrake": 6,
-            "gear": 7
-        }
-        
-        control_code = control_map.get(control_type.lower(), 0)
-        
-        # Scale control value from float [-1.0, 1.0] to int [0, 1000]
-        # Center point is 500 (0.0), full negative is 0 (-1.0), full positive is 1000 (1.0)
-        scaled_value = int((control_value + 1.0) * 500)
-        scaled_value = max(0, min(1000, scaled_value))  # Clamp to valid range
-        
-        # Pack into data words
-        return [format(control_code, '016b'), format(scaled_value, '016b')]
+        """
+        Pack control input data into data words.
+
+        Fifth copy of the FCS control-input encoding, now the shared one in
+        fcs_wire_format. Same codes, same scaling; the difference is that a
+        missing or unrecognised control type used to become code 0 (which is
+        not a surface, so the FCS answered "no control surface specified"
+        after the command had already been sent) and is now refused before
+        anything reaches the bus.
+        """
+        if not isinstance(data, dict):
+            raise ValueError(
+                f"control input data must be a dict with 'control_type' and "
+                f"'value', got {type(data).__name__}"
+            )
+
+        return control_input_data_words(
+            data.get('control_type'),
+            data.get('value', 0.0),
+            rate=data.get('rate'),
+        )
     
     def _create_request(self, system_name: str, request_type: str, data: Any, command_word: str, msg_type: Optional[str] = None) -> Optional[Dict]:
         """
