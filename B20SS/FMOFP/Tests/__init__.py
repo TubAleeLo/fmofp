@@ -52,6 +52,13 @@ def code_only(source: str) -> str:
     That last one is the limit worth remembering: f-strings go as well, so this
     can say nothing about logged text. Check raw source for that.
 
+    A fifth mistake, and the reason code_has() exists below: the result is
+    tokens joined by SPACES, so `self.log_level` comes back as
+    `self . log_level` and a natural-looking substring check for
+    "file_handler.setLevel(self.log_level)" finds nothing in correct source.
+    Match with code_has(), which ignores whitespace on both sides, rather than
+    spelling the spaces out by hand.
+
     Exercise it both ways before trusting a result -- it should flag a planted
     call and spare a commented mention.
     """
@@ -69,3 +76,16 @@ def code_only(source: str) -> str:
         return "\n".join(l for l in source.splitlines()
                           if not l.strip().startswith("#"))
     return " ".join(kept)
+
+
+def code_has(source: str, needle: str) -> bool:
+    """True when `needle` appears in `source` as CODE, ignoring whitespace.
+
+    Wraps code_only() and strips whitespace from both sides, so a needle can
+    be written the way the code reads -- "file_handler.setLevel(self.log_level)"
+    -- rather than the way code_only() emits it, token by token with spaces
+    between. Comments and string literals are still invisible, with the same
+    consequence: this cannot see logged text.
+    """
+    compact = "".join(code_only(source).split())
+    return "".join(needle.split()) in compact

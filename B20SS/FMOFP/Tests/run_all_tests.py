@@ -148,6 +148,13 @@ SUITES = [
     # Story C14.5: FCS mode vocabulary, control-input saturation and the
     # one-way FMS -> FCS coupling, against a live system.
     (True,  "FMOFP.Tests.test_flight_control_live", 420),
+    # H21: <level> in startupConfiguration.xml reached the console only. The
+    # file handler was setLevel(logging.DEBUG), hardcoded, so the one knob
+    # for how much to log governed the terminal and not the 250MB file --
+    # measured at <level>error</level>: console 6 of 15 records, file 9 of
+    # 15, including all five levels from the root logger, which is the logger
+    # every SysLogger call delegates to. The file was named ERROR_*.log.
+    (True,  "FMOFP.Tests.test_logging_levels", 180),
     # A failing suite has to be diagnosable from the CI log. The 60-line
     # tail excerpt could clip the suite's own verdict entirely: on
     # 2026-10-24 test_weather_radar_live failed, printed 36,130 lines, and

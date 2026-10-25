@@ -100,9 +100,60 @@ class PendingRequest:
 class FMSMessageHandler:
     """
     Message handler for the Flight Management System
-    
+
     Processes incoming messages and routes them to the appropriate
     components of the Flight Management System.
+
+    WHAT IS AND IS NOT LIVE HERE (measured 2026-10-25, on d0e8abc)
+    --------------------------------------------------------------
+    Read this before adding to the request/response machinery below. It was
+    picked off the backlog as "nothing correlates an inbound response to an
+    FMS-originated request", which is true and also beside the point: nothing
+    ORIGINATES requests through this handler either.
+
+      * send_request() has ZERO callers in the package. The predefined-message
+        facade (Interfaces/predefinedMessages/fms_messages.py) sends all five
+        of its FMS families through RadarMessageHandler.send_request instead.
+      * Consequently PendingRequest, set_response(), set_completed(),
+        _cleanup_pending_requests() and the cleanup timer form a parallel
+        request/response subsystem with no production traffic. Measured: after
+        two facade sends that both returned request IDs, this handler's
+        pending_requests held 0 entries.
+      * None of the seven _handle_* methods below fires on a live boot.
+        Measured by wrapping all seven and booting the real application
+        through Tests/live_system.py: 0 calls each.
+      * Only three of the seven are even registered, because the FMS's 18
+        command-word NAMES collapse onto 6 distinct VALUES --
+        register_command_word() derives the word count from the message type,
+        and all six FMS data types fall through to the same default of 3 --
+        while AsyncMessageHandler.register_handler silently skips a word that
+        is already taken. The surviving map is:
+
+            ...0001  _handle_status_request    FMS_STATUS_REQUEST
+            ...0010  _handle_fms_command       FMS_MODE_CHANGE, FMS_COMMAND
+            ...0011  _handle_attitude_update   FMS_FLIGHT_DATA, UPDATE_ATTITUDE,
+                                               UPDATE_NAVIGATION, UPDATE_VELOCITY,
+                                               TACTICAL_STATUS, EXECUTE_MANEUVER
+
+        so _handle_mode_change, _handle_navigation_update,
+        _handle_execute_maneuver and _handle_generic_fms_message are
+        unreachable. _handle_mode_change is additionally registered under the
+        key "FMS_SET_MODE", which is not a name in FMS_COMMAND_WORDS at all,
+        so it is skipped with a warning.
+      * No FMS RESPONSE command word is registered as a handler.
+
+    The live FMS request path does correlate: those three facade sends had
+    their pending entries removed from RadarMessageHandler within 1 s, checked
+    again at +5 s and +15 s.
+
+    So the gap is not a missing completion step. Before building one here,
+    decide whether this handler is meant to serve inbound FMS 1553B traffic at
+    all. If it is, the word collision and the FMS_SET_MODE key have to be
+    fixed first, and C24.1 with them -- waking _handle_attitude_update means
+    an inbound execute-maneuver command gets handled by the attitude updater,
+    which reports SUCCESS for an update it never applied. Making these
+    handlers reachable while that holds would turn a latent defect into a live
+    one.
     """
     def __init__(self):
         self.async_handler = None
