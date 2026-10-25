@@ -207,11 +207,31 @@ class GCAS:
                 logger.error(f"[GCAS] Poll error: {exc}")
             self._stop_evt.wait(interval)
 
+    # ------------------------------------------------------------------ health
+    def health_report(self):
+        """Report this subsystem's health through the C2.1 contract.
 
-# ── singleton accessor ────────────────────────────────────────────────────────
+        Story C2.2/C2.3: this subsystem exposed none of health_report(),
+        check_health() or is_healthy(), so the sweep could only answer
+        UNKNOWN for it -- "we never asked", indistinguishable from "we
+        asked and it said yes" for any caller that treated UNKNOWN as
+        benign. Measured before this change: 33 of 51 registered
+        components, this one among them, reported UNKNOWN.
 
-_gcas: Optional[GCAS] = None
-_gcas_lock = threading.Lock()
+        The fact reported is whether this class's single daemon worker
+        thread is alive. Nothing new is inferred about the aircraft, and in
+        particular a HEALTHY report here says the ground-collision poll loop
+        is running -- not that the aircraft is clear of terrain. Terrain
+        alerts are get_alerts()'s business.
+
+        The stop event is spelled self._stop_evt here rather than
+        self._running as in the other eight; it is cleared by start() and
+        set by stop().
+        """
+        from FMOFP.Utils.common.health import worker_health
+
+        return worker_health("GCAS", self._thread,
+                             stop_requested=self._stop_evt.is_set())
 
 
 def get_gcas() -> GCAS:
@@ -220,3 +240,8 @@ def get_gcas() -> GCAS:
         if _gcas is None:
             _gcas = GCAS()
     return _gcas
+
+# ── singleton accessor ────────────────────────────────────────────────────────
+
+_gcas: Optional[GCAS] = None
+_gcas_lock = threading.Lock()

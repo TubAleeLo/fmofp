@@ -111,6 +111,27 @@ class HealthReport:
 #: monitoring, fitness monitoring, the CLI threads, and the various airframe
 #: monitors. Any of those being down degrades the simulation without making it
 #: dishonest, and grounding boot on them would make readiness brittle.
+#: The nine safety-critical flight subsystems (story C2.2/C2.3). These are
+#: keyed by COMPONENT REGISTRY key, which is not how story H1 spells them:
+#: SystemManager.SAFETY_CRITICAL_SUBSYSTEMS holds startup LABELS ("FCC",
+#: "ECU", "NavService") because that is what _record_startup_failure() is
+#: given, while sm.components is keyed in snake_case. The two vocabularies
+#: do not join, and anyone adding one set to the other without noticing gets
+#: a silently empty intersection. SAFETY_CRITICAL_LABEL_TO_KEY below is the
+#: mapping, and test_health_and_readiness asserts the two sets correspond
+#: exactly, so they cannot drift apart.
+SAFETY_CRITICAL_LABEL_TO_KEY = {
+    "FCC": "flight_control_computer",
+    "FlightSurfaceService": "flight_surface_service",
+    "HydraulicSystemController": "hydraulic_system_controller",
+    "ECU": "engine_control_unit",
+    "ThrustManagementSystem": "thrust_management_system",
+    "FuelManagementSystem": "fuel_management_system",
+    "PowerManagementSystem": "power_management_system",
+    "GCAS": "gcas",
+    "NavService": "nav_service",
+}
+
 CRITICAL_COMPONENTS = frozenset({
     "bc_listener",
     "rt_listener",
@@ -118,6 +139,22 @@ CRITICAL_COMPONENTS = frozenset({
     "message_routing_service",
     "radar_management",
     "flightManagementSystem",
+    # Story C2.2/C2.3. These nine could not be here before: they exposed no
+    # health interface, so the sweep answered UNKNOWN for every one of them,
+    # and UNKNOWN blocks readiness -- putting them here would have wedged
+    # the boot permanently rather than gating it. That is also why story H1
+    # had to gate on a safety-critical subsystem FAILING TO START rather
+    # than on its health. Each now reports through worker_health(), and a
+    # live boot answers HEALTHY for all nine (measured: the sweep went from
+    # 18 HEALTHY / 33 UNKNOWN to 27 HEALTHY / 24 UNKNOWN, the delta being
+    # exactly these).
+    #
+    # They meet the criterion stated above -- "if this is down, the
+    # simulation cannot move data end to end" -- in the sense that matters
+    # for a flight trainer: an aircraft with a dead flight control computer,
+    # dead surfaces, dead hydraulics or no navigation is not a system that
+    # should report itself ready to train on.
+    *SAFETY_CRITICAL_LABEL_TO_KEY.values(),
 })
 
 
@@ -173,6 +210,66 @@ def probe(name: str, component: Any) -> HealthReport:
         "(health_report(), check_health() or is_healthy())",
         None,
     )
+
+
+def worker_health(name: str, thread: Optional[threading.Thread], *,
+                  stop_requested: bool) -> HealthReport:
+    """Health of a subsystem whose work is done by one background thread.
+
+    Story C2.2/C2.3. Nine safety-critical subsystems exposed no health
+    interface at all, so the sweep reported UNKNOWN for every one of them --
+    measured on a live boot: 51 components, 18 HEALTHY, 33 UNKNOWN, with
+    the flight control computer, the flight surface service, the hydraulic
+    system controller, the ECU, thrust and fuel management, power
+    management, GCAS and the nav service all in the UNKNOWN set. That is
+    also why story H1 could only gate readiness on a safety-critical
+    subsystem FAILING TO START: UNKNOWN blocks readiness, so putting these
+    in CRITICAL_COMPONENTS while they answered UNKNOWN would have wedged
+    the boot permanently.
+
+    The signal is not invented for the occasion. Every one of these
+    subsystems runs exactly one daemon worker thread and already publishes
+    `'running': self._thread is not None and self._thread.is_alive()` from
+    its own get_status(). This surfaces that same fact through the health
+    contract, with a reason attached.
+
+    The polarity of the run flag is NOT uniform across them and is
+    therefore the caller's business, passed in as `stop_requested`:
+
+        FCC, nav, ECU, flight surfaces, power, thrust, hydraulics
+                        self._running / self.running is a STOP event,
+                        cleared by start() and set by stop(), so
+                        stop_requested=self._running.is_set()
+        GCAS            the same, spelled self._stop_evt
+        fuel management self.running is a plain bool set True by start(),
+                        so stop_requested=not self.running
+
+    Reading any of those as "running" because of its name would inverted
+    seven of the nine.
+
+    Three outcomes, matching the module contract:
+
+        UNKNOWN    no thread yet (never started), or stop already
+                   requested. Neither is a fault, and neither is a claim
+                   that the subsystem is working.
+        UNHEALTHY  a thread was created and is not alive. The subsystem was
+                   started and its worker has died, which is the failure
+                   this exists to catch.
+        HEALTHY    the worker is alive and no stop has been requested.
+    """
+    if thread is None:
+        return HealthReport(name, HealthState.UNKNOWN,
+                            "not started: no worker thread", "health_report")
+    if stop_requested:
+        return HealthReport(name, HealthState.UNKNOWN,
+                            f"stop requested; worker {thread.name!r} "
+                            f"{'still running' if thread.is_alive() else 'stopped'}",
+                            "health_report")
+    if not thread.is_alive():
+        return HealthReport(name, HealthState.UNHEALTHY,
+                            f"worker thread {thread.name!r} is not alive",
+                            "health_report")
+    return HealthReport(name, HealthState.HEALTHY, "", "health_report")
 
 
 class DelegatedHealth:

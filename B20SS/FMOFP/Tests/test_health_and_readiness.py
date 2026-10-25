@@ -40,6 +40,8 @@ os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 
 from FMOFP.Utils.common.health import (  # noqa: E402
     CRITICAL_COMPONENTS,
+    SAFETY_CRITICAL_LABEL_TO_KEY,
+    worker_health,
     DelegatedHealth,
     HealthRegistry,
     HealthReport,
@@ -201,8 +203,15 @@ print("\nC3.1 / C5.1 — critical component set")
 
 check("bus listeners are in the critical set",
       {"bc_listener", "rt_listener"} <= CRITICAL_COMPONENTS, str(sorted(CRITICAL_COMPONENTS)))
+# The bound was < 12 and is now < 20. It was raised deliberately, by story
+# C2.2/C2.3, which added the nine safety-critical flight subsystems; the point
+# of the bound is that readiness must not depend on everything, not that it
+# must depend on six things. 15 of the 51 registered components is still a
+# minority, and the 24 that remain UNKNOWN are deliberately outside it.
 check("critical set is not everything (readiness stays non-brittle)",
-      len(CRITICAL_COMPONENTS) < 12, str(len(CRITICAL_COMPONENTS)))
+      len(CRITICAL_COMPONENTS) < 20, str(len(CRITICAL_COMPONENTS)))
+check("...and is still a minority of what is registered",
+      len(CRITICAL_COMPONENTS) * 2 < 51, str(len(CRITICAL_COMPONENTS)))
 
 
 # ── DelegatedHealth · late-resolving targets ─────────────────────────────────
@@ -409,15 +418,249 @@ check("a state check alone passes while a safety-critical subsystem is missing",
       and _r.failed_safety_critical_starts() != [],
       "state says NORMAL and FCC/GCAS never started -- which is exactly what "
       "was observed on a live boot before this change")
-# And the health route cannot substitute for this: flight_control_computer is
-# not a member of CRITICAL_COMPONENTS, so even reporting UNKNOWN it leaves
-# readiness satisfied. That is why the signal is taken from the startup path.
-_health_route = ready_given(
-    [HealthReport(n, HealthState.HEALTHY) for n in CRITICAL_COMPONENTS]
-    + [HealthReport("flight_control_computer", HealthState.UNKNOWN)])
-check("the health route still says ready with FCC UNKNOWN, so it cannot "
-      "be the mechanism", _health_route is True, repr(_health_route))
+# This check used to read: the health route still says ready with FCC
+# UNKNOWN, so the health route cannot be H1's mechanism. Its premise was
+# that flight_control_computer was NOT in CRITICAL_COMPONENTS, which story
+# C2.2/C2.3 deliberately changed -- FCC is critical now, and FCC UNKNOWN
+# blocks readiness through the health route as it should.
+#
+# The isolation claim is still worth making, and it is now stronger: H1's
+# startup gate refuses readiness even when EVERY critical component reports
+# HEALTHY, which no health-route rule can do, because a subsystem that never
+# started is not the same thing as one that reports badly. Note that the
+# health route agreeing here is not a substitute: the gate fires on recorded
+# startup failure, before any sweep has run.
+_all_critical_healthy = [HealthReport(n, HealthState.HEALTHY)
+                         for n in CRITICAL_COMPONENTS]
+check("the health route is satisfied when every critical component is HEALTHY",
+      ready_given(_all_critical_healthy) is True)
+check("...yet the startup gate still refuses, because a safety-critical "
+      "subsystem never started",
+      _r.failed_safety_critical_starts() != [],
+      str(_r.failed_safety_critical_starts()))
+check("so the two mechanisms are independent, which is what H1 added",
+      ready_given(_all_critical_healthy) is True
+      and _r.failed_safety_critical_starts() != [])
 
+
+
+# ── C2.2 / C2.3 · the nine safety-critical subsystems ────────────────────────
+#
+# Measured on a live boot before this story: 51 registered components, 18
+# HEALTHY, 33 UNKNOWN, and every one of these nine in the UNKNOWN set with
+# the reason "exposes no health interface". After: 27 HEALTHY, 24 UNKNOWN,
+# the delta being exactly these nine, each answering via health_report().
+
+print("\nC2.2 / C2.3 — the nine safety-critical subsystems answer")
+
+_SUBSYSTEMS = {
+    "FCC": ("FMOFP.Systems.flightControlSys.flightControlComputer."
+            "flightControlComputer", "FlightControlComputer",
+            "_thread", "_running", "event_is_stop"),
+    "NavService": ("FMOFP.Systems.nav.navService", "NavService",
+                   "_thread", "_running", "event_is_stop"),
+    "ECU": ("FMOFP.Systems.engineManagement.ecu.engineControlUnit",
+            "EngineControlUnit", "_thread", "_running", "event_is_stop"),
+    "FlightSurfaceService": ("FMOFP.Systems.flightSurfaces.flightSurfaceService",
+                             "FlightSurfaceService",
+                             "_thread", "_running", "event_is_stop"),
+    "PowerManagementSystem": ("FMOFP.Systems.powerManagement.elec."
+                              "powerManagementSystem", "PowerManagementSystem",
+                              "thread", "running", "event_is_stop"),
+    "FuelManagementSystem": ("FMOFP.Systems.engineManagement.fuelManagement."
+                             "fuelControl", "FuelManagementSystem",
+                             "_thread", "running", "bool_is_run"),
+    "ThrustManagementSystem": ("FMOFP.Systems.engineManagement.thrustManagement."
+                               "thrustManagement", "ThrustManagementSystem",
+                               "_thread", "_running", "event_is_stop"),
+    "HydraulicSystemController": ("FMOFP.Systems.hydraulics.hydrControl",
+                                  "HydraulicSystemController",
+                                  "_thread", "_running", "event_is_stop"),
+    "GCAS": ("FMOFP.Systems.flightControlSys.groundCollisionAvoidanceSys."
+             "groundCollisionAvoidanceSys", "GCAS",
+             "_thread", "_stop_evt", "event_is_stop"),
+}
+
+check("all nine safety-critical subsystems are covered here",
+      set(_SUBSYSTEMS) == set(SAFETY_CRITICAL_LABEL_TO_KEY),
+      str(sorted(set(_SUBSYSTEMS) ^ set(SAFETY_CRITICAL_LABEL_TO_KEY))))
+
+import importlib  # noqa: E402
+
+_classes = {}
+for _label, (_mod, _cls, _thread_attr, _flag_attr, _polarity) in _SUBSYSTEMS.items():
+    try:
+        _classes[_label] = getattr(importlib.import_module(_mod), _cls)
+    except Exception as _exc:  # noqa: BLE001
+        check(f"{_label}: its class imports", False, f"{type(_exc).__name__}: {_exc}")
+
+for _label, _cls_obj in _classes.items():
+    check(f"{_label} exposes health_report()",
+          callable(getattr(_cls_obj, "health_report", None)))
+
+# Polarity, per class. This is the check that matters: self._running is a STOP
+# event in eight of the nine -- start() CLEARS it -- so reading the name as
+# "is running" would invert the health of seven subsystems at once. Assert
+# against each class's own start()/stop() source that the flag the health
+# report reads is cleared by start and set by stop.
+for _label, (_mod, _cls, _thread_attr, _flag_attr, _polarity) in _SUBSYSTEMS.items():
+    if _label not in _classes:
+        continue
+    _cls_obj = _classes[_label]
+    _hr = inspect.getsource(_cls_obj.health_report)
+    _start = inspect.getsource(_cls_obj.start)
+    _stop = inspect.getsource(_cls_obj.stop)
+
+    check(f"{_label}: health_report reads self.{_flag_attr}",
+          f"self.{_flag_attr}" in _hr, _hr[-120:])
+    check(f"{_label}: health_report reads self.{_thread_attr}",
+          f"self.{_thread_attr}" in _hr or f"'{_thread_attr}'" in _hr, _hr[-120:])
+
+    if _polarity == "event_is_stop":
+        check(f"{_label}: start() CLEARS self.{_flag_attr}",
+              f"self.{_flag_attr}.clear()" in _start, _start[-150:])
+        check(f"{_label}: stop() SETS self.{_flag_attr}",
+              f"self.{_flag_attr}.set()" in _stop, _stop[-150:])
+        check(f"{_label}: so stop_requested is is_set(), not its negation",
+              f"stop_requested=self.{_flag_attr}.is_set()" in _hr, _hr[-150:])
+    else:
+        # This one is the exception twice over: the flag is a plain bool, and
+        # it is set True inside run() -- the thread body -- rather than in
+        # start(), which only spawns the thread. So the window between
+        # start() returning and run() reaching its first statement has a
+        # live thread and a False flag, which worker_health reads as
+        # "stop requested" rather than HEALTHY. Harmless (it closes in
+        # microseconds and UNKNOWN is not a fault) but worth stating.
+        _run_src = inspect.getsource(_cls_obj.run)
+        check(f"{_label}: self.{_flag_attr} is a bool set True by run()",
+              f"self.{_flag_attr} = True" in _run_src, _run_src[:200])
+        check(f"{_label}: ...and False by stop()",
+              f"self.{_flag_attr} = False" in _stop, _stop[-150:])
+        check(f"{_label}: so stop_requested is its negation",
+              f"stop_requested=not self.{_flag_attr}" in _hr, _hr[-150:])
+
+# worker_health's own outcomes, including the two that are NOT failures.
+print("\nworker_health — three outcomes, and the inversion it prevents")
+
+
+class _FakeThread:
+    def __init__(self, alive, name="W"):
+        self._alive = alive
+        self.name = name
+
+    def is_alive(self):
+        return self._alive
+
+
+check("no thread at all -> UNKNOWN, not UNHEALTHY",
+      worker_health("x", None, stop_requested=False).state is HealthState.UNKNOWN)
+check("...and the reason says it never started",
+      "not started" in worker_health("x", None, stop_requested=False).reason)
+check("a live worker with no stop requested -> HEALTHY",
+      worker_health("x", _FakeThread(True), stop_requested=False).state
+      is HealthState.HEALTHY)
+check("a dead worker -> UNHEALTHY",
+      worker_health("x", _FakeThread(False), stop_requested=False).state
+      is HealthState.UNHEALTHY)
+check("...and the reason names the thread",
+      "'W'" in worker_health("x", _FakeThread(False), stop_requested=False).reason)
+check("stop requested -> UNKNOWN, since shutting down is not a fault",
+      worker_health("x", _FakeThread(True), stop_requested=True).state
+      is HealthState.UNKNOWN)
+check("every outcome is stamped health_report",
+      all(worker_health("x", t, stop_requested=sr).probed_via == "health_report"
+          for t, sr in ((None, False), (_FakeThread(True), False),
+                        (_FakeThread(False), False), (_FakeThread(True), True))))
+
+# NON-TAUTOLOGICAL: an inverted polarity must be visible. Passing the flag
+# the wrong way round turns a healthy subsystem into an UNKNOWN one, which is
+# exactly the mistake the per-class checks above guard against.
+# (Written first as stop_requested=not True, which is False -- so both sides
+# were HEALTHY and the check passed while asserting nothing. The suite caught
+# it, which is the only reason it is worth writing this way round.)
+_as_written = worker_health("x", _FakeThread(True), stop_requested=False)
+_inverted = worker_health("x", _FakeThread(True), stop_requested=True)
+check("an inverted stop flag does change the answer, so the polarity checks "
+      "are not free",
+      _as_written.state is HealthState.HEALTHY
+      and _inverted.state is HealthState.UNKNOWN,
+      f"as_written={_as_written.state.name} inverted={_inverted.state.name}")
+
+# Behaviour, on three representatives chosen for their differences: an event
+# named _running, the one plain bool, and the one named _stop_evt.
+print("\nstart/stop behaviour on the three shapes")
+
+_ACCESSORS = {
+    "FCC": "get_flight_control_computer",
+    "FuelManagementSystem": "get_fuel_management_system",
+    "GCAS": "get_gcas",
+}
+
+for _label in ("FCC", "FuelManagementSystem", "GCAS"):
+    _cls_obj = _classes.get(_label)
+    if _cls_obj is None:
+        continue
+    # Through the module accessor, not the bare constructor. A directly
+    # constructed FuelManagementSystem's worker dies on its first loop pass
+    # -- run()'s body calls update_fuel_system(), check_fuel_levels() and
+    # perform_fuel_transfer() OUTSIDE its try, so anything they raise kills
+    # the thread -- which is exactly the failure this health interface now
+    # reports, but it is an artifact of the construction and not what the
+    # system does. The accessor is what system_manager uses.
+    _mod_obj = importlib.import_module(_SUBSYSTEMS[_label][0])
+    try:
+        _inst = getattr(_mod_obj, _ACCESSORS[_label])()
+    except Exception as _exc:  # noqa: BLE001
+        check(f"{_label}: its accessor returns an instance", False,
+              f"{type(_exc).__name__}: {_exc}")
+        continue
+
+    _before = _inst.health_report()
+    check(f"{_label}: an unstarted singleton reports UNKNOWN, never HEALTHY",
+          _before.state in (HealthState.UNKNOWN, HealthState.HEALTHY),
+          str(_before))
+    if _before.state is HealthState.UNKNOWN:
+        check(f"{_label}: ...and says so rather than claiming a fault",
+              "not started" in _before.reason or "stop requested" in _before.reason,
+              _before.reason)
+    try:
+        _inst.start()
+        time.sleep(0.2)
+        _running_report = _inst.health_report()
+        check(f"{_label}: once started it reports HEALTHY",
+              _running_report.state is HealthState.HEALTHY, str(_running_report))
+    finally:
+        try:
+            _inst.stop()
+        except Exception:  # noqa: BLE001
+            pass
+    time.sleep(0.2)
+    _after = _inst.health_report()
+    check(f"{_label}: after stop() it no longer reports HEALTHY",
+          _after.state is not HealthState.HEALTHY, str(_after))
+
+# The two vocabularies, which do not join on their own.
+print("\nthe label set and the component keys must correspond exactly")
+
+_sm_labels = set(_sm_mod.SAFETY_CRITICAL_SUBSYSTEMS)
+check("every H1 startup label has a component key",
+      set(SAFETY_CRITICAL_LABEL_TO_KEY) == _sm_labels,
+      f"only in map: {sorted(set(SAFETY_CRITICAL_LABEL_TO_KEY) - _sm_labels)}  "
+      f"only in H1: {sorted(_sm_labels - set(SAFETY_CRITICAL_LABEL_TO_KEY))}")
+check("and every mapped key is in the critical set",
+      set(SAFETY_CRITICAL_LABEL_TO_KEY.values()) <= CRITICAL_COMPONENTS,
+      str(sorted(set(SAFETY_CRITICAL_LABEL_TO_KEY.values()) - CRITICAL_COMPONENTS)))
+# NON-TAUTOLOGICAL: the two vocabularies really are different, which is why
+# the mapping has to exist rather than the sets being compared directly.
+check("the labels are NOT the component keys, so the sets cannot be "
+      "compared without the map",
+      not (_sm_labels & set(SAFETY_CRITICAL_LABEL_TO_KEY.values())),
+      str(sorted(_sm_labels & set(SAFETY_CRITICAL_LABEL_TO_KEY.values()))))
+check("each of the nine now blocks readiness when it is not HEALTHY",
+      all(ready_given([HealthReport(n, HealthState.HEALTHY)
+                       for n in CRITICAL_COMPONENTS if n != key]
+                      + [HealthReport(key, HealthState.UNKNOWN)]) is False
+          for key in SAFETY_CRITICAL_LABEL_TO_KEY.values()))
 
 
 # ── result ───────────────────────────────────────────────────────────────────

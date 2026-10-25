@@ -322,6 +322,33 @@ class FuelManagementSystem:
             'transfers': self.transfer_manager.get_status(),
         }
 
+    # ------------------------------------------------------------------ health
+    def health_report(self):
+        """Report this subsystem's health through the C2.1 contract.
+
+        Story C2.2/C2.3: this subsystem exposed none of health_report(),
+        check_health() or is_healthy(), so the sweep could only answer
+        UNKNOWN for it -- "we never asked", indistinguishable from "we
+        asked and it said yes" for any caller that treated UNKNOWN as
+        benign. Measured before this change: 33 of 51 registered
+        components, this one among them, reported UNKNOWN.
+
+        The fact reported is the one this class already publishes from
+        get_status(): whether its single daemon worker thread is alive.
+        Nothing new is inferred about the aircraft.
+
+        This class is the exception among the nine: self.running is a
+        plain bool set True by start() and False by stop(), not an
+        event, so a stop has been requested when it is falsy. Its
+        worker handle is read defensively because start() is what
+        creates it.
+        """
+        from FMOFP.Utils.common.health import worker_health
+
+        return worker_health("FUEL", getattr(self, '_thread', None),
+                             stop_requested=not self.running)
+
+
 def get_fuel_management_system() -> "FuelManagementSystem":
     global _fms_instance
     if _fms_instance is None:

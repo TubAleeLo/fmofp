@@ -259,6 +259,32 @@ class PowerManagementSystem:
         # For example, adjusting power distribution based on commands
 
 
+    # ------------------------------------------------------------------ health
+    def health_report(self):
+        """Report this subsystem's health through the C2.1 contract.
+
+        Story C2.2/C2.3: this subsystem exposed none of health_report(),
+        check_health() or is_healthy(), so the sweep could only answer
+        UNKNOWN for it -- "we never asked", indistinguishable from "we
+        asked and it said yes" for any caller that treated UNKNOWN as
+        benign. Measured before this change: 33 of 51 registered
+        components, this one among them, reported UNKNOWN.
+
+        The fact reported is the one this class already publishes from
+        get_status(): whether its single daemon worker thread is alive.
+        Nothing new is inferred about the aircraft.
+
+        Note the polarity: self.running is a STOP event -- start() clears
+        it and stop() sets it -- so a stop has been requested when it
+        IS set. Reading the name as "is running" would invert this
+        check.
+        """
+        from FMOFP.Utils.common.health import worker_health
+
+        return worker_health("PMS", self.thread,
+                             stop_requested=self.running.is_set())
+
+
 def get_power_management_system() -> PowerManagementSystem:
     global _pms_instance
     if _pms_instance is None:
