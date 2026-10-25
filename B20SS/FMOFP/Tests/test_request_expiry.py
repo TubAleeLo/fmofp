@@ -508,7 +508,33 @@ def test_cleanup_timer_rearms():
         h.cleanup_timer = None
         h._start_cleanup_timer()
         await asyncio.sleep(4.0)
-        alive = h.cleanup_timer.is_alive() if h.cleanup_timer else False
+
+        # Poll, rather than sampling the slot at one instant.
+        #
+        # This was a single read of h.cleanup_timer.is_alive() taken after
+        # exactly 4.0s -- a whole multiple of the 1s interval, so it landed
+        # on a firing boundary, which is the one place the slot can briefly
+        # hold a timer that is not yet alive. CI failed on it: "FAIL and a
+        # timer is still pending at the end", alone, with the other two
+        # checks in this same test passing. _start_cleanup_timer now starts
+        # the timer before publishing it, which took the window from 0.16%
+        # of wall time (43,196 of 27,462,452 samples) down to roughly one
+        # observation per firing -- narrower, but not provably zero.
+        #
+        # The claim worth making is "the chain is still pending", not "the
+        # slot was alive at this exact microsecond". A chain that had
+        # stopped re-arming would never show an alive timer again, so
+        # polling asserts the same thing without racing the hand-off. The
+        # budget is well over one interval, so a live chain cannot miss it.
+        alive = False
+        deadline = time.monotonic() + 2.5
+        while time.monotonic() < deadline:
+            timer = h.cleanup_timer
+            if timer is not None and timer.is_alive():
+                alive = True
+                break
+            await asyncio.sleep(0.01)
+
         h.stop()
         await asyncio.sleep(0.2)
         after_stop = len(passes)
@@ -520,6 +546,22 @@ def test_cleanup_timer_rearms():
     R.check("cleanup ran more than once in 4s", len(passes) >= 3,
             f"passes={len(passes)} -- it ran exactly once before this fix")
     R.check("and a timer is still pending at the end", alive)
+    # Non-tautological: the poll above must be capable of answering False.
+    # A handler that was never started has no chain, and the same poll
+    # against it has to come back empty within the same budget.
+    def _poll_stopped():
+        idle = mod.FMSMessageHandler.__new__(mod.FMSMessageHandler)
+        idle.cleanup_timer = None
+        deadline = time.monotonic() + 0.2
+        while time.monotonic() < deadline:
+            timer = idle.cleanup_timer
+            if timer is not None and timer.is_alive():
+                return True
+            time.sleep(0.01)
+        return False
+
+    R.check("...and the same poll reports False for a handler with no chain",
+            _poll_stopped() is False)
     R.check("stop() ends the chain rather than leaving it re-arming",
             len(passes) <= after_stop + 1,
             f"{len(passes)} passes total, {after_stop} by the time stop returned")

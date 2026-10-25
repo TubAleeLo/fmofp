@@ -41,6 +41,7 @@ Suites deliberately NOT run here, with reasons:
   - setup_env: an import helper, not a test.
 """
 import os
+import re
 import subprocess
 import sys
 import time
@@ -147,6 +148,13 @@ SUITES = [
     # Story C14.5: FCS mode vocabulary, control-input saturation and the
     # one-way FMS -> FCS coupling, against a live system.
     (True,  "FMOFP.Tests.test_flight_control_live", 420),
+    # A failing suite has to be diagnosable from the CI log. The 60-line
+    # tail excerpt could clip the suite's own verdict entirely: on
+    # 2026-10-24 test_weather_radar_live failed, printed 36,130 lines, and
+    # the excerpt was sixty lines of shutdown logging with no failing check
+    # in it. verdict_lines() lifts the suite's markers out by pattern
+    # wherever they sit in the stream.
+    (True,  "FMOFP.Tests.test_runner_reporting", 120),
     # Story C25.1, the FCS half: the FCS's command words were invented from
     # a private 0x4000 base rather than derived from the address book, so
     # 0x4007 decoded to RT address 8 -- Power Management -- and every FCS
@@ -220,6 +228,48 @@ def run_suite(as_module: bool, name: str, timeout_s: int):
 # too few to reach the suite's own verdict past Qt's startup warnings.
 TAIL_LINES = 60
 
+# How many verdict lines to lift out of the stream, wherever they sit in it.
+VERDICT_LINES = 40
+
+
+def verdict_lines(text, limit=VERDICT_LINES):
+    """The suite's own failure lines and score, wherever they are in `text`.
+
+    WHY A TAIL IS NOT ENOUGH. A suite prints its FAIL lines and its "N/M
+    passed" score, and then its fixtures shut a real application down,
+    which logs. test_weather_radar_live emitted 36,130 lines, and the
+    shutdown logging after the summary was longer than the 60-line tail --
+    so the CI excerpt for a genuine failure was sixty lines of
+    "AEWC radar aewc_radar stopped" and not one word about what failed.
+    Measured on the CI log of 2026-10-24: "[harness] FAILED: body returned
+    1" with no failing check anywhere in the excerpt, and the suite does not
+    reproduce locally, so the information was simply gone.
+
+    Lifting these lines out by pattern makes a failing suite diagnosable
+    from the CI log no matter how much it logs afterwards. The tail is still
+    printed, for context around the end.
+    """
+    wanted = []
+    for line in (text or "").splitlines():
+        stripped = line.strip()
+        # The suites' own markers. "FAIL" is matched at the start of the
+        # stripped line so that a log record merely containing the word --
+        # and there are plenty -- does not qualify.
+        if (stripped.startswith("FAIL")
+                or stripped.startswith("✗")
+                or stripped.startswith("[harness]")
+                or stripped.startswith("Failures:")
+                or _SCORE_RE.match(stripped)):
+            wanted.append(line)
+    if len(wanted) > limit:
+        dropped = len(wanted) - limit
+        # Keep the LAST ones: the score and the Failures: block come last.
+        wanted = [f"... {dropped} earlier verdict line(s) omitted"] + wanted[-limit:]
+    return wanted
+
+
+_SCORE_RE = re.compile(r"^\d+/\d+ passed$")
+
 
 def main() -> int:
     _force_utf8_output()
@@ -249,6 +299,16 @@ def main() -> int:
             # log (Sept 2026).
             print("     ┌─ last output " + "─" * 40)
             shown = False
+
+            # The suite's own verdict first, pulled from anywhere in the
+            # stream, because the tail below can miss it entirely.
+            verdict = verdict_lines(out) or verdict_lines(err)
+            if verdict:
+                print("     │ ── the suite's own verdict lines ──────────")
+                for line in verdict:
+                    print("     │ " + line)
+                shown = True
+
             # A suite can end up emitting every record to both streams (for
             # example by adding a console handler when SysLogger has already
             # attached one), leaving stderr byte-identical to stdout. Printing
