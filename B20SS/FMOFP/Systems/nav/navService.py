@@ -23,6 +23,11 @@ class NavService:
     def __init__(self):
         self._running  = threading.Event()
         self._thread   = None
+        # Failure-streak tracking, read by health_report(): the monotonic
+        # time of the first failure in the current unbroken streak, or
+        # None when the last pass succeeded.
+        self._failing_since = None
+        self._last_error = ""
         self._last_gps = 0.0
         self._start_lock = threading.Lock()
 
@@ -112,7 +117,18 @@ class NavService:
             last = now
             try:
                 self._tick(dt)
+                # A pass completed, so the failure streak (if any) is over.
+                self._failing_since = None
+                self._last_error = ""
             except Exception as e:
+                # Stamp the START of the streak, once. health_report()
+                # reports UNHEALTHY when a streak outlives the grace
+                # period, so that a worker kept alive by this very
+                # handler cannot go on reporting HEALTHY while every
+                # pass fails.
+                if self._failing_since is None:
+                    self._failing_since = time.monotonic()
+                self._last_error = f"{type(e).__name__}: {e}"
                 logger.error(f"[NAV] Loop error: {e}")
             time.sleep(0.1)   # 10 Hz INS update
 
@@ -166,7 +182,9 @@ class NavService:
         from FMOFP.Utils.common.health import worker_health
 
         return worker_health("NAV", self._thread,
-                             stop_requested=self._running.is_set())
+                             stop_requested=self._running.is_set(),
+                             failing_since=self._failing_since,
+                             last_error=self._last_error)
 
 
 def get_nav_service() -> NavService:

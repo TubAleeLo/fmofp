@@ -201,10 +201,14 @@ class FuelManagementSystem:
     #: interrupts it.
     ERROR_BACKOFF_S = 5.0
 
-    #: Consecutive failed passes after which health_report() reports
-    #: UNHEALTHY rather than HEALTHY. Three passes of a guarded loop is a
-    #: pattern, not a glitch.
-    UNHEALTHY_AFTER_FAILURES = 3
+    #: How long an unbroken failure streak must last before health_report()
+    #: reports UNHEALTHY. This was UNHEALTHY_AFTER_FAILURES = 3, a count,
+    #: which does not survive being applied to the other eight subsystems:
+    #: their loop cadences run from 0.02 s to 1.0 s and only half of them
+    #: back off on error, so three passes means 15 s on the FCC and 0.3 s on
+    #: the nav service. A duration means the same thing everywhere. None
+    #: here defers to health.DEFAULT_FAILURE_GRACE_S.
+    FAILURE_GRACE_S = None
 
     def __init__(self):
         self.fuel_system = FuelSystem()
@@ -221,7 +225,9 @@ class FuelManagementSystem:
         # it to start() raised "'FuelManagementSystem' object has no
         # attribute '_thread'" from get_status().
         self._thread = None
-        self._consecutive_failures = 0
+        # The monotonic time of the first failure in the current unbroken
+        # streak, or None when the last pass succeeded.
+        self._failing_since = None
         self._last_error = ""
         self.update_interval = 0.1  # seconds
         self._start_lock = threading.Lock()
@@ -335,14 +341,16 @@ class FuelManagementSystem:
                 # nothing", and a liveness-only health check calls that
                 # HEALTHY. health_report() reads these two fields so a
                 # subsystem failing every pass reports UNHEALTHY instead.
-                self._consecutive_failures += 1
+                if self._failing_since is None:
+                    self._failing_since = time.monotonic()
                 self._last_error = f"{type(e).__name__}: {e}"
                 logger.error(
                     f"[FUEL_MGMT] Update pass failed "
-                    f"({self._consecutive_failures} consecutive): {e}")
+                    f"(failing for {time.monotonic() - self._failing_since:.1f}s): {e}")
                 self._running.wait(self.ERROR_BACKOFF_S)
                 continue
-            self._consecutive_failures = 0
+            # A pass completed, so the failure streak (if any) is over.
+            self._failing_since = None
             self._last_error = ""
             self._running.wait(self.update_interval)
 
@@ -402,15 +410,16 @@ class FuelManagementSystem:
     def health_report(self):
         """Report this subsystem's health through the C2.1 contract.
 
-        Story C2.2/C2.3 added this method; this version also reports
-        SUSTAINED FAILURE, which the other eight subsystems do not yet do.
+        Story C2.2/C2.3 added this method; it also reports SUSTAINED
+        FAILURE, which all nine subsystems now do.
 
         Guarding the worker loop (see run()) means a transient error no
         longer kills the thread -- but it also means a permanently broken
         subsystem stays alive, and a liveness-only check would call that
-        HEALTHY forever. The consecutive-failure count run() maintains is
-        passed through so that failing every pass reports UNHEALTHY with
-        the last error attached.
+        HEALTHY forever. The failure streak run() maintains is passed
+        through so that failing continuously past the grace period reports
+        UNHEALTHY with the last error attached. All nine subsystems do this
+        now; this one was first.
 
         This class is no longer the polarity exception among the nine:
         self.running was a plain bool, set True inside run() rather than by
@@ -420,11 +429,15 @@ class FuelManagementSystem:
         """
         from FMOFP.Utils.common.health import worker_health
 
+        from FMOFP.Utils.common.health import DEFAULT_FAILURE_GRACE_S
+
         return worker_health(
             "FUEL", getattr(self, '_thread', None),
             stop_requested=self._running.is_set(),
-            consecutive_failures=self._consecutive_failures,
-            failure_threshold=self.UNHEALTHY_AFTER_FAILURES,
+            failing_since=self._failing_since,
+            failure_grace_s=(self.FAILURE_GRACE_S
+                             if self.FAILURE_GRACE_S is not None
+                             else DEFAULT_FAILURE_GRACE_S),
             last_error=self._last_error)
 
 

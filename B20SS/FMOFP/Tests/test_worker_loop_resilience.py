@@ -24,12 +24,23 @@ Two findings in FuelManagementSystem, both measured.
 
 AND THE CONSEQUENCE OF FIXING THE FIRST. Guarding the loop converts "the
 worker died" into "the worker is alive and achieving nothing", and a
-liveness-only health check calls that HEALTHY forever. So run() counts
-consecutive failures and health_report() passes them to worker_health(),
-which reports UNHEALTHY once a subsystem has failed UNHEALTHY_AFTER_FAILURES
-passes in a row, with the last error attached. The other eight share that
-blind spot until they track failures too; worker_health() defaults to the
-liveness-only behaviour for them.
+liveness-only health check calls that HEALTHY forever. Measured on the real
+FlightControlComputer with every pass raising: thread alive, health HEALTHY,
+reason empty -- and readiness granted, because FCC is in CRITICAL_COMPONENTS.
+
+So every one of the nine now records the START of its current failure streak
+and health_report() passes it to worker_health(), which reports UNHEALTHY
+once a streak outlives the grace period, with the last error attached.
+
+WHY A DURATION AND NOT A COUNT. This was first built as a count of
+consecutive failures with a threshold of 3, and that does not survive being
+applied to the other eight: their loop cadences run from 0.02 s
+(FlightSurfaceService, 50 Hz) to 1.0 s (hydraulics), and four of the nine
+back off 5 s on error while four fall straight through to their normal
+cadence. Three failures therefore means 15 s on the FCC and 0.3 s on the nav
+service -- the same threshold calling a momentary glitch a failure on one
+subsystem and taking a quarter of a minute to notice a dead one on another.
+A wall-clock grace period means the same thing everywhere.
 
 Run:  python3 -m FMOFP.Tests.test_worker_loop_resilience
 """
@@ -51,7 +62,8 @@ import threading
 import time
 import traceback
 
-from FMOFP.Utils.common.health import HealthState, worker_health
+from FMOFP.Utils.common.health import (
+    DEFAULT_FAILURE_GRACE_S, HealthState, worker_health)
 
 
 class _Results:
@@ -184,7 +196,7 @@ def _fuel():
     f = get_fuel_management_system()
     f.update_interval = 0.05
     f.ERROR_BACKOFF_S = 0.1
-    f._consecutive_failures = 0
+    f._failing_since = None
     f._last_error = ""
     return f
 
@@ -221,53 +233,122 @@ def test_one_transient_error_is_not_fatal():
             report.state is HealthState.HEALTHY, str(report))
 
 
-def test_sustained_failure_reports_unhealthy():
-    R.section("alive is not the same as working")
+SINGLETONS = {
+    "FCC": ("FMOFP.Systems.flightControlSys.flightControlComputer."
+            "flightControlComputer", "get_flight_control_computer", "_adjust"),
+    "nav": ("FMOFP.Systems.nav.navService", "get_nav_service", "_tick"),
+    "ECU": ("FMOFP.Systems.engineManagement.ecu.engineControlUnit",
+            "get_engine_control_unit", "_persist"),
+    "surfaces": ("FMOFP.Systems.flightSurfaces.flightSurfaceService",
+                 "get_flight_surface_service", "_persist"),
+    "thrust": ("FMOFP.Systems.engineManagement.thrustManagement."
+               "thrustManagement", "get_thrust_management_system",
+               "check_asymmetry"),
+    "hydraulics": ("FMOFP.Systems.hydraulics.hydrControl",
+                   "get_hydraulic_system_controller", "monitor_pressure"),
+    "fuel": ("FMOFP.Systems.engineManagement.fuelManagement.fuelControl",
+             "get_fuel_management_system", "update_fuel_system"),
+}
 
-    f = _fuel()
-    real = f.update_fuel_system
 
-    def always():
-        raise RuntimeError("pump offline")
+def test_every_subsystem_records_its_failure_streak():
+    R.section("all nine record a streak and hand it to worker_health")
 
-    f.update_fuel_system = always
+    import importlib
+
+    for label, rel in SUBSYSTEMS.items():
+        src = pathlib.Path(os.path.join(_B20SS, rel)).read_text(encoding="utf-8")
+        R.check(f"{label}: stamps _failing_since in its except branch",
+                "self._failing_since = time.monotonic()" in src)
+        R.check(f"{label}: clears it after a successful pass",
+                "self._failing_since = None" in src)
+        R.check(f"{label}: passes it to worker_health",
+                "failing_since=self._failing_since" in src)
+        R.check(f"{label}: and passes the last error with it",
+                "last_error=self._last_error" in src)
+
+
+def test_sustained_failure_reports_unhealthy_everywhere():
+    R.section("a worker alive but failing every pass reports UNHEALTHY")
+
+    import importlib
+
+    for label, (mod, accessor, victim) in SINGLETONS.items():
+        module = importlib.import_module(mod)
+        obj = getattr(module, accessor)()
+        if not hasattr(obj, victim):
+            R.check(f"{label}: has the method this test breaks ({victim})",
+                    False, "the loop body changed; pick a new victim")
+            continue
+        real = getattr(obj, victim)
+        if hasattr(obj, "ERROR_BACKOFF_S"):
+            obj.ERROR_BACKOFF_S = 0.05
+        setattr(obj, victim,
+                lambda *a, **k: (_ for _ in ()).throw(RuntimeError(f"{label} offline")))
+        try:
+            obj.start()
+            time.sleep(0.6)
+            fresh = obj.health_report()
+            started = obj._failing_since
+            # Backdate the streak rather than waiting out the grace period:
+            # nine subsystems x 15s is not a test, and the arithmetic under
+            # test is now - failing_since.
+            if obj._failing_since is not None:
+                obj._failing_since -= 20.0
+            aged = obj.health_report()
+        finally:
+            setattr(obj, victim, real)
+            obj.stop()
+
+        R.check(f"{label}: a failure streak was recorded",
+                started is not None, str(started))
+        R.check(f"{label}: a fresh streak is still HEALTHY, so a glitch "
+                f"costs nothing",
+                fresh.state is HealthState.HEALTHY, str(fresh))
+        R.check(f"{label}: a streak past the grace period is UNHEALTHY",
+                aged.state is HealthState.UNHEALTHY, str(aged))
+        R.check(f"{label}: ...and the reason names the error",
+                f"{label} offline" in aged.reason, aged.reason)
+
+
+def test_recovery_clears_the_streak():
+    R.section("a subsystem that starts working again goes back to HEALTHY")
+
+    import importlib
+
+    # FCC is the interesting case: it backs off 5s on error, so its streak
+    # clears on the next successful pass up to five seconds later, not
+    # immediately. Measured: UNHEALTHY at 1s and 3s after the fault is
+    # removed, HEALTHY by 6s. That is cadence, not latching, and this check
+    # is what distinguishes the two.
+    mod, accessor, victim = SINGLETONS["FCC"]
+    obj = getattr(importlib.import_module(mod), accessor)()
+    real = getattr(obj, victim)
+    setattr(obj, victim, lambda *a, **k: (_ for _ in ()).throw(RuntimeError("AHRS offline")))
     try:
-        f.start()
-        time.sleep(1.0)
-        alive = f._thread.is_alive()
-        report = f.health_report()
-        failures = f._consecutive_failures
-        # Taken here, while the worker is still up: after the finally below
-        # the thread is stopped and a liveness check would say UNHEALTHY for
-        # the wrong reason.
-        liveness_only = worker_health("FUEL", f._thread, stop_requested=False,
-                                      consecutive_failures=0)
-    finally:
-        f.update_fuel_system = real
-        f.stop()
-
-    R.check("the guard keeps the worker alive", alive, str(alive))
-    R.check("...so a liveness-only check would have called this HEALTHY",
-            liveness_only.state is HealthState.HEALTHY, str(liveness_only))
-    R.check("but health_report() says UNHEALTHY",
-            report.state is HealthState.UNHEALTHY, str(report))
-    R.check("...and names the error", "pump offline" in report.reason,
-            report.reason)
-    R.check("...and the count passed the threshold",
-            failures >= f.UNHEALTHY_AFTER_FAILURES,
-            f"{failures} vs {f.UNHEALTHY_AFTER_FAILURES}")
-
-    # And it recovers: a subsystem that starts working again must go back to
-    # HEALTHY rather than latching.
-    f = _fuel()
-    try:
-        f.start()
+        obj.start()
         time.sleep(0.5)
-        recovered = f.health_report()
+        obj._failing_since -= 20.0
+        while_failing = obj.health_report()
+        setattr(obj, victim, real)
+        deadline = time.monotonic() + 12.0
+        recovered = None
+        while time.monotonic() < deadline:
+            report = obj.health_report()
+            if report.state is HealthState.HEALTHY:
+                recovered = report
+                break
+            time.sleep(0.25)
     finally:
-        f.stop()
-    R.check("a recovered subsystem reports HEALTHY again, not latched",
-            recovered.state is HealthState.HEALTHY, str(recovered))
+        setattr(obj, victim, real)
+        obj.stop()
+
+    R.check("FCC was UNHEALTHY while failing",
+            while_failing.state is HealthState.UNHEALTHY, str(while_failing))
+    R.check("...and returns to HEALTHY once a pass succeeds, not latched",
+            recovered is not None, "still UNHEALTHY after 12s")
+    R.check("...and the streak is cleared, not merely ignored",
+            obj._failing_since is None, str(obj._failing_since))
 
 
 def test_get_status_cannot_claim_a_dead_worker_is_running():
@@ -318,8 +399,8 @@ def test_stop_interrupts_the_error_backoff():
             not alive, str(alive))
 
 
-def test_worker_health_failure_threshold():
-    R.section("worker_health's failure arguments")
+def test_worker_health_grace_period():
+    R.section("worker_health's duration arguments")
 
     class _T:
         def __init__(self, alive=True, name="W"):
@@ -330,33 +411,53 @@ def test_worker_health_failure_threshold():
             return self._alive
 
     live = _T()
-    R.check("below the threshold stays HEALTHY",
+    now = time.monotonic()
+
+    R.check("a streak inside the grace period stays HEALTHY",
             worker_health("x", live, stop_requested=False,
-                          consecutive_failures=2,
-                          failure_threshold=3).state is HealthState.HEALTHY)
-    R.check("at the threshold becomes UNHEALTHY",
+                          failing_since=now - 1.0,
+                          failure_grace_s=15.0).state is HealthState.HEALTHY)
+    R.check("a streak past it becomes UNHEALTHY",
             worker_health("x", live, stop_requested=False,
-                          consecutive_failures=3,
-                          failure_threshold=3).state is HealthState.UNHEALTHY)
+                          failing_since=now - 16.0,
+                          failure_grace_s=15.0).state is HealthState.UNHEALTHY)
+    R.check("the reason states how long it has been failing",
+            "16.0s" in worker_health("x", live, stop_requested=False,
+                                     failing_since=now - 16.0,
+                                     failure_grace_s=15.0).reason)
     R.check("the last error is carried into the reason",
             "boom" in worker_health("x", live, stop_requested=False,
-                                    consecutive_failures=3,
-                                    failure_threshold=3,
+                                    failing_since=now - 16.0,
+                                    failure_grace_s=15.0,
                                     last_error="boom").reason)
-    R.check("a threshold of 0 disables the check, for subsystems that do "
-            "not count failures",
+    R.check("failing_since=None is HEALTHY however long the process has run",
             worker_health("x", live, stop_requested=False,
-                          consecutive_failures=99,
-                          failure_threshold=0).state is HealthState.HEALTHY)
-    R.check("the default is liveness-only, so the other eight are unchanged",
+                          failing_since=None).state is HealthState.HEALTHY)
+    R.check("a grace of 0 disables the check",
+            worker_health("x", live, stop_requested=False,
+                          failing_since=now - 999.0,
+                          failure_grace_s=0).state is HealthState.HEALTHY)
+    R.check("a dead worker is UNHEALTHY regardless of the streak",
+            worker_health("x", _T(alive=False), stop_requested=False,
+                          failing_since=None).state is HealthState.UNHEALTHY)
+    R.check("stop requested still wins over a long streak",
+            worker_health("x", live, stop_requested=True,
+                          failing_since=now - 999.0).state is HealthState.UNKNOWN)
+
+    # NON-TAUTOLOGICAL: this is the pre-fix answer. A caller that does not
+    # pass a streak gets HEALTHY for a worker that is failing every pass,
+    # which is exactly what all nine did before this change.
+    R.check("a caller passing no streak still gets HEALTHY, which is the "
+            "blind spot this closed",
             worker_health("x", live, stop_requested=False).state
             is HealthState.HEALTHY)
-    R.check("a dead worker is UNHEALTHY regardless of the counters",
-            worker_health("x", _T(alive=False), stop_requested=False,
-                          consecutive_failures=0).state is HealthState.UNHEALTHY)
-    R.check("stop requested still wins over the failure count",
-            worker_health("x", live, stop_requested=True,
-                          consecutive_failures=99).state is HealthState.UNKNOWN)
+
+    R.check("the shared default grace is used when none is given",
+            DEFAULT_FAILURE_GRACE_S > 0 and
+            worker_health("x", live, stop_requested=False,
+                          failing_since=now - (DEFAULT_FAILURE_GRACE_S + 1)
+                          ).state is HealthState.UNHEALTHY,
+            str(DEFAULT_FAILURE_GRACE_S))
 
 
 def main():
@@ -367,10 +468,12 @@ def main():
     for test in (test_every_worker_loop_guards_its_body,
                  test_the_scanner_can_see_an_unguarded_loop,
                  test_one_transient_error_is_not_fatal,
-                 test_sustained_failure_reports_unhealthy,
+                 test_every_subsystem_records_its_failure_streak,
+                 test_sustained_failure_reports_unhealthy_everywhere,
+                 test_recovery_clears_the_streak,
                  test_get_status_cannot_claim_a_dead_worker_is_running,
                  test_stop_interrupts_the_error_backoff,
-                 test_worker_health_failure_threshold):
+                 test_worker_health_grace_period):
         try:
             test()
         except Exception:

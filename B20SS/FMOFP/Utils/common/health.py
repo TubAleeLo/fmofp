@@ -212,10 +212,17 @@ def probe(name: str, component: Any) -> HealthReport:
     )
 
 
+#: How long a worker must have been failing CONTINUOUSLY before its
+#: subsystem is reported UNHEALTHY rather than HEALTHY. Fifteen seconds is
+#: long enough that a transient error costs nothing and short enough that an
+#: operator is not looking at a stale green.
+DEFAULT_FAILURE_GRACE_S = 15.0
+
+
 def worker_health(name: str, thread: Optional[threading.Thread], *,
                   stop_requested: bool,
-                  consecutive_failures: int = 0,
-                  failure_threshold: int = 3,
+                  failing_since: Optional[float] = None,
+                  failure_grace_s: float = DEFAULT_FAILURE_GRACE_S,
                   last_error: str = "") -> HealthReport:
     """Health of a subsystem whose work is done by one background thread.
 
@@ -262,15 +269,32 @@ def worker_health(name: str, thread: Optional[threading.Thread], *,
         HEALTHY    the worker is alive, no stop has been requested, and it
                    is not failing every pass.
 
-    ALIVE IS NOT THE SAME AS WORKING, which is why the failure counters
-    exist. Guarding a worker loop so a transient error cannot kill the
-    thread -- the right thing to do, and what eight of the nine subsystems
-    already do -- converts "the worker died" into "the worker is alive and
-    achieving nothing", and a liveness-only check calls that HEALTHY.
-    A caller passing consecutive_failures gets the honest answer instead.
-    Subsystems that do not track failures pass nothing and keep the
-    liveness-only behaviour; FuelManagementSystem is the first to track
-    them, and the other eight share the blind spot until they do too.
+    ALIVE IS NOT THE SAME AS WORKING, which is why failing_since exists.
+    Guarding a worker loop so a transient error cannot kill the thread --
+    the right thing to do, and what all nine subsystems now do -- converts
+    "the worker died" into "the worker is alive and achieving nothing", and
+    a liveness-only check calls that HEALTHY. Measured on the real
+    FlightControlComputer with every pass raising: thread alive, health
+    HEALTHY, reason empty, and readiness granted, because FCC is in
+    CRITICAL_COMPONENTS.
+
+    WHY A DURATION AND NOT A COUNT. This argument was first written as
+    consecutive_failures with a threshold of 3, which is wrong across these
+    nine because a pass is not a unit of time here. Their loop cadences run
+    from 0.02 s (FlightSurfaceService, 50 Hz) to 1.0 s (hydraulics), and
+    four of the nine back off 5 s on error while four fall straight through
+    to their normal cadence. Three consecutive failures therefore means
+    15 s on the FCC and 0.3 s on the nav service -- the same threshold
+    reporting a momentary glitch as a failure on one subsystem and taking
+    a quarter of a minute to notice a dead one on another. A wall-clock
+    grace period means the same thing everywhere regardless of rate.
+
+    `failing_since` is the monotonic timestamp of the first failure in the
+    current unbroken streak, or None when the last pass succeeded. The
+    subsystem sets it in its except branch and clears it as the last
+    statement of its try body, so a single success resets it. A caller that
+    does not track failures passes nothing and keeps the liveness-only
+    behaviour.
     """
     if thread is None:
         return HealthReport(name, HealthState.UNKNOWN,
@@ -284,13 +308,15 @@ def worker_health(name: str, thread: Optional[threading.Thread], *,
         return HealthReport(name, HealthState.UNHEALTHY,
                             f"worker thread {thread.name!r} is not alive",
                             "health_report")
-    if failure_threshold > 0 and consecutive_failures >= failure_threshold:
-        detail = f": {last_error}" if last_error else ""
-        return HealthReport(
-            name, HealthState.UNHEALTHY,
-            f"worker {thread.name!r} is alive but has failed "
-            f"{consecutive_failures} consecutive passes{detail}",
-            "health_report")
+    if failing_since is not None and failure_grace_s > 0:
+        failing_for = time.monotonic() - failing_since
+        if failing_for >= failure_grace_s:
+            detail = f": {last_error}" if last_error else ""
+            return HealthReport(
+                name, HealthState.UNHEALTHY,
+                f"worker {thread.name!r} is alive but every pass has failed "
+                f"for {failing_for:.1f}s{detail}",
+                "health_report")
     return HealthReport(name, HealthState.HEALTHY, "", "health_report")
 
 
