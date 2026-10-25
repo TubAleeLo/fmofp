@@ -467,9 +467,12 @@ _SUBSYSTEMS = {
     "PowerManagementSystem": ("FMOFP.Systems.powerManagement.elec."
                               "powerManagementSystem", "PowerManagementSystem",
                               "thread", "running", "event_is_stop"),
+    # Was ("_thread", "running", "bool_is_run"): this class used to be the
+    # polarity exception, a plain bool set True inside run() and never reset
+    # when the worker died. It is a stop Event like the other eight now.
     "FuelManagementSystem": ("FMOFP.Systems.engineManagement.fuelManagement."
                              "fuelControl", "FuelManagementSystem",
-                             "_thread", "running", "bool_is_run"),
+                             "_thread", "_running", "event_is_stop"),
     "ThrustManagementSystem": ("FMOFP.Systems.engineManagement.thrustManagement."
                                "thrustManagement", "ThrustManagementSystem",
                                "_thread", "_running", "event_is_stop"),
@@ -524,20 +527,16 @@ for _label, (_mod, _cls, _thread_attr, _flag_attr, _polarity) in _SUBSYSTEMS.ite
         check(f"{_label}: so stop_requested is is_set(), not its negation",
               f"stop_requested=self.{_flag_attr}.is_set()" in _hr, _hr[-150:])
     else:
-        # This one is the exception twice over: the flag is a plain bool, and
-        # it is set True inside run() -- the thread body -- rather than in
-        # start(), which only spawns the thread. So the window between
-        # start() returning and run() reaching its first statement has a
-        # live thread and a False flag, which worker_health reads as
-        # "stop requested" rather than HEALTHY. Harmless (it closes in
-        # microseconds and UNKNOWN is not a fault) but worth stating.
-        _run_src = inspect.getsource(_cls_obj.run)
-        check(f"{_label}: self.{_flag_attr} is a bool set True by run()",
-              f"self.{_flag_attr} = True" in _run_src, _run_src[:200])
-        check(f"{_label}: ...and False by stop()",
-              f"self.{_flag_attr} = False" in _stop, _stop[-150:])
-        check(f"{_label}: so stop_requested is its negation",
-              f"stop_requested=not self.{_flag_attr}" in _hr, _hr[-150:])
+        # No subsystem takes this branch any more. FuelManagementSystem was
+        # the one plain-bool exception and was converted to a stop Event, so
+        # reaching here means a new shape was introduced without a polarity
+        # check being written for it.
+        check(f"{_label}: has a polarity shape this suite knows about",
+              False, f"unrecognised polarity {_polarity!r}")
+
+check("all nine subsystems now use the same stop-Event polarity",
+      all(spec[4] == "event_is_stop" for spec in _SUBSYSTEMS.values()),
+      str({k: v[4] for k, v in _SUBSYSTEMS.items() if v[4] != "event_is_stop"}))
 
 # worker_health's own outcomes, including the two that are NOT failures.
 print("\nworker_health — three outcomes, and the inversion it prevents")

@@ -148,6 +148,15 @@ SUITES = [
     # Story C14.5: FCS mode vocabulary, control-input saturation and the
     # one-way FMS -> FCS coupling, against a live system.
     (True,  "FMOFP.Tests.test_flight_control_live", 420),
+    # FuelManagementSystem's worker loop called three methods outside its
+    # try, so ONE transient error killed fuel management permanently and
+    # silently -- reproduced with a single injected RuntimeError -- while
+    # get_status() went on reporting running=True over the dead thread. An
+    # AST sweep found it was the only one of the nine safety-critical
+    # subsystems with unguarded calls in its loop; the sweep is kept here as
+    # a regression guard, together with the consecutive-failure reporting
+    # that stops the guard from turning a dead subsystem into a HEALTHY one.
+    (True,  "FMOFP.Tests.test_worker_loop_resilience", 180),
     # H21: <level> in startupConfiguration.xml reached the console only. The
     # file handler was setLevel(logging.DEBUG), hardcoded, so the one knob
     # for how much to log governed the terminal and not the 250MB file --

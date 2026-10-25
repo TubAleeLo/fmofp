@@ -213,7 +213,10 @@ def probe(name: str, component: Any) -> HealthReport:
 
 
 def worker_health(name: str, thread: Optional[threading.Thread], *,
-                  stop_requested: bool) -> HealthReport:
+                  stop_requested: bool,
+                  consecutive_failures: int = 0,
+                  failure_threshold: int = 3,
+                  last_error: str = "") -> HealthReport:
     """Health of a subsystem whose work is done by one background thread.
 
     Story C2.2/C2.3. Nine safety-critical subsystems exposed no health
@@ -254,8 +257,20 @@ def worker_health(name: str, thread: Optional[threading.Thread], *,
                    that the subsystem is working.
         UNHEALTHY  a thread was created and is not alive. The subsystem was
                    started and its worker has died, which is the failure
-                   this exists to catch.
-        HEALTHY    the worker is alive and no stop has been requested.
+                   this exists to catch. OR: the worker is alive but has
+                   failed `failure_threshold` consecutive passes.
+        HEALTHY    the worker is alive, no stop has been requested, and it
+                   is not failing every pass.
+
+    ALIVE IS NOT THE SAME AS WORKING, which is why the failure counters
+    exist. Guarding a worker loop so a transient error cannot kill the
+    thread -- the right thing to do, and what eight of the nine subsystems
+    already do -- converts "the worker died" into "the worker is alive and
+    achieving nothing", and a liveness-only check calls that HEALTHY.
+    A caller passing consecutive_failures gets the honest answer instead.
+    Subsystems that do not track failures pass nothing and keep the
+    liveness-only behaviour; FuelManagementSystem is the first to track
+    them, and the other eight share the blind spot until they do too.
     """
     if thread is None:
         return HealthReport(name, HealthState.UNKNOWN,
@@ -269,6 +284,13 @@ def worker_health(name: str, thread: Optional[threading.Thread], *,
         return HealthReport(name, HealthState.UNHEALTHY,
                             f"worker thread {thread.name!r} is not alive",
                             "health_report")
+    if failure_threshold > 0 and consecutive_failures >= failure_threshold:
+        detail = f": {last_error}" if last_error else ""
+        return HealthReport(
+            name, HealthState.UNHEALTHY,
+            f"worker {thread.name!r} is alive but has failed "
+            f"{consecutive_failures} consecutive passes{detail}",
+            "health_report")
     return HealthReport(name, HealthState.HEALTHY, "", "health_report")
 
 
