@@ -148,6 +148,14 @@ SUITES = [
     # Story C14.5: FCS mode vocabulary, control-input saturation and the
     # one-way FMS -> FCS coupling, against a live system.
     (True,  "FMOFP.Tests.test_flight_control_live", 420),
+    # Story B3.1: register_category existed nowhere, and five call sites
+    # probed for it -- three logging "does not support category registration"
+    # (exactly 7 times per live boot, the figure the PI risk register
+    # recorded) and two skipping silently, leaving 23 registrations dead.
+    # Category extraction also returned the first match over a SET, so the
+    # same message was categorised differently per PYTHONHASHSEED: measured
+    # 'fcs_status' on 2 of 5 seeds and 'status' on 3.
+    (True,  "FMOFP.Tests.test_loop_prevention_categories", 300),
     # Story C15: eight except-Exception handlers at the bus send/receive,
     # routing dispatch and health boundaries logged f"...{e}" and returned a
     # benign value, so the log recorded that something failed and nothing
