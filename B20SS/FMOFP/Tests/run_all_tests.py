@@ -156,6 +156,16 @@ SUITES = [
     # same message was categorised differently per PYTHONHASHSEED: measured
     # 'fcs_status' on 2 of 5 seeds and 'status' on 3.
     (True,  "FMOFP.Tests.test_loop_prevention_categories", 300),
+    # The radar response services' data_handler slots: set_async_handler
+    # built a PrecipitationDataHandler / VILDataHandler / EchoTopDataHandler
+    # for each of the three weather services and then, 59 lines later,
+    # overwrote all three with the raw SystemDatabase. The two types overlap
+    # on store_precipitation_data, so the path looked alive; but
+    # _store_precipitation_data gates on data_handler._verify_table_exists(),
+    # which SystemDatabase has not got, so every store raised inside the try.
+    # Measured with the table reset first: 14 [PRECIP_STORE] errors and 0
+    # rows before, 0 errors and 14 rows after.
+    (True,  "FMOFP.Tests.test_radar_data_handler_binding", 300),
     # Story C15: eight except-Exception handlers at the bus send/receive,
     # routing dispatch and health boundaries logged f"...{e}" and returned a
     # benign value, so the log recorded that something failed and nothing

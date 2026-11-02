@@ -491,6 +491,43 @@ class RadarMessageHandler:
             logger.error(traceback.format_exc())
             return None
 
+    @staticmethod
+    def _ensure_data_handler(service, label, handler_cls, radar_db):
+        """Give `service` a `handler_cls` data handler only if it lacks one.
+
+        A slot already holding the right class is left untouched: the service
+        built that instance from radar_db itself, and for the two singleton
+        handlers it is the one instance the rest of the system shares.
+
+        A slot holding anything else is wrong by construction -- the store
+        paths call handler-private methods such as `_verify_table_exists`,
+        `_init_database_table` and `store_echo_top_data`, none of which exist
+        on a SystemDatabase.  It is rebuilt from radar_db when one is
+        available, and otherwise cleared to None, which hands the work to the
+        lazy re-initialisation each service already has on its store path.
+        Leaving a wrong-typed object in place would only keep raising.
+        """
+        if not service:
+            return
+        handler = getattr(service, 'data_handler', None)
+        if isinstance(handler, handler_cls):
+            logger.info(
+                f"{label} service already holds a {handler_cls.__name__}")
+            return
+        if handler is not None:
+            logger.warning(
+                f"{label} service held a {type(handler).__name__} in its "
+                f"data_handler slot, expected {handler_cls.__name__}")
+        if radar_db is None:
+            logger.error(
+                f"No radar_db available to build a {handler_cls.__name__} "
+                f"for the {label} service; clearing the slot so the service "
+                f"re-initialises it on its own store path")
+            service.data_handler = None
+            return
+        service.data_handler = handler_cls(radar_db)
+        logger.info(f"Built a {handler_cls.__name__} for the {label} service")
+
     def set_async_handler(self, async_handler: AsyncMessageHandler):
         """Set the async handler and register message handlers."""
         if not async_handler:
@@ -557,16 +594,30 @@ class RadarMessageHandler:
                 if not self.started:
                     self.start()
                     
-                # Initialize services if needed
-                if self.precipitation_service:
-                    logger.info("Initializing precipitation service")
-                    self.precipitation_service.data_handler = self.async_handler.radar_db
-                if self.vil_service:
-                    logger.info("Initializing VIL service")
-                    self.vil_service.data_handler = self.async_handler.radar_db
-                if self.echo_top_service:
-                    logger.info("Initializing Echo Top service")
-                    self.echo_top_service.data_handler = self.async_handler.radar_db
+                # Make sure each response service still holds a real data
+                # handler.  These three slots used to be assigned
+                # `self.async_handler.radar_db` outright, which replaced the
+                # PrecipitationDataHandler / VILDataHandler /
+                # EchoTopDataHandler that each service builds in its own
+                # constructor with a bare SystemDatabase.  SystemDatabase
+                # happens to expose store_precipitation_data and
+                # store_vil_data, so the path looked alive, but it has no
+                # _verify_table_exists, _init_database_table, _initialized or
+                # radar_db -- and _store_precipitation_data calls
+                # _verify_table_exists before storing, so every precipitation
+                # store raised AttributeError and not one row was written.
+                from FMOFP.local_messaging.routing.handlers.precipitation_data_handler import PrecipitationDataHandler
+                from FMOFP.local_messaging.routing.handlers.vil_data_handler import VILDataHandler
+                from FMOFP.local_messaging.routing.handlers.echo_top_data_handler import EchoTopDataHandler
+
+                radar_db = getattr(self.async_handler, 'radar_db', None)
+                self._ensure_data_handler(self.precipitation_service,
+                                          'precipitation',
+                                          PrecipitationDataHandler, radar_db)
+                self._ensure_data_handler(self.vil_service, 'VIL',
+                                          VILDataHandler, radar_db)
+                self._ensure_data_handler(self.echo_top_service, 'Echo Top',
+                                          EchoTopDataHandler, radar_db)
                 
                 # Verify health
                 if not self.async_handler.is_healthy():
