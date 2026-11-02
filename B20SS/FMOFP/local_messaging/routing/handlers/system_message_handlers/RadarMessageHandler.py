@@ -234,8 +234,43 @@ class RadarMessageHandler:
     # These methods are used by external systems to send requests to radar systems
     # + Added system features that require a message type must be added here
     
-    async def send_request(self, radar_name: str, request_type: str, data: Any = None, sync_response: bool = False) -> Optional[Union[str, Dict]]:
-        """Send a request to a radar system."""
+    async def send_request(self, radar_name: str, request_type: str,
+                           data: Any = None) -> Optional[str]:
+        """Send a request to a radar system. Returns its request ID, or None.
+
+        H6: this took a fourth argument, `sync_response: bool = False`, and
+        returned Optional[Union[str, Dict]] -- a request ID normally, a
+        {'success', 'response', 'request_id'} dict when asked to wait. The
+        waiting branch read:
+
+            response = await self._wait_for_response(request_id)
+
+        and `_wait_for_response` was DEFINED NOWHERE. The name occurred
+        exactly once in the whole repository: at that await.
+
+        Nothing passed sync_response=True, so it never fired. What made it
+        worth removing rather than leaving is where it would have failed.
+        The await sits AFTER sendMsg.send_message() has succeeded and after
+        the pending request has been stored, so the AttributeError would
+        have been caught by this method's own `except Exception`, which
+        returns None -- the same value the caller gets when nothing was sent
+        at all. The message would be on the bus, the pending entry would be
+        in the table, and the caller would be told, indistinguishably, that
+        the send had failed.
+
+        REMOVED RATHER THAN IMPLEMENTED, because there is nothing here to
+        wait on. This handler's PendingRequest has no response field, no
+        completion flag and no event; `pending_requests` entries are only
+        ever assigned (once) and deleted (four sites), and the correlation
+        point in _handle_response simply deletes the entry without keeping
+        what arrived. An honest _wait_for_response would therefore have
+        meant adding a response slot, a completion event, storing the
+        response at the correlation point and handling the expiry race --
+        a new synchronous-request subsystem, for a parameter with no
+        callers. A caller that passes sync_response now gets a TypeError at
+        the call site, which is the clearest signal available; a parameter
+        that is accepted and then always raises would be worse than none.
+        """
         logger.info(f"[SEND] Attempting to send request: radar={radar_name}, type={request_type}")
         logger.info(f"[SEND] Data: {data}")
 
@@ -254,7 +289,8 @@ class RadarMessageHandler:
         try:
             # H5: this was `with self._message_lock:` -- a threading.Lock held
             # across three awaits (_create_request, the sendMsg.send_message
-            # network write, and the sync_response wait). A thread lock blocks
+            # network write, and the sync_response wait, since removed by H6).
+            # A thread lock blocks
             # the THREAD, not the task, and an event loop has one thread, so two
             # concurrent sends did not serialise, they deadlocked the loop
             # permanently: the first suspended inside the lock, the second
@@ -446,13 +482,12 @@ class RadarMessageHandler:
                 if result is None:
                     logger.error("[SEND] Failed to send message through 1553B")
                     del self.pending_requests[request_id]  # Clean up pending request
-                    return None if not sync_response else {'success': False}
+                    # Was `return None if not sync_response else
+                    # {'success': False}`; the dict half was reachable only
+                    # with sync_response=True (H6).
+                    return None
                 logger.info("[SEND][RADAR_MSG_HNDLR] Successfully sent message")
 
-                if sync_response:
-                    # For synchronous responses, wait for and return the result
-                    response = await self._wait_for_response(request_id)
-                    return {'success': True, 'response': response, 'request_id': request_id}
                 return request_id
 
         except Exception as e:
@@ -1969,9 +2004,11 @@ class RadarMessageHandler:
             return False
 
         # A response path that is down does not stop the message going out, but
-        # it does mean nothing will process what comes back -- sync_response
-        # waits and status updates are both lost. Worth saying once per state
-        # change rather than once per send.
+        # it does mean nothing will process what comes back -- status updates
+        # and the pending-request cleanup are both lost. (This read
+        # "sync_response waits and status updates"; the sync_response path was
+        # removed by H6, never having been implemented.) Worth saying once per
+        # state change rather than once per send.
         if not (self.async_handler and self.async_handler.started):
             if not self._warned_response_path_down:
                 logger.warning(

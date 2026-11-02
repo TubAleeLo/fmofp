@@ -107,7 +107,10 @@ def _faithful_sender(h, log):
     from FMOFP.local_messaging.routing.handlers.system_message_handlers.RadarMessageHandler import (
         PendingRequest)
 
-    async def send(radar_name, request_type, data=None, sync_response=False):
+    # Mirrors RadarMessageHandler.send_request's signature, which lost its
+    # sync_response argument in H6 (it gated an await on a method that was
+    # never defined).
+    async def send(radar_name, request_type, data=None):
         rid = str(uuid_lib.uuid4())
         log.append(rid)
         h.pending_requests[rid] = PendingRequest(
