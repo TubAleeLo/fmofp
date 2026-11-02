@@ -326,6 +326,59 @@ def test_known_duplicates_are_recorded_not_forgotten():
             all(n > 0 for n in importers.values()), str(importers))
 
 
+
+def test_the_lint_gate_has_one_source_of_truth():
+    R.section("the ruff selector lives in pyproject, not in the CI file")
+
+    root = os.path.abspath(os.path.join(_B20SS, '..'))
+    pyproject = pathlib.Path(os.path.join(root, 'pyproject.toml'))
+    workflow = pathlib.Path(os.path.join(root, '.github', 'workflows', 'ci.yml'))
+
+    R.check("pyproject.toml exists", pyproject.exists(), str(pyproject))
+    R.check("the CI workflow exists", workflow.exists(), str(workflow))
+    if not (pyproject.exists() and workflow.exists()):
+        return
+
+    cfg = pyproject.read_text(encoding='utf-8')
+    R.check("pyproject carries a [tool.ruff.lint] selector",
+            "[tool.ruff.lint]" in cfg and "select = [" in cfg)
+    for rule in ("E9", "F821", "F401", "F541"):
+        R.check(f"...including {rule}", f'"{rule}"' in cfg, rule)
+    R.check("...and exempts __init__.py from F401, where re-exports live",
+            "per-file-ignores" in cfg and '"**/__init__.py" = ["F401"]' in cfg)
+
+    wf = workflow.read_text(encoding='utf-8')
+    ruff_lines = [ln for ln in wf.splitlines() if "ruff check" in ln]
+    R.check("the workflow invokes ruff exactly once", len(ruff_lines) == 1,
+            str(ruff_lines))
+    if ruff_lines:
+        invocation = ruff_lines[0]
+        # Story P2-1 was two CI files each carrying their own --ignore. A
+        # selector in the workflow can disagree with the repo config; one
+        # that is not there cannot.
+        for flag in ("--select", "--ignore", "--exclude", "--extend-select"):
+            R.check(f"...with no {flag} of its own", flag not in invocation,
+                    invocation.strip())
+        R.check("...and is not swallowed by `|| true`, which is how this "
+                "step once could not fail", "|| true" not in invocation,
+                invocation.strip())
+
+    # Comment lines stripped first. Written without that, this check counted
+    # the two `|| true` mentions in the comment that RECORDS the swallowed
+    # exit code being removed, and failed on a correct workflow -- the same
+    # mistake as matching code in a comment, which FMOFP/Tests/__init__.py
+    # documents six variations of.
+    code_lines = [ln for ln in wf.splitlines()
+                  if not ln.lstrip().startswith("#")]
+    swallowed = [ln for ln in code_lines if "|| true" in ln]
+    R.check("no step swallows its exit code with `|| true`",
+            not swallowed, str(swallowed))
+    # And the stripper must be able to see a real one, or the check is free.
+    planted = ["        run: ruff check . || true"]
+    R.check("the check would catch a real `|| true` in a run step",
+            [ln for ln in planted if "|| true" in ln] == planted)
+
+
 def main():
     print("=" * 60)
     print("  One definition per thing")
@@ -335,7 +388,8 @@ def main():
                  test_prevention_imports_it_unconditionally,
                  test_what_the_stand_in_would_have_done,
                  test_the_twin_command_maps_still_agree,
-                 test_known_duplicates_are_recorded_not_forgotten):
+                 test_known_duplicates_are_recorded_not_forgotten,
+                 test_the_lint_gate_has_one_source_of_truth):
         try:
             test()
         except Exception:

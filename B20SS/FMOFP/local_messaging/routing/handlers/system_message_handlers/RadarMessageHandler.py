@@ -37,10 +37,6 @@ from FMOFP.local_messaging.messageConfigurations import *
 from FMOFP.local_messaging.messageConfigurations.weather_radar_data import (
     weather_radarPrecipitationResponse,
     PrecipitationData)
-from FMOFP.local_messaging.messageConfigurations.weather_radar_data_echo_top import (
-    WeatherRadarEchoTopData,
-    weather_radarEchoTopRequest,
-    weather_radarEchoTopResponse)
 # NOTE: the "from ... messageConfigurations import *" above only pulls in names
 # re-exported by messageConfigurations/__init__.py, which currently only
 # imports/registers the weather radar data classes. TFR/SAR/targeting/AEWC data
@@ -1137,7 +1133,7 @@ class RadarMessageHandler:
                                 logger.error(f"[MODE] Invalid command name: {command_name}")
                                 return
                         else:
-                            logger.warning(f"[MODE] Could not find matching request for unrecognized command")
+                            logger.warning("[MODE] Could not find matching request for unrecognized command")
                             return
 
                 # Extract mode value from data with improved handling
@@ -1334,7 +1330,7 @@ class RadarMessageHandler:
             radar_type = message.get('radar_type')
             command_type = message.get('command_type')
             
-            logger.info(f"Processing status word:")
+            logger.info("Processing status word:")
             logger.info(f"  request_id: {request_id}")
             logger.info(f"  radar_type: {radar_type}")
             logger.info(f"  command_type: {command_type}")
@@ -1452,7 +1448,7 @@ class RadarMessageHandler:
                     status_word_data[key] = value
 
             # Log the data being sent to storage
-            logger.info(f"Sending status word data to storage:")
+            logger.info("Sending status word data to storage:")
             logger.info(f"  command_type: {status_word_data['command_type']}")
             logger.info(f"  radar_type: {status_word_data['radar_type']}")
             logger.info(f"  status: {status_word_data['status']}")
@@ -2418,7 +2414,7 @@ class RadarMessageHandler:
                 # Check if message has already been processed using metadata
                 metadata = message.get('metadata', {})
                 if metadata.get('_processed_by_radar_handler'):
-                    logger.info(f"[WEATHER] *** Breaking message loop: Message already processed by radar handler ***")
+                    logger.info("[WEATHER] *** Breaking message loop: Message already processed by radar handler ***")
                     return
                     
                 # Apply loop prevention if middleware is available
@@ -2936,7 +2932,7 @@ class RadarMessageHandler:
                     logger.info(f"[PRECIP] Parsed and validated data: type={precip_type}, rate={rate}, intensity={intensity}, show={show_values}")
                     
                     # Log precipitation data creation
-                    logger.info(f"[LOC_RDR_MSG_HDLR_PRECIP_FLOW] Creating precipitation data object with values:")
+                    logger.info("[LOC_RDR_MSG_HDLR_PRECIP_FLOW] Creating precipitation data object with values:")
                     logger.info(f"[LOC_RDR_MSG_HDLR_PRECIP_FLOW]   position: ({float(x_pos)}, {float(y_pos)})")
                     logger.info(f"[LOC_RDR_MSG_HDLR_PRECIP_FLOW]   type: {precip_type}")
                     logger.info(f"[LOC_RDR_MSG_HDLR_PRECIP_FLOW]   rate: {rate}")
@@ -2956,7 +2952,7 @@ class RadarMessageHandler:
                     )
                     
                     # Log created object
-                    logger.info(f"[LOC_RDR_MSG_HDLR_PRECIP_FLOW] Created PrecipitationData object:")
+                    logger.info("[LOC_RDR_MSG_HDLR_PRECIP_FLOW] Created PrecipitationData object:")
                     logger.info(f"[LOC_RDR_MSG_HDLR_PRECIP_FLOW]   Object dict: {precip_obj.__dict__}")
                     logger.info(f"[LOC_RDR_MSG_HDLR_PRECIP_FLOW]   Object type: {type(precip_obj)}")
                     response.precipitation_data.append(precip_obj)

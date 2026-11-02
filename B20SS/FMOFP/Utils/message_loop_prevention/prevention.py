@@ -8,7 +8,7 @@ Enhanced with specialized tracking of message ID + type combinations.
 import time
 import uuid
 import logging
-from typing import Dict, Set, List, Any, Optional, Tuple, Union, TypeVar, cast
+from typing import Dict, Any, Optional, Tuple, TypeVar
 
 from FMOFP.Utils.message_loop_prevention.identifier import MessageIdentifier
 from FMOFP.Utils.message_loop_prevention.registry import MessageRegistry

@@ -733,8 +733,6 @@ def test_pending_request_can_describe_itself():
 def test_every_pending_mutation_is_guarded():
     R.section("The lock covers every side, not just the cleanup pass")
 
-    import ast
-    import inspect
 
     def unguarded(path):
         src = open(path, encoding='utf-8').read()

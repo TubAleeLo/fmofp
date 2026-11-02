@@ -12,7 +12,6 @@ import asyncio
 import xml.etree.ElementTree as ET
 from FMOFP.Utils.common import fetching
 from typing import Any, Dict, Optional, List
-from FMOFP.Systems.comms.messaging_service import get_comms_service
 from FMOFP.core.event_driven_communication import get_event_bus, Event
 from FMOFP.MIL_STD_1553B.Bus_Controller.BC_connect.BC_socket import get_bc_sender, get_bc_listener
 from FMOFP.MIL_STD_1553B.Bus_Controller.BC_messaging.BC_msg import BC_construct, BC_deconstruct
@@ -168,7 +167,7 @@ class BusControllerModule:
                         if 'command_type' in metadata and 'PRECIP' in str(metadata['command_type']):
                             metadata['precipitation_message'] = True
                             metadata['command_type'] = 'precipitation_data'
-                            logger.info(f"[MESSAGING] Added precipitation_message flag to metadata based on command_name")
+                            logger.info("[MESSAGING] Added precipitation_message flag to metadata based on command_name")
 
                         # Encode metadata into data words
                         metadata_data_words = MetadataCodec.encode_metadata(metadata)
