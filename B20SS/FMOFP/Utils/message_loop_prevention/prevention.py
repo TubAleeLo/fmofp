@@ -22,18 +22,26 @@ except ImportError:
     # Create empty dict if import fails
     COMMAND_NAMES = {}
 
-try:
-    from FMOFP.local_messaging.radar_display_modes import RadarDisplayMode
-except ImportError:
-    # Create dummy enum if import fails
-    from enum import Enum
-    class RadarDisplayMode(Enum):
-        STANDBY = 0
-        SURVEILLANCE = 1
-        MAPPING = 2
-        TURBULENCE = 3
-        WINDSHEAR = 4
-        NORMAL = 5
+# Imported unconditionally. This was wrapped in try/except ImportError with a
+# six-member stand-in enum defined in the handler -- "Create dummy enum if
+# import fails".
+#
+# The canonical RadarDisplayMode has 35 members. The only use of it here is
+# the loop below, which adds every member NAME to the category set, so the
+# stand-in did not corrupt any value at this site -- it silently narrowed
+# loop prevention to 6 categories out of 35, leaving 29 radar display modes
+# unrecognised by the thing whose job is recognising them. (The values were
+# wrong too -- SURVEILLANCE 1 against the canonical 10, MAPPING 2 against 11,
+# NORMAL 5 against 1, five of the six disagreeing -- which would have
+# mattered to any other consumer of the name.)
+#
+# A fallback is only worth having when degrading is better than failing. An
+# enum that silently answers for a third of itself is not degrading, it is
+# answering wrongly, and the module it guards imports nothing but
+# `enum.Enum`, so the ImportError it catches cannot realistically happen
+# without the package being broken outright. Failing loudly is the honest
+# behaviour.
+from FMOFP.local_messaging.radar_display_modes import RadarDisplayMode
 
 # Type variable for generic message types
 T = TypeVar('T')

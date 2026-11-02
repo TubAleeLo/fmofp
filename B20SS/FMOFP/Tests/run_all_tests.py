@@ -148,6 +148,13 @@ SUITES = [
     # Story C14.5: FCS mode vocabulary, control-input saturation and the
     # one-way FMS -> FCS coupling, against a live system.
     (True,  "FMOFP.Tests.test_flight_control_live", 420),
+    # One definition per thing: prevention.py carried a six-member stand-in
+    # for the 35-member RadarDisplayMode behind an except ImportError, which
+    # narrowed loop prevention to 6 categories of 35 and numbered five of its
+    # six members differently; a third definition under displays/radar/ had
+    # zero importers and a self-contradicting docstring; and the two
+    # display_command_map modules agree with nothing enforcing it.
+    (True,  "FMOFP.Tests.test_single_definition", 120),
     # FuelManagementSystem's worker loop called three methods outside its
     # try, so ONE transient error killed fuel management permanently and
     # silently -- reproduced with a single injected RuntimeError -- while
