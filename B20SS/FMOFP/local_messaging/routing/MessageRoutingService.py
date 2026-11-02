@@ -336,7 +336,7 @@ class MessageRoutingService:
             logger.info(f"Retrieved {len(mode_changes)} mode changes for {radar_type}")
             return mode_changes
         except Exception as e:
-            logger.error(f"Error getting mode changes: {e}")
+            logger.error(f"Error getting mode changes: {e}", exc_info=True)
             return []
 
     async def get_command_acknowledgments(self, radar_type: Optional[str] = None,
@@ -353,7 +353,8 @@ class MessageRoutingService:
             logger.info(f"Retrieved {len(acknowledgments)} acknowledgments for {radar_type}")
             return acknowledgments
         except Exception as e:
-            logger.error(f"Error getting command acknowledgments: {e}")
+            logger.error(f"Error getting command acknowledgments: {e}",
+                         exc_info=True)
             return []
 
     async def _ensure_vil_service(self):

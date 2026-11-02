@@ -250,7 +250,8 @@ class BusControllerModule:
                                         self.messaging_service.publish(Event(topic="status_word", data=status_message))
                                         logger.info(f"Published status word message: {status_message}")
                         except Exception as e:
-                            logger.error(f"Error processing RT response: {str(e)}")
+                            logger.error(f"Error processing RT response: {str(e)}",
+                                         exc_info=True)
 
                     # Publish frames with request_id
                     message_data = {
@@ -511,7 +512,8 @@ class Schedule:
                     try:
                         task()
                     except Exception as e:
-                        logger.error(f"Error in minor frame task {i}: {str(e)}")
+                        logger.error(f"Error in minor frame task {i}: {str(e)}",
+                                     exc_info=True)
             elapsed_time = time.time() - start_time
             remaining_time = self.major_frame_time - elapsed_time
             if remaining_time > 0 and self.running:

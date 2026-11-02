@@ -148,6 +148,14 @@ SUITES = [
     # Story C14.5: FCS mode vocabulary, control-input saturation and the
     # one-way FMS -> FCS coupling, against a live system.
     (True,  "FMOFP.Tests.test_flight_control_live", 420),
+    # Story C15: eight except-Exception handlers at the bus send/receive,
+    # routing dispatch and health boundaries logged f"...{e}" and returned a
+    # benign value, so the log recorded that something failed and nothing
+    # about where -- the mechanism behind H6's swallowed AttributeError and
+    # BLOCKER B7's .get() on a bool. They pass exc_info=True now, verified
+    # end to end because SysLogger wraps logging and a dropped kwarg would
+    # have made all eight no-ops.
+    (True,  "FMOFP.Tests.test_boundary_exception_handling", 300),
     # One definition per thing: prevention.py carried a six-member stand-in
     # for the 35-member RadarDisplayMode behind an except ImportError, which
     # narrowed loop prevention to 6 categories of 35 and numbered five of its
